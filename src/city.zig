@@ -68,6 +68,20 @@ pub const Params = struct {
     /// How long lunch lasts. 40 ticks = 20 minutes.
     cafe_dwell: u64 = 40,
 
+    /// MASS EVENTS. A concert, a stadium, a festival.
+    ///
+    /// The most dramatic moment the game can offer -- "you are surrounded by hundreds" --
+    /// and until this existed the simulation had never produced one, so nobody had seen what
+    /// it does to quorum, to the tick, or to a player's evening.
+    ///
+    /// A real stadium holds fifty thousand people; at ~1% player penetration that is five
+    /// hundred players in one place. Which is exactly the point: a crowd this size is where
+    /// an exact hostile count stops being an instrument for finding a person and starts
+    /// being pure scale (see GAME_RULES O1).
+    venues: u64 = 2,
+    /// The fraction of players who go out to a mass event on an event night.
+    event_pct: u32 = 10,
+
     /// The fraction of the population who do not commute at all -- retired, unemployed,
     /// working from home, or simply not going anywhere today. Their day is spent in a cell
     /// that will almost never reach quorum, and the game must be honest about how many of
@@ -82,6 +96,7 @@ const home_base: u64 = 0x1000_0000;
 const work_base: u64 = 0x2000_0000;
 const station_base: u64 = 0x3000_0000;
 const cafe_base: u64 = 0x4000_0000;
+const venue_base: u64 = 0x5000_0000;
 
 /// Each attribute of a person gets its OWN independent draw.
 ///
@@ -109,8 +124,10 @@ pub fn cellFor(player: u32, tick: u64, params: Params, seed: u64) CellId {
     const work = work_base + (attribute(player, seed, 2) % params.workplaces);
     const station = station_base + (attribute(player, seed, 3) % params.stations);
     const cafe = cafe_base + (attribute(player, seed, 4) % params.cafes);
+    const venue = venue_base + (attribute(player, seed, 9) % params.venues);
 
     const homebody = attribute(player, seed, 5) % 100 < params.homebody_pct;
+    const goes_out = attribute(player, seed, 10) % 100 < params.event_pct;
 
     const day = tick / params.ticks_per_day;
     const now = tick % params.ticks_per_day; // ticks into the day
@@ -130,6 +147,16 @@ pub fn cellFor(player: u32, tick: u64, params: Params, seed: u64) CellId {
     // Weekends. The city empties, the offices go dark, and the game finds out what it is like
     // to be quiet -- a thing worth knowing before ten thousand real people find out for us.
     const weekend = (day % 7) >= 5;
+
+    // Friday and Saturday night. The one time this city does something at scale.
+    //
+    // Nobody leaves a concert to go and identify a stranger. That would be absurd, and it is
+    // the whole reason a crowd this size is a different kind of place: the scale is the
+    // experience, and at this scale no number tells you anything about any person.
+    const event_night = (day % 7) == 4 or (day % 7) == 5;
+    if (goes_out and event_night and now >= 19 * per_hour and now < 23 * per_hour) {
+        return cell(venue);
+    }
 
     if (homebody or weekend) {
         // Even a homebody goes out for coffee.
@@ -286,4 +313,40 @@ test "faction is independent of where a person lives" {
     try testing.expect(humans_sharing + zombies_sharing >= 5);
     try testing.expect(humans_sharing > 0);
     try testing.expect(zombies_sharing > 0);
+}
+
+test "a mass event produces a crowd worth being awed by" {
+    // O4. Until mass events existed, the simulation had never produced a crowd bigger than
+    // "dozens" -- so the most dramatic moment the game can offer had never occurred in it,
+    // and the exact-count question (O1) had no evidence to be decided against.
+    const gpa = std.testing.allocator;
+    const params: Params = .default;
+    const seed: u64 = 0xC0FFEE;
+
+    var world: World = .empty;
+    defer world_mod.deinit(&world, gpa);
+    try populate(&world, gpa, params, seed);
+
+    // Friday, 20:00. Two venues, and a tenth of the city is out.
+    const friday_night = 4 * params.ticks_per_day + 20 * (params.ticks_per_day / 24);
+    advance(&world, params, seed, friday_night);
+
+    // Count how many people are standing in the largest room in the city.
+    var counts: std.AutoHashMapUnmanaged(CellId, u32) = .empty;
+    defer counts.deinit(gpa);
+
+    for (world.presences.items(.cell)) |c| {
+        const entry = try counts.getOrPut(gpa, c);
+        entry.value_ptr.* = if (entry.found_existing) entry.value_ptr.* + 1 else 1;
+    }
+
+    var biggest: u32 = 0;
+    var it = counts.iterator();
+    while (it.next()) |entry| biggest = @max(biggest, entry.value_ptr.*);
+
+    // Hundreds of people, in one room. Roughly half of them hostile to any given player,
+    // which lands the tell in the `hundreds` band -- the awe, with no number that could ever
+    // point at a person.
+    try std.testing.expect(biggest > 300);
+    try std.testing.expectEqual(combat.Crowd.hundreds, combat.crowdOf(biggest / 2));
 }

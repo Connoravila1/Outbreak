@@ -209,7 +209,26 @@ Each of these is *currently* implemented one way and could go another. The colum
 | **O1** | **Exact hostile count, or a band?** | Coarse band, sampled once per engagement | **Phase 2** (protocol freeze) |
 | O2 | How often *should* a fight happen? | ~5/day, 5 min each — an accident of two constants, not a target | Phase 1 (cheap to retune forever, but the target should exist) |
 | O3 | Cell size (39 bits, ~38 m) | Chosen for squareness, not from data | **Phase 2** |
-| O4 | Do mass events (concerts, stadiums) behave? | **Untested.** The city model has no mass events, so `scores`/`hundreds`/`thousands` have never occurred in simulation | Before O1 is answered — it is the evidence O1 needs |
+| O4 | Do mass events (concerts, stadiums) behave? | **Answered, and they revealed O5.** The city now has concerts; they produce `hundreds`-scale crowds | done |
+| **O5** | **Should a big room fight differently from a small one?** | **No — and that is probably wrong.** See below | Phase 1 |
+
+### O5 — the concert is an anticlimax
+
+Adding mass events to the simulation immediately exposed a flaw in the engagement model:
+
+> **The room cooldown treats a stadium exactly like a café.**
+
+You walk into a concert with five hundred people. You fight for five minutes. Then **the biggest room in the city is dead for two hours** — while you are still standing in it, surrounded, with the band playing. Over a four-hour concert the simulation produces exactly **two** fights.
+
+That is the precise opposite of the intended feeling. A concert should be the most sustained, most overwhelming thing that ever happens to a player, and right now it is a five-minute skirmish followed by silence.
+
+**The likely fix:** engagement length and cooldown should scale with the size of the crowd. A café is a skirmish; a stadium is a siege. A big room sustains a long fight and recovers slowly, or does not cool down at all while the crowd persists.
+
+This is one function in `combat.zig`. It is cheap now.
+
+**Note how this interacts with O1:** if a stadium becomes a sustained fight, the exact-count question gets *more* interesting, not less — a long fight in a huge crowd is exactly the case where a number is thrilling and harmless.
+
+---
 
 ### O1 — the exact count, in full
 
