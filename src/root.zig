@@ -15,6 +15,9 @@ pub const combat = @import("combat.zig");
 /// Deterministic mixing. Pinned by us, so a replay never drifts (B8).
 pub const rand = @import("rand.zig");
 
+/// The tick: (world, seed, index) -> (world', tells). Pure (B7).
+pub const tick = @import("tick.zig");
+
 comptime {
     // The forbidden-construct guard runs at compile time, so a distance function or a
     // coordinate in the core fails the build rather than the review. Referencing it here
@@ -30,4 +33,5 @@ test {
     _ = @import("world.zig");
     _ = @import("combat.zig");
     _ = @import("rand.zig");
+    _ = @import("tick.zig");
 }

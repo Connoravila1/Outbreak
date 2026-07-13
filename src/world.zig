@@ -80,21 +80,33 @@ pub fn ensureCapacity(world: *World, gpa: Allocator, n: usize) Allocator.Error!v
     return world.presences.ensureTotalCapacity(gpa, n);
 }
 
-/// CORE. Sort presences by cell.
+/// CORE. Sort presences by cell, then by player.
 ///
 /// This is the entire spatial algorithm, and it is a sort (0.3). Not an index, not a
 /// tree, not a grid. The ordering is a group-by key and nothing more: two cells adjacent
 /// in this order are not adjacent in the world, and no code may assume otherwise (A9).
+///
+/// The tie-break on player is what makes it a TOTAL order, and it is load-bearing for
+/// determinism (B8). The sort is unstable, so presences sharing a cell would otherwise
+/// have no defined order among themselves -- and the order in which the tick emits events
+/// would then depend on the order presences happened to arrive in. Replay would still pass
+/// (same input, same output), while two servers fed the same facts in a different sequence
+/// would disagree. A total order costs one comparison and removes the question.
 pub fn sortByCell(world: *World) void {
-    const SortByCell = struct {
+    const Order = struct {
         cells: []const CellId,
+        players: []const PlayerId,
 
         pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
-            return spatial.lessThan(ctx.cells[a], ctx.cells[b]);
+            if (ctx.cells[a] != ctx.cells[b]) return spatial.lessThan(ctx.cells[a], ctx.cells[b]);
+            return @intFromEnum(ctx.players[a]) < @intFromEnum(ctx.players[b]);
         }
     };
 
-    world.presences.sortUnstable(SortByCell{ .cells = world.presences.items(.cell) });
+    world.presences.sortUnstable(Order{
+        .cells = world.presences.items(.cell),
+        .players = world.presences.items(.player),
+    });
 }
 
 /// A run of presences that share a cell, as a half-open range into the columns.
