@@ -54,6 +54,8 @@ const Stats = struct {
     /// is how many events it contains -- not what fraction of it was spent at war.
     engagements_started: u64 = 0,
     engaged_cells_total: u64 = 0,
+    /// Fights a player actually entered, counted on the rising edge.
+    fights_entered: u64 = 0,
 
     /// The scale of what people walked into, in bands. No exact count leaves the core.
     crowd_bands: [5]u64 = @splat(0),
@@ -69,6 +71,18 @@ fn run(gpa: std.mem.Allocator, io: std.Io, params: city.Params, ticks: u64, meas
     try city.populate(&world, gpa, params, seed);
 
     var stats: Stats = .{};
+
+    // A fight a player was actually IN, counted at the moment they entered one.
+    //
+    // The obvious shortcut -- fighting player-ticks divided by the engagement length -- was
+    // correct until engagements started scaling with the crowd (O5), and then it silently
+    // counted one four-hour concert as forty-eight separate fights. Count the rising edge.
+    const was_fighting = try gpa.alloc(bool, params.population);
+    defer gpa.free(was_fighting);
+    @memset(was_fighting, false);
+
+    const is_fighting = try gpa.alloc(bool, params.population);
+    defer gpa.free(is_fighting);
 
     var i: u64 = 0;
     while (i < ticks) : (i += 1) {
@@ -89,6 +103,7 @@ fn run(gpa: std.mem.Allocator, io: std.Io, params: city.Params, ticks: u64, meas
         }
 
         const hour: usize = @intCast((i % params.ticks_per_day) * 24 / params.ticks_per_day);
+        @memset(is_fighting, false);
 
         stats.ticks += 1;
         stats.live_cells_total += result.live_cells;
@@ -107,6 +122,10 @@ fn run(gpa: std.mem.Allocator, io: std.Io, params: city.Params, ticks: u64, meas
                 stats.fighting_by_hour[hour] += 1;
             }
             stats.crowd_bands[@intFromEnum(t.crowd)] += 1;
+
+            const who: usize = @intFromEnum(t.player);
+            is_fighting[who] = true;
+            if (!was_fighting[who]) stats.fights_entered += 1;
             // The replay checksum. If one bit of one fight differs, this differs.
             stats.checksum = stats.checksum *% 31 +%
                 @as(u64, @intFromEnum(t.player)) +%
@@ -115,6 +134,8 @@ fn run(gpa: std.mem.Allocator, io: std.Io, params: city.Params, ticks: u64, meas
                 @as(u64, t.xp) *% 17 +%
                 @as(u64, @intFromEnum(t.momentum));
         }
+
+        @memcpy(was_fighting, is_fighting);
     }
 
     return stats;
@@ -248,10 +269,7 @@ pub fn main() !void {
         \\
     , .{
         first.engagements_started,
-        // A player sits in an engagement for engagement_ticks of it, so their fighting
-        // player-ticks divided by that length is the number of fights they were actually in.
-        @as(f64, @floatFromInt(first.fighting_total)) /
-            @as(f64, @floatFromInt((combat.Rules.default).engagement_ticks)) / pop / days,
+        @as(f64, @floatFromInt(first.fights_entered)) / pop / days,
         percent(first.fighting_total, player_ticks),
         first.crowd_bands[0],
         first.crowd_bands[1],

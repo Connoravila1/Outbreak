@@ -55,8 +55,28 @@ pub const Rules = struct {
     /// the optimal XP strategy "have a job in a crowded building" -- an exploit that is
     /// entirely legitimate, requires no spoofing, and which no integrity system can touch.
     ///
-    /// 10 ticks = 5 minutes.
+    /// The floor: the shortest a fight can be, however small the room. 10 ticks = 5 minutes.
     engagement_ticks: u64 = 10,
+
+    /// A BIG ROOM FIGHTS DIFFERENTLY FROM A SMALL ONE (O5).
+    ///
+    /// The first version of the engagement model gave every room the same five minutes, and
+    /// the simulation showed what that costs the moment mass events existed: you walk into a
+    /// concert with five hundred people, you fight for five minutes, and then the biggest
+    /// room in the city is DEAD FOR TWO HOURS while you are still standing in it, surrounded,
+    /// with the band playing. A four-hour concert produced exactly two fights.
+    ///
+    /// That is the precise opposite of the intended feeling. A café is a skirmish. A stadium
+    /// is a siege. The length of a fight scales with how many people are in the room.
+    ///
+    /// Note this does not violate H2 (value lives in people, not places). The reward scales
+    /// with the CROWD, not with the venue -- an empty stadium is worth nothing at all, and no
+    /// exploit conjures five hundred strangers into a room. It is the most spoof-proof reward
+    /// in the game precisely because it requires the most real humans.
+    engagement_ticks_per_occupant: u64 = 2,
+
+    /// The ceiling. 480 ticks = four hours: about as long as a concert.
+    engagement_max_ticks: u64 = 480,
 
     /// How long a room is spent afterwards, before it can host another engagement.
     ///
@@ -186,6 +206,15 @@ pub const Crowd = enum(u8) {
     hundreds,
     thousands,
 };
+
+/// CORE. How long a fight in this room lasts (O5).
+///
+/// A café is a skirmish; a stadium is a siege. The length scales with the number of people
+/// in the room, floored at `engagement_ticks` and capped at `engagement_max_ticks`.
+pub fn engagementLength(occupants: u32, rules: Rules) u64 {
+    const scaled = rules.engagement_ticks + @as(u64, occupants) * rules.engagement_ticks_per_occupant;
+    return @min(@max(scaled, rules.engagement_ticks), rules.engagement_max_ticks);
+}
 
 /// PROVISIONAL band edges. The lowest band is wide on purpose (see `Crowd`).
 pub fn crowdOf(hostiles: u32) Crowd {

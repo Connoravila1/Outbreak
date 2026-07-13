@@ -47,7 +47,9 @@ All provisional. Phase 1's named trap is tuning these before anyone has played.
 | `recovery_per_tick` | **1** | You heal when you are **not** in a live cell. Full recovery from zero takes 100 ticks (50 minutes). There is no death and no permanence — nothing may be at stake worth stalking someone over. |
 | `max_hp` | **100** | Placeholder. |
 | `xp_per_tick` | **10** | Earned for **one thing**: a tick in a live cell with ≥1 hostile present (H3). |
-| `engagement_ticks` | **10** (5 min) | How long one fight lasts. **A fight is an event, not a climate.** |
+| `engagement_ticks` | **10** (5 min) | The **floor**: shortest a fight can be, however small the room. |
+| `engagement_ticks_per_occupant` | **2** | A café is a skirmish; a stadium is a siege (O5). |
+| `engagement_max_ticks` | **480** (4 h) | The ceiling — about as long as a concert. |
 | `cooldown_ticks` | **240** (2 h) | How long a room is spent afterwards. Keyed to the **room**, not the player. |
 
 ### The engagement model — the biggest design change so far
@@ -171,8 +173,9 @@ At 10,000 players over a simulated week, with the model above:
 | Tick cost (max) | 1.4 ms |
 | Fraction of the 30 s budget | **0.0009%** |
 | Live cells per tick | 972 mean, 1,421 peak |
-| **Fights per player** | **5.1 a day**, 5 minutes each |
-| **Time at war** | **1.8% of a player's week** |
+| **Fights per player** | **5.4 a day** |
+| **Time at war** | **4.1% of a player's week** |
+| Crowd bands seen | `a few`, `dozens`, `hundreds` (concerts) |
 | Replay | byte-identical checksum |
 | Leaks | zero |
 
@@ -206,11 +209,11 @@ Each of these is *currently* implemented one way and could go another. The colum
 
 | # | Question | Status now | Deadline |
 |---|---|---|---|
-| **O1** | **Exact hostile count, or a band?** | Coarse band, sampled once per engagement | **Phase 2** (protocol freeze) |
+| ~~O1~~ | ~~Exact hostile count, or a band?~~ | **DECIDED 2026-07-13: generic. No specific number of people.** The author's call. Implemented as the crowd band. | closed |
 | O2 | How often *should* a fight happen? | ~5/day, 5 min each — an accident of two constants, not a target | Phase 1 (cheap to retune forever, but the target should exist) |
 | O3 | Cell size (39 bits, ~38 m) | Chosen for squareness, not from data | **Phase 2** |
 | O4 | Do mass events (concerts, stadiums) behave? | **Answered, and they revealed O5.** The city now has concerts; they produce `hundreds`-scale crowds | done |
-| **O5** | **Should a big room fight differently from a small one?** | **No — and that is probably wrong.** See below | Phase 1 |
+| ~~O5~~ | ~~Should a big room fight differently from a small one?~~ | **DONE.** A café is a skirmish, a stadium is a siege: engagement length scales with the crowd | closed |
 
 ### O5 — the concert is an anticlimax
 
@@ -245,7 +248,9 @@ This is one function in `combat.zig`. It is cheap now.
 
 **What it needs before it can be decided:** O4. The simulation has never produced a crowd larger than "dozens", so nobody has yet seen what the exciting case actually looks like in numbers.
 
-**Awaiting:** the author's view (Connor's father).
+**DECIDED, 2026-07-13 — the author's answer: keep it generic. No specific number of people.**
+
+So the crowd band as implemented is the shipping design, and the threshold idea above is *not* pursued. The tell says *"you are surrounded"*, *"dozens"*, *"hundreds"* — it never says *"four"*. This closes the question in the strictest direction, which is also the direction the ruleset would have forced (I1, I5); it is now settled by intent rather than by law, which is better.
 
 ---
 
@@ -262,3 +267,7 @@ This is one function in `combat.zig`. It is cheap now.
 | 2026-07-13 | Momentum: 3 states → 5 (`even`, `edge`, `winning`) | The prototype speaks in sentences that escalate, not in three buckets |
 | 2026-07-13 | **Crowd band added** to the tell, sampled once per engagement | Gives the player scale ("surrounded by thousands") without the tick-to-tick delta that identifies a person leaving a room |
 | 2026-07-13 | City: staggered commutes, realistic venue density | The old model marched the whole city onto 30 platforms at 07:00 and held it for two hours |
+| 2026-07-13 | Mass events added to the city | The most dramatic moment the game offers had never occurred in simulation |
+| 2026-07-13 | **Engagement length scales with the crowd** (O5) | A concert was a 5-minute skirmish followed by two dead hours. A café is a skirmish; a stadium is a siege |
+| 2026-07-13 | **O1 decided: generic, never a number** (author's call) | The tell says "surrounded", never "four" |
+| 2026-07-13 | `GAME_DESIGN.md` §3.4 amended (J3) | It said "combat continues while both sides remain present" — a climate, not an event |

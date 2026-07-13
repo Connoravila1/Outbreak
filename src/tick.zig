@@ -250,8 +250,13 @@ fn engage(
 
     const elapsed = index -| entry.value_ptr.started;
 
-    if (elapsed < rules.engagement_ticks) return entry.value_ptr.*; // still fighting
-    if (elapsed < rules.engagement_ticks + rules.cooldown_ticks) return null; // spent
+    // How long THIS room's fight lasts, from the crowd it began with. A café is a skirmish;
+    // a stadium is a siege (O5).
+    const occupants: u32 = @as(u32, entry.value_ptr.humans) + entry.value_ptr.zombies;
+    const length = combat.engagementLength(occupants, rules);
+
+    if (elapsed < length) return entry.value_ptr.*; // still fighting
+    if (elapsed < length + rules.cooldown_ticks) return null; // spent
 
     // The room has rested. A new fight, and a newly sampled crowd.
     entry.value_ptr.* = fresh;
@@ -261,10 +266,11 @@ fn engage(
 /// Forget engagements that are over and rested. The world remembers nothing it does not
 /// need (I7).
 fn expire(world: *World, index: u64, rules: combat.Rules) void {
-    const lifetime = rules.engagement_ticks + rules.cooldown_ticks;
-
     var it = world.engagements.iterator();
     while (it.next()) |entry| {
+        const occupants: u32 = @as(u32, entry.value_ptr.humans) + entry.value_ptr.zombies;
+        const lifetime = combat.engagementLength(occupants, rules) + rules.cooldown_ticks;
+
         if (index -| entry.value_ptr.started > lifetime) {
             _ = world.engagements.remove(entry.key_ptr.*);
         }
@@ -473,16 +479,21 @@ test "a fight ends" {
     defer world_mod.deinit(&world, gpa);
     try buildCity(&world, gpa);
 
+    // Six people are in the café, so this room's fight is longer than the five-minute floor:
+    // a café is a skirmish, a stadium is a siege (O5).
+    const length = combat.engagementLength(6, rules);
+    try testing.expect(length > rules.engagement_ticks);
+
     var fought: u64 = 0;
     var i: u64 = 0;
-    while (i < rules.engagement_ticks * 3) : (i += 1) {
+    while (i < length * 3) : (i += 1) {
         const result = try tick(&world, gpa, 1, i, rules);
         defer gpa.free(result.tells);
         if (result.tells.len > 0) fought += 1;
     }
 
     // Nobody moved. The room is still full. The fight still stopped.
-    try testing.expectEqual(rules.engagement_ticks, fought);
+    try testing.expectEqual(length, fought);
 }
 
 test "a spent room is quiet, and the cell stays live throughout" {
@@ -499,14 +510,15 @@ test "a spent room is quiet, and the cell stays live throughout" {
     try buildCity(&world, gpa);
 
     // Burn through the engagement.
+    const length = combat.engagementLength(6, rules);
     var i: u64 = 0;
-    while (i < rules.engagement_ticks) : (i += 1) {
+    while (i < length) : (i += 1) {
         const result = try tick(&world, gpa, 1, i, rules);
         gpa.free(result.tells);
     }
 
     // Mid-cooldown: the cell is live, and nothing is happening.
-    const spent = try tick(&world, gpa, 1, rules.engagement_ticks + 5, rules);
+    const spent = try tick(&world, gpa, 1, length + 5, rules);
     defer gpa.free(spent.tells);
 
     try testing.expectEqual(@as(usize, 0), spent.tells.len);
@@ -522,14 +534,15 @@ test "a rested room can fight again" {
     defer world_mod.deinit(&world, gpa);
     try buildCity(&world, gpa);
 
+    const length = combat.engagementLength(6, rules);
     var i: u64 = 0;
-    while (i < rules.engagement_ticks) : (i += 1) {
+    while (i < length) : (i += 1) {
         const result = try tick(&world, gpa, 1, i, rules);
         gpa.free(result.tells);
     }
 
     // After the room has rested, the same café hosts another fight.
-    const after = rules.engagement_ticks + rules.cooldown_ticks + 1;
+    const after = length + rules.cooldown_ticks + 1;
     const again = try tick(&world, gpa, 1, after, rules);
     defer gpa.free(again.tells);
 
@@ -578,7 +591,8 @@ test "the engagement table forgets rooms it no longer needs" {
     try testing.expectEqual(@as(usize, 1), world.engagements.count());
 
     // Long after the fight is over and the room has rested, the entry is gone.
-    const much_later = try tick(&world, gpa, 1, rules.engagement_ticks + rules.cooldown_ticks + 100, rules);
+    const length = combat.engagementLength(6, rules);
+    const much_later = try tick(&world, gpa, 1, length + rules.cooldown_ticks + 100, rules);
     gpa.free(much_later.tells);
 
     // It fought again on that tick (the room had rested), so there is one fresh entry --
@@ -654,4 +668,25 @@ test "a concert reads as thousands" {
             try testing.expectEqual(combat.Crowd.a_few, t.crowd);
         }
     }
+}
+
+test "a stadium is a siege, and a cafe is a skirmish" {
+    // O5. The concert anticlimax, and its fix. Before this, a room of five hundred people got
+    // exactly the same five-minute fight as a room of four -- so you could walk into a
+    // concert, fight briefly, and then stand surrounded in a dead room for two hours.
+    const rules: combat.Rules = .default;
+
+    const cafe = combat.engagementLength(6, rules);
+    const bar = combat.engagementLength(40, rules);
+    const concert = combat.engagementLength(500, rules);
+
+    try testing.expect(cafe < bar);
+    try testing.expect(bar < concert);
+
+    // The café: minutes. The concert: hours, for as long as the crowd is there.
+    try testing.expect(cafe < 30); // under 15 minutes
+    try testing.expectEqual(rules.engagement_max_ticks, concert); // capped at four hours
+
+    // And the floor holds for the smallest possible room.
+    try testing.expect(combat.engagementLength(0, rules) >= rules.engagement_ticks);
 }
