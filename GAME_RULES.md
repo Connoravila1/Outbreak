@@ -48,8 +48,12 @@ All provisional. Phase 1's named trap is tuning these before anyone has played.
 | `max_hp` | **100** | Placeholder. |
 | `xp_per_tick` | **10** | Earned for **one thing**: a tick in a live cell with ≥1 hostile present (H3). |
 | `engagement_ticks` | **10** (5 min) | The **floor**: shortest a fight can be, however small the room. |
-| `engagement_ticks_per_occupant` | **2** | A café is a skirmish; a stadium is a siege (O5). |
-| `engagement_max_ticks` | **480** (4 h) | The ceiling — about as long as a concert. |
+| `engagement_dozens_ticks` | **60** (30 min) | A busy bar. |
+| `engagement_scores_ticks` | **180** (90 min) | |
+| `engagement_hundreds_ticks` | **360** (3 h) | A siege. |
+| `engagement_max_ticks` | **480** (4 h) | The concert. |
+
+**Duration comes from the crowd *band*, never the exact count.** The first version was `10 + 2 × occupants` — which is invertible. A player timing their own fight recovered an **exact headcount of everyone in the room**, through the clock, with no count ever transmitted. Enormous care went into making the crowd a coarse band so no number could leak, and the number leaked out through the duration instead. **A side channel does not care which field you were guarding.** There are now exactly five possible durations in the game — one per band — so inverting one tells a player the band they were already told.
 | `cooldown_ticks` | **240** (2 h) | How long a room is spent afterwards. Keyed to the **room**, not the player. |
 
 ### The engagement model — the biggest design change so far
@@ -308,3 +312,4 @@ So the crowd band as implemented is the shipping design, and the threshold idea 
 | 2026-07-13 | **Engagement length scales with the crowd** (O5) | A concert was a 5-minute skirmish followed by two dead hours. A café is a skirmish; a stadium is a siege |
 | 2026-07-13 | **O1 decided: generic, never a number** (author's call) | The tell says "surrounded", never "four" |
 | 2026-07-13 | `GAME_DESIGN.md` §3.4 amended (J3) | It said "combat continues while both sides remain present" — a climate, not an event |
+| 2026-07-13 | **Fight duration derived from the crowd BAND, not the headcount** | `10 + 2 × occupants` is **invertible**: timing your own fight recovered an exact headcount of the room, through the clock, with no count ever transmitted. Found in the ruleset audit. |
