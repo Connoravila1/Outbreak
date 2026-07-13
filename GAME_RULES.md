@@ -213,8 +213,32 @@ Each of these is *currently* implemented one way and could go another. The colum
 | O2 | How often *should* a fight happen? | ~5/day, 5 min each — an accident of two constants, not a target | Phase 1 (cheap to retune forever, but the target should exist) |
 | O3 | Cell size (39 bits, ~38 m) | Chosen for squareness, not from data | **Phase 2 — but see O6, which removes the deadline** |
 | **O6** | Make cell precision **server-directed** | Planned for Phase 2's handshake | Phase 2 |
+| **O7** | **Rooms that bind to places** — the café is the room, the concert expands to the venue | Not built. A safe version exists; the obvious version does not | Post-Phase 3 |
 | O4 | Do mass events (concerts, stadiums) behave? | **Answered, and they revealed O5.** The city now has concerts; they produce `hundreds`-scale crowds | done |
 | ~~O5~~ | ~~Should a big room fight differently from a small one?~~ | **DONE.** A café is a skirmish, a stadium is a siege: engagement length scales with the crowd | closed |
+
+### O7 — rooms that bind to places (and why the obvious way is forbidden)
+
+**The vision (Connor, 2026-07-13):** on the street, a grid cell is fine. But if you step into Frank's coffee shop, the room should *be* the shop — you're insulated to that spot, and there's a lovely dynamic in escaping the street by ducking inside. At a concert, the room should expand to the whole venue.
+
+**How Pokémon Go does it:** a hierarchical grid (Google S2 — level 17 allocates PokéStops, level 14 decides Gym counts, level 20 handles spawns) *plus* a **place database**. The POIs come from Ingress, crowdsourced from players over four years. The grid decides how many; the database decides where.
+
+**What that cost them, and why it is our I6:**
+
+Niantic built that database by centring reward destinations on **where people already congregate** — which sounds category-blind and safe. It produced PokéStops on at least three individual graves at Arlington National Cemetery, and at the US Holocaust Memorial Museum, the 9/11 Memorial, the Vietnam Veterans Memorial, and Auschwitz. In Ingress, players could *battle for control of former concentration camps* — Auschwitz, Dachau, Sachsenhausen. Removal was reactive: a report form and a takedown queue.
+
+Nobody sat down and enumerated memorials. They derived places from where humans gather — the most innocent-sounding method available — **and it still put a game objective on a war grave.** "Crowd-derived" is not a safety property.
+
+**What made it harmful was H2, not the derivation.** Niantic put *rewards* at those places, so players travelled to them. We have no destination: a cell is worth nothing without *k* humans already in it, and nothing in the game ever says "go here." A room that pays nothing draws nobody, even if it coincides with a memorial.
+
+**So:**
+
+- **FORBIDDEN — venue polygons.** Frank's shop as a shape with walls requires enumerating buildings as map features. That is I6 with no wiggle room, and it is the exact machinery that put a PokéStop on a grave.
+- **POSSIBLE — precision that adapts per region, derived from our own presence data.** Coarsening is a bit-shift and a coarse cell contains its children by construction, so: a region where people dwell in tight persistent clusters uses *finer* cells (the café is roughly its own room); a concert region uses *coarser* ones (the whole venue is one room); a sparse village coarsens until quorum is reachable (that is I8, already built). Coordinate-free, map-free, category-blind, no third-party data (F1), and it **names nothing** — the system never knows it is Frank's shop, only that people cluster tightly and stay a long time there.
+
+**The honest limitation:** a grid does not follow walls. A shop straddling a cell boundary stays split, and no amount of adaptive precision fixes that. Only polygons do, and polygons are the thing we cannot have. You get *"the room is about the size of the shop"*, never *"the room is the shop."*
+
+**Not needed now. O6 is the enabling primitive** — building server-directed precision in Phase 2 keeps this door open at no cost.
 
 ### O6 — kill the cell-size deadline
 
