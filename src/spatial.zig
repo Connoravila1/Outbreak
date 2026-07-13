@@ -54,6 +54,10 @@ pub const coarsen = cell.coarsen;
 /// CORE. Total order on cells: a group-by key, not an adjacency (A9).
 pub const lessThan = cell.lessThan;
 
+/// CORE. Stable per-cell entropy for the tick. Mixed, so it is useful as a hash and
+/// useless as a location.
+pub const hash = cell.hash;
+
 /// CORE. A distinct room from an arbitrary key, with no coordinate behind it. How the
 /// core's tests and the synthetic city make places without inventing positions.
 pub const cellFromKey = cell.fromKey;

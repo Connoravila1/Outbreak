@@ -30,6 +30,8 @@
 //! masquerade as a place.
 
 const std = @import("std");
+const rand = @import("../rand.zig");
+
 const assert = std.debug.assert;
 
 /// A place. The fundamental type of the system (A9): a group-by key, a sort key, a
@@ -70,6 +72,16 @@ pub fn precisionOf(id: CellId) u6 {
 /// a geometry (A9).
 pub fn lessThan(a: CellId, b: CellId) bool {
     return @intFromEnum(a) < @intFromEnum(b);
+}
+
+/// CORE. A stable hash of a cell, for use as an entropy source.
+///
+/// A cell is a hash key (A9), and the tick needs per-cell randomness that replays. This
+/// gives it one without handing out the bit layout: the result is mixed, so it is usable
+/// as entropy and useless as a location. No caller can reconstruct the geohash bits from
+/// it, and no caller has any business trying (D3).
+pub fn hash(id: CellId) u64 {
+    return rand.mix(@intFromEnum(id));
 }
 
 /// CORE. Fabricate a distinct cell from an arbitrary key.
