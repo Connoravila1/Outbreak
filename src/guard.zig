@@ -84,6 +84,7 @@ const core = [_]Source{
     .{ .name = "combat.zig", .text = @embedFile("combat.zig") },
     .{ .name = "tick.zig", .text = @embedFile("tick.zig") },
     .{ .name = "integrity.zig", .text = @embedFile("integrity.zig") },
+    .{ .name = "territory.zig", .text = @embedFile("territory.zig") },
 };
 
 /// SHELL (B1, B3). Permitted to touch the outside world. Exactly one file here is
@@ -92,37 +93,64 @@ const shell = [_]Source{
     .{ .name = "spatial/geohash.zig", .text = @embedFile("spatial/geohash.zig") },
 };
 
-comptime {
-    // Scanning every source file for every forbidden construct at compile time costs
-    // more comptime branches than the default budget allows. The budget is a guard
-    // against runaway comptime, not a statement about this; raise it deliberately.
-    @setEvalBranchQuota(1_000_000);
-
-    for (core ++ shell) |src| {
-        for (forbidden) |construct| {
-            if (std.mem.indexOf(u8, src.text, construct) != null) {
-                @compileError("FORBIDDEN CONSTRUCT: '" ++ construct ++ "' in " ++ src.name ++
-                    ". The game has no geometry: no distance, no bearing, no neighbours, " ++
-                    "and no inverse quantizer (A9, I2). A CellId is a room, not a point.");
-            }
-        }
-
-        for (forbidden_integrity) |construct| {
-            if (std.mem.indexOf(u8, src.text, construct) != null) {
-                @compileError("FORBIDDEN CONSTRUCT: '" ++ construct ++ "' in " ++ src.name ++
-                    ". A suspicion score never becomes a punishment (H4), and we do not " ++
-                    "enter the attestation arms race (H6). No location carries a reward " ++
-                    "worth spoofing toward, so there is no war here to fight.");
-            }
-        }
+/// Does `haystack` begin with `needle`? Byte-wise, so that comptime does the least work
+/// it possibly can.
+fn startsWith(haystack: []const u8, needle: []const u8) bool {
+    if (needle.len > haystack.len) return false;
+    for (needle, haystack[0..needle.len]) |a, b| {
+        if (a != b) return false;
     }
+    return true;
+}
 
-    for (core) |src| {
-        for ([_][]const u8{ "f64", "f32" }) |float| {
-            if (std.mem.indexOf(u8, src.text, float) != null) {
-                @compileError("THE COORDINATE WALL (B6): '" ++ float ++ "' appears in " ++
-                    src.name ++ ", which is CORE. The raw coordinate dies at the shell " ++
-                    "boundary. The core cannot leak a location because it is never given one.");
+comptime {
+    // The first cut of this used std.mem.indexOf once per (file, pattern). It worked, and
+    // it cost twenty-two seconds of every cold build -- Boyer-Moore builds a skip table per
+    // pattern per file, at comptime, and there are twenty-six patterns and ten files.
+    //
+    // Measured, then fixed (G1, G2). This version walks each file's bytes once and only
+    // consults the forbidden list where a `fn ` actually appears, which is a few dozen
+    // places per file rather than every byte. The guard is not negotiable; its price was.
+    @setEvalBranchQuota(10_000_000);
+
+    for (core ++ shell, 0..) |src, file_index| {
+        const is_core = file_index < core.len;
+
+        var i: usize = 0;
+        while (i < src.text.len) : (i += 1) {
+            // Every construct we look for -- `fn `, `f64`, `f32` -- begins with an 'f'. One
+            // byte comparison rejects the overwhelming majority of the file, and comptime
+            // does no further work on it.
+            if (src.text[i] != 'f') continue;
+
+            const rest = src.text[i..];
+
+            // A forbidden function definition. Checked only at the handful of positions
+            // where a function is actually being declared.
+            if (startsWith(rest, "fn ")) {
+                for (forbidden) |construct| {
+                    if (startsWith(rest, construct)) {
+                        @compileError("FORBIDDEN CONSTRUCT: '" ++ construct ++ "' in " ++ src.name ++
+                            ". The game has no geometry: no distance, no bearing, no neighbours, " ++
+                            "and no inverse quantizer (A9, I2). A CellId is a room, not a point.");
+                    }
+                }
+
+                for (forbidden_integrity) |construct| {
+                    if (startsWith(rest, construct)) {
+                        @compileError("FORBIDDEN CONSTRUCT: '" ++ construct ++ "' in " ++ src.name ++
+                            ". A suspicion score never becomes a punishment (H4), and we do not " ++
+                            "enter the attestation arms race (H6). No location carries a reward " ++
+                            "worth spoofing toward, so there is no war here to fight.");
+                    }
+                }
+            }
+
+            // THE COORDINATE WALL (B6). No float in a file classified core, in any form.
+            if (is_core and (startsWith(rest, "f64") or startsWith(rest, "f32"))) {
+                @compileError("THE COORDINATE WALL (B6): a float appears in " ++ src.name ++
+                    ", which is CORE. The raw coordinate dies at the shell boundary. The core " ++
+                    "cannot leak a location because it is never given one.");
             }
         }
     }

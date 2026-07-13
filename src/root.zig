@@ -21,6 +21,9 @@ pub const tick = @import("tick.zig");
 /// Integrity heuristics: plausibility and farm detection, as pure transforms (D1, H4, H5).
 pub const integrity = @import("integrity.zig");
 
+/// Territory: sustained clan presence, decaying. Confers nothing (H2).
+pub const territory = @import("territory.zig");
+
 comptime {
     // The forbidden-construct guard runs at compile time, so a distance function or a
     // coordinate in the core fails the build rather than the review. Referencing it here
@@ -38,4 +41,5 @@ test {
     _ = @import("rand.zig");
     _ = @import("tick.zig");
     _ = @import("integrity.zig");
+    _ = @import("territory.zig");
 }
