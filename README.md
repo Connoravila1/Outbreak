@@ -32,19 +32,29 @@ It prints numbers because that is all it needs to do. It is not a visualiser and
 
 ## Layout
 
-The core is pure: plain data in arrays, transformed by free functions. No I/O, no clock, no randomness, no allocation that isn't handed an allocator. The shell is thin and holds everything impure.
+Every file is classified **core** (pure: no I/O, no clock, no randomness, no hidden allocation) or **shell** (impure, thin, and quarantined). There is no third category and nothing unclassified.
 
-| | |
-|---|---|
-| `src/spatial.zig` | Quantization, the cell, the coarsening rule, and *k*. The one module that touches a coordinate — and only in `spatial/geohash.zig`, for the length of one expression. |
-| `src/world.zig` | The world as columns. Group-by-cell, and the quorum filter. |
-| `src/combat.zig` | Combat and progression. Pure transform over one cell's occupants. |
-| `src/tick.zig` | `(world, seed, index) → (world', tells)`. Pure, deterministic, replayable. |
-| `src/integrity.zig` | Plausibility and farm detection, as pure functions. |
-| `src/territory.zig` | Sustained clan presence, decaying. Confers no reward. |
-| `src/city.zig` | The synthetic city. Pure, and has no coordinates. |
-| `src/sim.zig` | The driver. Owns the clock, the allocator, and stdout. |
-| `src/guard.zig` | Compile-time enforcement of the rules below. |
+The directories are **not** `core/` and `shell/`. Files are grouped by the *decision they hide* — quantization, combat rules, persistence, integrity — because those are the things that change, and a module exists to absorb a change rather than to sort files by a property. The clearest case is `spatial/`: `cell.zig` is core and `geohash.zig` is shell, and they are two halves of one sealed decision. Splitting them across `core/` and `shell/` would tear a module in half to satisfy a filing system.
+
+The classification is enforced, not documented: `src/guard.zig` holds the registry, and the compile-time coordinate ban keys off it. A file that is not classified is not guarded, and the build says so.
+
+| File | | |
+|---|---|---|
+| `src/spatial.zig` | **core** | Quantization, the cell, the coarsening rule, and *k*. |
+| `src/spatial/cell.zig` | **core** | The cell id and its encoding. Pure `u64` work. |
+| `src/spatial/geohash.zig` | **shell** | **The only file in the system permitted to hold a coordinate**, and it holds one for the length of one expression. |
+| `src/world.zig` | **core** | The world as columns. Group-by-cell, and the quorum filter. |
+| `src/combat.zig` | **core** | Combat, progression, engagements. Pure transform over one cell's occupants. |
+| `src/tick.zig` | **core** | `(world, seed, index) → (world', tells)`. Deterministic, replayable. |
+| `src/integrity.zig` | **core** | Plausibility and farm detection, as pure functions. |
+| `src/territory.zig` | **core** | Sustained clan presence, decaying. Confers no reward. |
+| `src/journal.zig` | **core** | What the world writes down (a room and a tick), and when it deletes it. |
+| `src/replay.zig` | **core** | Rebuild a world from its journal and prove it is the same world. |
+| `src/city.zig` | **core** | The synthetic city. Pure, and has no coordinates. |
+| `src/rand.zig` | **core** | Deterministic mixing, pinned by us so replay never drifts. |
+| `src/store.zig` | **shell** | The disk. Four functions. It handles bytes and cannot understand a record. |
+| `src/sim.zig` | **shell** | The driver. Owns the clock, the allocator, and stdout. |
+| `src/guard.zig` | — | Compile-time enforcement of the rules below, and the classification registry. |
 
 ## What the compiler refuses to build
 
