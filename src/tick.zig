@@ -50,6 +50,22 @@ pub const Tell = struct {
     }
 };
 
+/// What a tick did, in aggregate.
+///
+/// These are WORLD-WIDE totals, and that is what makes them safe to look at (I3). "How many
+/// cells were live across the entire city" is an operational number. "How many people are in
+/// YOUR cell" is an identifying signal, and it is not here, is not computed, and is not
+/// obtainable from anything that is.
+///
+/// A7.2: cold struct, size guard waived -- one per tick, never in a hot loop.
+pub const TickResult = struct {
+    tells: []Tell,
+    /// Cells that reached quorum anywhere in the world.
+    live_cells: u32,
+    /// Presences standing in one of them.
+    live_presences: u32,
+};
+
 /// CORE. Resolve the whole world for one tick.
 ///
 /// Presences whose cells are live have their hp updated in place; everyone else is
@@ -65,7 +81,7 @@ pub fn tick(
     seed: u64,
     index: u64,
     rules: combat.Rules,
-) Allocator.Error![]Tell {
+) Allocator.Error!TickResult {
     // Sort, scan, and discard everything below quorum. Sub-quorum runs do not survive
     // this call and nothing downstream can see them (I3).
     const runs = try world_mod.liveRuns(world, gpa, spatial.quorum);
@@ -84,6 +100,19 @@ pub fn tick(
     const factions = world.presences.items(.faction);
     const cells = world.presences.items(.cell);
     const hps = world.presences.items(.hp);
+
+    // Everyone outside a live cell recovers. After the sort, the runs are ranges over the
+    // presences, so the gaps BETWEEN the runs are exactly the people who are not in a
+    // fight -- no bitset, no flag column, no second pass over the world (A6).
+    //
+    // You heal when you are not fighting. There is no death and no permanence, because
+    // nothing may be at stake that is worth stalking someone over.
+    var healed_to: usize = 0;
+    for (runs) |run| {
+        recover(hps[healed_to..run.start], rules);
+        healed_to = run.start + run.len;
+    }
+    recover(hps[healed_to..], rules);
 
     var written: usize = 0;
     for (runs) |run| {
@@ -117,7 +146,15 @@ pub fn tick(
     }
 
     assert(written == live_presences);
-    return tells;
+    return .{
+        .tells = tells,
+        .live_cells = @intCast(runs.len),
+        .live_presences = @intCast(live_presences),
+    };
+}
+
+fn recover(hps: []u16, rules: combat.Rules) void {
+    for (hps) |*hp| hp.* = @min(rules.max_hp, hp.* + rules.recovery_per_tick);
 }
 
 const testing = std.testing;
@@ -157,8 +194,9 @@ test "the tick resolves live cells and is silent everywhere else" {
     defer world_mod.deinit(&world, gpa);
     try buildCity(&world, gpa);
 
-    const tells = try tick(&world, gpa, 0xABC, 1, .default);
-    defer gpa.free(tells);
+    const result = try tick(&world, gpa, 0xABC, 1, .default);
+    defer gpa.free(result.tells);
+    const tells = result.tells;
 
     // Six people in the café get a tell. The two on the corner get nothing -- not an
     // empty tell, not a quiet one. Nothing.
@@ -186,10 +224,12 @@ test "a tick replays byte-identically" {
     defer world_mod.deinit(&b, gpa);
     try buildCity(&b, gpa);
 
-    const tells_a = try tick(&a, gpa, 0xDEADBEEF, 42, .default);
-    defer gpa.free(tells_a);
-    const tells_b = try tick(&b, gpa, 0xDEADBEEF, 42, .default);
-    defer gpa.free(tells_b);
+    const result_a = try tick(&a, gpa, 0xDEADBEEF, 42, .default);
+    defer gpa.free(result_a.tells);
+    const result_b = try tick(&b, gpa, 0xDEADBEEF, 42, .default);
+    defer gpa.free(result_b.tells);
+    const tells_a = result_a.tells;
+    const tells_b = result_b.tells;
 
     try testing.expectEqualSlices(Tell, tells_a, tells_b);
     try testing.expectEqualSlices(u16, a.presences.items(.hp), b.presences.items(.hp));
@@ -218,12 +258,13 @@ test "the same facts in a different order produce the same tick" {
     try addPresence(&backward, gpa, cafe, 2, .zombie, 90);
     try addPresence(&backward, gpa, cafe, 1, .human, 100);
 
-    const tells_f = try tick(&forward, gpa, 7, 3, .default);
-    defer gpa.free(tells_f);
-    const tells_b = try tick(&backward, gpa, 7, 3, .default);
-    defer gpa.free(tells_b);
+    const result_f = try tick(&forward, gpa, 7, 3, .default);
+    defer gpa.free(result_f.tells);
+    const result_b = try tick(&backward, gpa, 7, 3, .default);
+    defer gpa.free(result_b.tells);
 
-    try testing.expectEqualSlices(Tell, tells_f, tells_b);
+    try testing.expectEqualSlices(Tell, result_f.tells, result_b.tells);
+    try testing.expectEqual(result_f.live_cells, result_b.live_cells);
 }
 
 test "a week of ticks replays from (world, seed, index)" {
@@ -240,9 +281,9 @@ test "a week of ticks replays from (world, seed, index)" {
     var checksum_first: u64 = 0;
     var i: u64 = 0;
     while (i < ticks_in_a_week) : (i += 1) {
-        const tells = try tick(&first, gpa, seed, i, .default);
-        defer gpa.free(tells);
-        for (tells) |t| checksum_first +%= @as(u64, t.damage) *% 31 +% @as(u64, t.xp);
+        const result = try tick(&first, gpa, seed, i, .default);
+        defer gpa.free(result.tells);
+        for (result.tells) |t| checksum_first +%= @as(u64, t.damage) *% 31 +% @as(u64, t.xp);
     }
 
     // Same world, same seed, same indices. A different run of the same tape.
@@ -253,9 +294,9 @@ test "a week of ticks replays from (world, seed, index)" {
     var checksum_second: u64 = 0;
     i = 0;
     while (i < ticks_in_a_week) : (i += 1) {
-        const tells = try tick(&second, gpa, seed, i, .default);
-        defer gpa.free(tells);
-        for (tells) |t| checksum_second +%= @as(u64, t.damage) *% 31 +% @as(u64, t.xp);
+        const result = try tick(&second, gpa, seed, i, .default);
+        defer gpa.free(result.tells);
+        for (result.tells) |t| checksum_second +%= @as(u64, t.damage) *% 31 +% @as(u64, t.xp);
     }
 
     try testing.expectEqual(checksum_first, checksum_second);
@@ -269,10 +310,11 @@ test "an empty world ticks" {
     var world: World = .empty;
     defer world_mod.deinit(&world, gpa);
 
-    const tells = try tick(&world, gpa, 1, 1, .default);
-    defer gpa.free(tells);
+    const result = try tick(&world, gpa, 1, 1, .default);
+    defer gpa.free(result.tells);
 
-    try testing.expectEqual(@as(usize, 0), tells.len);
+    try testing.expectEqual(@as(usize, 0), result.tells.len);
+    try testing.expectEqual(@as(u32, 0), result.live_cells);
 }
 
 test "a world entirely below quorum ticks silently" {
@@ -294,9 +336,10 @@ test "a world entirely below quorum ticks silently" {
         id += 1;
     }
 
-    const tells = try tick(&world, gpa, 1, 1, .default);
-    defer gpa.free(tells);
+    const result = try tick(&world, gpa, 1, 1, .default);
+    defer gpa.free(result.tells);
 
-    try testing.expectEqual(@as(usize, 0), tells.len);
+    try testing.expectEqual(@as(usize, 0), result.tells.len);
+    try testing.expectEqual(@as(u32, 0), result.live_cells);
     for (world.presences.items(.hp)) |hp| try testing.expectEqual(@as(u16, 100), hp);
 }

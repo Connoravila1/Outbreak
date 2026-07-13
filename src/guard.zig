@@ -85,12 +85,14 @@ const core = [_]Source{
     .{ .name = "tick.zig", .text = @embedFile("tick.zig") },
     .{ .name = "integrity.zig", .text = @embedFile("integrity.zig") },
     .{ .name = "territory.zig", .text = @embedFile("territory.zig") },
+    .{ .name = "city.zig", .text = @embedFile("city.zig") },
 };
 
 /// SHELL (B1, B3). Permitted to touch the outside world. Exactly one file here is
 /// permitted to hold a coordinate, and only for the duration of one expression (B6).
 const shell = [_]Source{
     .{ .name = "spatial/geohash.zig", .text = @embedFile("spatial/geohash.zig") },
+    .{ .name = "sim.zig", .text = @embedFile("sim.zig") },
 };
 
 /// Does `haystack` begin with `needle`? Byte-wise, so that comptime does the least work

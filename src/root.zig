@@ -24,6 +24,9 @@ pub const integrity = @import("integrity.zig");
 /// Territory: sustained clan presence, decaying. Confers nothing (H2).
 pub const territory = @import("territory.zig");
 
+/// The synthetic city: a pure generator of plausible people in plausible rooms (0.10).
+pub const city = @import("city.zig");
+
 comptime {
     // The forbidden-construct guard runs at compile time, so a distance function or a
     // coordinate in the core fails the build rather than the review. Referencing it here
@@ -42,4 +45,5 @@ test {
     _ = @import("tick.zig");
     _ = @import("integrity.zig");
     _ = @import("territory.zig");
+    _ = @import("city.zig");
 }

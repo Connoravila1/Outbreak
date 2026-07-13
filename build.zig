@@ -27,6 +27,26 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run the test suite under a leak-detecting allocator");
     test_step.dependOn(&run_tests.step);
 
+    // The Phase 0 exit criterion, as a program you can run: ten thousand synthetic players
+    // through a simulated week, replayed, under a leak-detecting allocator.
+    //
+    // It prints numbers. It is not a visualiser, and it never will be -- that is the named
+    // trap of this phase. Run it in ReleaseFast if you want the tick cost to mean anything:
+    //
+    //     zig build sim -Doptimize=ReleaseFast
+    const sim = b.addExecutable(.{
+        .name = "sim",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/sim.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+
+    const run_sim = b.addRunArtifact(sim);
+    const sim_step = b.step("sim", "Run the synthetic city for a simulated week");
+    sim_step.dependOn(&run_sim.step);
+
     // Compiling is enough to fire every comptime guard: the size guards (A7) and the
     // forbidden-construct guard (src/guard.zig). `zig build` must fail on either.
     b.default_step.dependOn(&tests.step);

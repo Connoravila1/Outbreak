@@ -42,6 +42,15 @@ pub const Rules = struct {
     damage_per_hostile: u16 = 6,
     /// The width of the random jitter added to each presence's incoming damage.
     jitter: u16 = 5,
+    /// Hit points recovered per tick by a presence that is not in a live cell.
+    ///
+    /// There is no death and no permanence. A downed player is removed from the fight and
+    /// recovers over time, because nothing may be at stake that is worth stalking someone
+    /// over.
+    recovery_per_tick: u16 = 1,
+    /// The ceiling recovery restores toward.
+    max_hp: u16 = 100,
+
     /// XP for one tick spent in a live cell with at least one hostile present.
     ///
     /// THIS IS THE ONLY THING THAT EARNS (H3). Not distance travelled. Not cells
