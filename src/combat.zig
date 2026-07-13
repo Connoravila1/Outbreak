@@ -42,6 +42,13 @@ pub const Rules = struct {
     damage_per_hostile: u16 = 6,
     /// The width of the random jitter added to each presence's incoming damage.
     jitter: u16 = 5,
+    /// XP for one tick spent in a live cell with at least one hostile present.
+    ///
+    /// THIS IS THE ONLY THING THAT EARNS (H3). Not distance travelled. Not cells
+    /// visited. Not items picked up. Those are trivially spoofable, and they are not
+    /// weighted low here -- they do not exist. There is no other call site in this
+    /// codebase that adds XP, and there is not meant to be.
+    xp_per_tick: u16 = 10,
 
     pub const default: Rules = .{};
 };
@@ -57,11 +64,29 @@ pub const Outcome = struct {
     player: PlayerId, // u32
     damage: u16,
     hp_after: u16,
+    xp: u16,
+    _pad: u16 = 0,
 
     comptime {
         // THE SIZE GUARD (A7). One per presence in every live cell, every tick.
-        // 4 + 2 + 2 = 8 bytes packed.
-        assert(@sizeOf(Outcome) == 8);
+        //
+        // A7.1 -- BUDGET RAISED FROM 8 TO 12, DELIBERATELY.
+        //
+        // The xp field is the reason. XP is earned by exactly one thing: duration in a
+        // live cell with hostiles present (H3). Duration is integrated by awarding it on
+        // the tick, which makes the award a per-presence result of resolution -- the same
+        // shape as damage, produced by the same pass.
+        //
+        // The alternative was to leave Outcome at 8 bytes and infer the award from
+        // `damage > 0`. That is smaller and it is wrong: a presence already at zero hp
+        // takes no further damage, so the inference would silently stop paying a downed
+        // player who is still standing in the fight. The reward would then quietly depend
+        // on a health value rather than on presence, which is not what H3 says and not
+        // what we want to be true.
+        //
+        // 4 + 2 + 2 + 2 + 2 = 12 bytes packed. Four bytes per presence per live cell per
+        // tick, against a thirty-second budget (G3). The trade is accepted.
+        assert(@sizeOf(Outcome) == 12);
     }
 };
 
@@ -127,10 +152,19 @@ pub fn resolve(
         // below it, and damage never wraps.
         const damage: u16 = @intCast(@min(raw, @as(u32, hp)));
 
+        // The only thing that earns: you were here, and so was someone hostile (H3).
+        //
+        // Note what is NOT a term in this: how much damage you dealt, how much you took,
+        // whether you won, whether you survived. A downed player standing in a live cell
+        // is still present, and presence among real hostile humans is the one input a
+        // spoofer cannot fabricate -- it requires k real people to actually be in a room.
+        const xp: u16 = if (hostiles == 0) 0 else rules.xp_per_tick;
+
         outcome.* = .{
             .player = player,
             .damage = damage,
             .hp_after = hp - damage,
+            .xp = xp,
         };
 
         switch (faction) {
@@ -281,6 +315,67 @@ test "the side that outnumbers is the side that is winning" {
     // Sanity: the aggregate really does point the other way.
     const total_human_damage = out[0].damage + out[1].damage + out[2].damage;
     try testing.expect(total_human_damage > out[3].damage);
+}
+
+test "sitting with your own faction all day earns nothing" {
+    // A crowded cell full of allies is not a fight and never pays. If it did, the way to
+    // farm would be to gather your own accounts in a room -- which is precisely the attack
+    // H5 exists to catch, and it is better to not pay for it in the first place.
+    const r = runOf(5, .{ .human, .human, .human, .human, .human }, .{ 100, 100, 100, 100, 100 });
+    var out: [5]Outcome = undefined;
+
+    _ = resolve(&r.players, &r.factions, &r.hps, spatial.cellFromKey(1, 39), 1, 1, .default, &out);
+
+    for (out) |o| try testing.expectEqual(@as(u16, 0), o.xp);
+}
+
+test "XP is duration with hostiles, not performance" {
+    // Everyone in a live cell with a hostile earns the same, whether they are winning,
+    // losing, untouched, or already down. The reward tracks presence among real humans
+    // (H3) -- the one input that cannot be faked -- and nothing else.
+    const r = runOf(4, .{ .human, .zombie, .zombie, .zombie }, .{ 100, 100, 100, 1 });
+    var out: [4]Outcome = undefined;
+
+    _ = resolve(&r.players, &r.factions, &r.hps, spatial.cellFromKey(1, 39), 3, 9, .default, &out);
+
+    const rules: Rules = .default;
+    for (out) |o| try testing.expectEqual(rules.xp_per_tick, o.xp);
+
+    // The lone human is being flattened by three zombies and still earns exactly what
+    // they earn. Losing pays. Being there is the whole job.
+    try testing.expect(out[0].damage > out[1].damage);
+}
+
+test "a downed player still present still earns" {
+    // hp 0: takes no further damage, because there is none left to take. If XP were
+    // inferred from damage dealt or taken, this player would silently stop being paid for
+    // standing in the same fight as everyone else. It is an explicit field for this reason.
+    const r = runOf(4, .{ .human, .zombie, .zombie, .zombie }, .{ 0, 100, 100, 100 });
+    var out: [4]Outcome = undefined;
+
+    _ = resolve(&r.players, &r.factions, &r.hps, spatial.cellFromKey(1, 39), 3, 9, .default, &out);
+
+    const rules: Rules = .default;
+    try testing.expectEqual(@as(u16, 0), out[0].damage);
+    try testing.expectEqual(@as(u16, 0), out[0].hp_after);
+    try testing.expectEqual(rules.xp_per_tick, out[0].xp);
+}
+
+test "XP does not depend on the cell" {
+    // NO LOCATION CARRIES AN INTRINSIC REWARD (H2). The single most important integrity
+    // rule, and it is a design property rather than a code one -- so here it is, asserted
+    // as code: the same people fighting the same fight earn the same XP in every room in
+    // the world. There is no cell worth travelling to. There is no destination. A spoofer
+    // who teleports anywhere arrives at silence, or at the fight they already had.
+    const people = runOf(4, .{ .human, .zombie, .human, .zombie }, .{ 100, 100, 100, 100 });
+
+    var here: [4]Outcome = undefined;
+    var anywhere: [4]Outcome = undefined;
+
+    _ = resolve(&people.players, &people.factions, &people.hps, spatial.cellFromKey(0x0001, 39), 5, 2, .default, &here);
+    _ = resolve(&people.players, &people.factions, &people.hps, spatial.cellFromKey(0xFFFF, 39), 5, 2, .default, &anywhere);
+
+    for (here, anywhere) |a, b| try testing.expectEqual(a.xp, b.xp);
 }
 
 test "an even fight reads as even" {
