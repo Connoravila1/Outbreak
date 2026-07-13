@@ -46,6 +46,21 @@ pub const CellId = enum(u64) { _ };
 /// ceiling.
 pub const max_precision: u6 = 63;
 
+/// NOT A PLACE.
+///
+/// Every real cell has its sentinel bit set, so no real cell is ever zero -- which makes zero
+/// the one value that can mean "this player is not in a room at all". A phone with no GPS fix,
+/// a player who has never reported, a session that just opened: they are NOWHERE, and nowhere
+/// is not somewhere.
+///
+/// This matters more than it looks. The first version gave unreported players a real cell as a
+/// placeholder, and every player whose phone had not reported was therefore standing in the
+/// SAME room as every other -- they reached quorum, and they fought each other. Everyone with
+/// GPS switched off was at war in one enormous invisible room.
+///
+/// The tick skips nowhere. Nobody is co-located with a person who is not anywhere.
+pub const nowhere: CellId = @enumFromInt(0);
+
 /// CORE. Pack `precision` payload bits into a sentinel-tagged CellId.
 pub fn fromBits(bits: u64, precision: u6) CellId {
     assert(precision >= 1 and precision <= max_precision);

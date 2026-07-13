@@ -89,6 +89,7 @@ const core = [_]Source{
     .{ .name = "journal.zig", .text = @embedFile("journal.zig") },
     .{ .name = "replay.zig", .text = @embedFile("replay.zig") },
     .{ .name = "protocol.zig", .text = @embedFile("protocol.zig") },
+    .{ .name = "session.zig", .text = @embedFile("session.zig") },
 };
 
 /// SHELL (B1, B3). Permitted to touch the outside world. Exactly one file here is

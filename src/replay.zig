@@ -61,9 +61,10 @@ pub fn replay(gpa: Allocator, bytes: []const u8, rules: combat.Rules) Error!stru
             while (i < roster.count) : (i += 1) {
                 const entry = journal.rosterEntry(roster.payload, i);
                 try world_mod.add(&world, gpa, .{
-                    // A placeholder room. The next tick record says where they really were;
-                    // until then nobody is anywhere, which is the honest state of affairs.
-                    .cell = spatial.cellFromKey(0, opened.header.precision),
+                    // Nowhere. The next tick record says where they really were; until then
+                    // nobody is anywhere, which is the honest state of affairs -- and crucially
+                    // they are not all in a room TOGETHER.
+                    .cell = spatial.nowhere,
                     .player = entry.player,
                     .hp = entry.hp,
                     .faction = entry.faction,

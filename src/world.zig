@@ -227,6 +227,18 @@ pub fn liveRuns(world: *World, gpa: Allocator, k: u32) Allocator.Error![]Run {
         while (end < cells.len and cells[end] == cells[start]) : (end += 1) {}
 
         const len = end - start;
+
+        // NOWHERE IS NOT SOMEWHERE. Players with no GPS fix share the value zero, but they do
+        // not share a room -- they are not in one. Without this, everybody whose phone had not
+        // reported would be co-located with everybody else whose phone had not reported, would
+        // reach quorum, and would fight. An invisible war in an imaginary room.
+        //
+        // Zero sorts first, so this is one run at the front, skipped once.
+        if (cells[start] == spatial.nowhere) {
+            start = end;
+            continue;
+        }
+
         if (len >= k) {
             try runs.append(gpa, .{
                 .start = @intCast(start),
@@ -443,4 +455,67 @@ test "ensureCapacity does not allocate again" {
     }
 
     try std.testing.expectEqual(capacity, world.presences.capacity);
+}
+
+test "nowhere is not somewhere" {
+    // THE INVISIBLE WAR.
+    //
+    // Every player who has not reported a cell -- no GPS fix, phone asleep, session just
+    // opened, in a tunnel -- has to be SOMEWHERE in the columns, because the world is a
+    // rectangle. The obvious thing is to park them all in a placeholder cell.
+    //
+    // The obvious thing is a catastrophe. A placeholder cell is a real cell, so every player
+    // whose phone had not reported would be standing in the same room as every other, they
+    // would reach quorum, and they would fight. Everyone with GPS switched off would be at war
+    // with each other, in one enormous invisible room, forever.
+    //
+    // Zero is not a place: every real cell has its sentinel bit set, so no real cell is zero.
+    // The tick skips it.
+    const gpa = std.testing.allocator;
+
+    var world: World = .empty;
+    defer deinit(&world, gpa);
+
+    // Twenty players, none of whom have reported.
+    var id: u32 = 1;
+    while (id <= 20) : (id += 1) {
+        try add(&world, gpa, .{
+            .cell = spatial.nowhere,
+            .player = @enumFromInt(id),
+            .hp = 100,
+            .faction = if (id % 2 == 0) .human else .zombie,
+        });
+    }
+
+    const runs = try liveRuns(&world, gpa, spatial.quorum);
+    defer gpa.free(runs);
+
+    // Twenty people, well past quorum, all sharing a value -- and not one live cell. They are
+    // not in a room. They are nowhere.
+    try std.testing.expectEqual(@as(usize, 0), runs.len);
+}
+
+test "nowhere does not stop the rest of the world" {
+    const gpa = std.testing.allocator;
+    const p = spatial.default_precision;
+    const cafe = spatial.cellFromKey(0xCAFE, p);
+
+    var world: World = .empty;
+    defer deinit(&world, gpa);
+
+    // Three people in a café, and five with their phones off.
+    var id: u32 = 1;
+    while (id <= 3) : (id += 1) {
+        try add(&world, gpa, .{ .cell = cafe, .player = @enumFromInt(id), .hp = 100, .faction = .human });
+    }
+    while (id <= 8) : (id += 1) {
+        try add(&world, gpa, .{ .cell = spatial.nowhere, .player = @enumFromInt(id), .hp = 100, .faction = .zombie });
+    }
+
+    const runs = try liveRuns(&world, gpa, spatial.quorum);
+    defer gpa.free(runs);
+
+    // The café is live. Nowhere is not.
+    try std.testing.expectEqual(@as(usize, 1), runs.len);
+    try std.testing.expectEqual(@as(u32, 3), runs[0].len);
 }

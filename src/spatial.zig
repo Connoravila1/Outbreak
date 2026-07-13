@@ -43,6 +43,10 @@ pub const default_precision: u6 = 39;
 /// The ceiling imposed by the sentinel encoding: one of the 64 bits is always the tag.
 pub const max_precision = cell.max_precision;
 
+/// NOT A PLACE. A player with no GPS fix is nowhere, and nowhere is not somewhere -- they are
+/// not in a room, and they are not co-located with everyone else who is also nowhere.
+pub const nowhere = cell.nowhere;
+
 /// SHELL (B6). Raw coordinate in, CellId out, coordinate discarded in the same
 /// expression. Returns null for a reading we will not accept, which the shell drops
 /// before the core ever sees it (E5).
