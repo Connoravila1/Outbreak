@@ -200,7 +200,37 @@ Even with homes so sparse they are effectively solitary, fighting stays near 38%
 
 ---
 
-## 8. Change log
+## 8. Open items — decisions deferred, not made
+
+Each of these is *currently* implemented one way and could go another. The column that matters is **when it stops being cheap**.
+
+| # | Question | Status now | Deadline |
+|---|---|---|---|
+| **O1** | **Exact hostile count, or a band?** | Coarse band, sampled once per engagement | **Phase 2** (protocol freeze) |
+| O2 | How often *should* a fight happen? | ~5/day, 5 min each — an accident of two constants, not a target | Phase 1 (cheap to retune forever, but the target should exist) |
+| O3 | Cell size (39 bits, ~38 m) | Chosen for squareness, not from data | **Phase 2** |
+| O4 | Do mass events (concerts, stadiums) behave? | **Untested.** The city model has no mass events, so `scores`/`hundreds`/`thousands` have never occurred in simulation | Before O1 is answered — it is the evidence O1 needs |
+
+### O1 — the exact count, in full
+
+**The case for the band (implemented):** an exact count refreshed every tick identifies people. Sit in a café of twenty, watch `4 → 3` at the moment one person stands and walks out, and you have named a player and their faction with no position ever transmitted. The delta does it alone (I1, I5).
+
+**The case for the number (Connor, 2026-07-13):** it gives the player *scale*, and scale is the drama. Standing at a concert and being told you are surrounded by three thousand zombies is a genuinely great moment, and you would not leave a concert to go and identify someone — that would be absurd. *"Provided the radius is large enough, it shouldn't really matter."*
+
+**That last clause is the actual insight, and it is probably right.** The identification risk is inversely proportional to how many people are in the room:
+
+- In a crowd of 200, an exact count reveals nothing about any individual. The number is useless as a scalpel *precisely because it is enormous*.
+- In a room of 4, it reveals everything.
+
+**So the likely resolution is not "band vs. number" — it is a threshold.** Exact count above some occupancy (where it is safe and thrilling), wordless band below it (where it is a weapon). A band with unlimited resolution at the top *is* an exact count. That is a one-line change to `combat.crowdOf`.
+
+**What it needs before it can be decided:** O4. The simulation has never produced a crowd larger than "dozens", so nobody has yet seen what the exciting case actually looks like in numbers.
+
+**Awaiting:** the author's view (Connor's father).
+
+---
+
+## 9. Change log
 
 | Date | Change | Why |
 |---|---|---|
