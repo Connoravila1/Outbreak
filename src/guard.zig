@@ -54,6 +54,7 @@ const core = [_]Source{
     .{ .name = "root.zig", .text = @embedFile("root.zig") },
     .{ .name = "spatial.zig", .text = @embedFile("spatial.zig") },
     .{ .name = "spatial/cell.zig", .text = @embedFile("spatial/cell.zig") },
+    .{ .name = "world.zig", .text = @embedFile("world.zig") },
 };
 
 /// SHELL (B1, B3). Permitted to touch the outside world. Exactly one file here is

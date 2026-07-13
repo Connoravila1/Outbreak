@@ -51,5 +51,12 @@ pub const quantize = geohash.quantize;
 /// CORE. Grow the room until quorum is reachable (I8).
 pub const coarsen = cell.coarsen;
 
+/// CORE. Total order on cells: a group-by key, not an adjacency (A9).
+pub const lessThan = cell.lessThan;
+
+/// CORE. A distinct room from an arbitrary key, with no coordinate behind it. How the
+/// core's tests and the synthetic city make places without inventing positions.
+pub const cellFromKey = cell.fromKey;
+
 /// CORE. The precision a cell carries, recovered from the value itself.
 pub const precisionOf = cell.precisionOf;

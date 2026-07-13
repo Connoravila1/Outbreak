@@ -62,6 +62,28 @@ pub fn precisionOf(id: CellId) u6 {
     return max_precision - trailing;
 }
 
+/// CORE. Total order on cells.
+///
+/// A sort key and nothing more. Two cells adjacent in this order are NOT adjacent in the
+/// world, and no code may treat them as though they were. The order exists so that equal
+/// cells land next to each other and the tick can scan runs (0.3) -- it is a group-by, not
+/// a geometry (A9).
+pub fn lessThan(a: CellId, b: CellId) bool {
+    return @intFromEnum(a) < @intFromEnum(b);
+}
+
+/// CORE. Fabricate a distinct cell from an arbitrary key.
+///
+/// No coordinate exists behind the result and no quantizer ran. This is how core tests
+/// and the synthetic city (0.10) make rooms: a room is just an identity, and inventing a
+/// latitude in order to obtain one would mean handing the core a coordinate it would then
+/// have to be trusted to throw away. It is not trusted. It is never given one (B6).
+pub fn fromKey(key: u64, precision: u6) CellId {
+    assert(precision >= 1 and precision <= max_precision);
+    const mask: u64 = if (precision == 64) ~@as(u64, 0) else (@as(u64, 1) << precision) - 1;
+    return fromBits(key & mask, precision);
+}
+
 /// CORE. Grow the room (I8).
 ///
 /// Sparse regions coarsen until quorum is reachable: fewer geohash bits, a larger
