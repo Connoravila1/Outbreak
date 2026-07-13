@@ -1,5 +1,21 @@
 //! CORE (B1, B2). The world, as columns.
 //!
+//! MODULE BOUNDARY: `world.zig` and `tick.zig` are ONE MODULE, split across two files for
+//! readability. A module is a unit of hidden decision (D1), not a file.
+//!
+//! This is stated explicitly because A5 is a [MUST] and the alternative reading fails it. A
+//! `Run` is a pair of raw indexes into these columns, and `tick.zig` uses them -- an index is
+//! meaningless without its array, so if these were two modules that would be a bare index
+//! crossing a boundary, which A5 forbids outright.
+//!
+//! They are not two modules. The world's layout and the transform over that layout are the
+//! same decision: change the columns and the tick changes with them. Splitting them would be
+//! change amplification, not encapsulation.
+//!
+//! What DOES cross a real boundary is the combat module, and it receives SLICES OF PLAIN
+//! VALUES -- never a Run, never an index (B5). And nothing outside this module mutates these
+//! columns; `relocate` exists so callers say who is where and the world does the writing (C4).
+//!
 //! There is no Player. There is a column of cell ids, a column of hit points, a column
 //! of factions, and free functions that walk them (A1, A3). No record here has a method,
 //! an identity, or an invariant enforced by code attached to it.
@@ -114,6 +130,32 @@ pub fn add(world: *World, gpa: Allocator, presence: Presence) Allocator.Error!vo
 /// one reservation and no reallocation. Design for the many, never the one (A2).
 pub fn ensureCapacity(world: *World, gpa: Allocator, n: usize) Allocator.Error!void {
     return world.presences.ensureTotalCapacity(gpa, n);
+}
+
+/// CORE. Move people. THE ONLY WAY TO MOVE THEM.
+///
+/// The caller supplies a function from (player, where they are now) to (where they are now).
+/// The world walks its own columns and applies it.
+///
+/// C4: ONE SUBSYSTEM NEVER MUTATES MEMORY OWNED BY ANOTHER. Before the ruleset audit, three
+/// separate modules -- the synthetic city, the session layer, and replay -- each reached into
+/// `world.presences.items(.cell)` and wrote to it directly. Each one worked. Each one was a
+/// module writing into another module's arrays, which is the exact coupling C4 forbids and the
+/// exact way a struct-of-arrays layout leaks out of the module that owns it (D3).
+///
+/// Now the layout stays here, and the callers say WHAT they want, not HOW it is stored.
+/// Allocates nothing.
+pub fn relocate(
+    world: *World,
+    context: anytype,
+    comptime cellFor: fn (@TypeOf(context), PlayerId, CellId) CellId,
+) void {
+    const players = world.presences.items(.player);
+    const cells = world.presences.items(.cell);
+
+    for (players, cells) |player, *cell| {
+        cell.* = cellFor(context, player, cell.*);
+    }
 }
 
 /// CORE. The engagement table, flattened and sorted by cell, for writing down.

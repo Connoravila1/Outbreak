@@ -174,20 +174,25 @@ pub const Response = struct {
         assert(@sizeOf(Response) == 16);
     }
 
-    /// Nothing happened to you. This is what an empty field says, what a cell below quorum
-    /// says, and what a room whose fight has ended says. They are the same sentence, and that
-    /// is the entire content of I3.
-    pub fn quiet(tick: u64, hp: u16) Response {
-        return .{
-            .tick = tick,
-            .hp = hp,
-            .damage = 0,
-            .xp = 0,
-            .momentum = .even,
-            .crowd = .a_few,
-        };
-    }
 };
+
+/// CORE. Nothing happened to you.
+///
+/// This is what an empty field says, what a cell below quorum says, and what a room whose
+/// fight has ended says. They are the same sentence, and that is the entire content of I3.
+///
+/// A free function, not a method: a record contains fields and nothing else (A1). It was a
+/// method until the ruleset audit, and it had no business being one.
+pub fn quiet(tick: u64, hp: u16) Response {
+    return .{
+        .tick = tick,
+        .hp = hp,
+        .damage = 0,
+        .xp = 0,
+        .momentum = .even,
+        .crowd = .a_few,
+    };
+}
 
 pub const response_size = 16; // tick(8) + hp(2) + damage(2) + xp(2) + momentum(1) + crowd(1)
 
@@ -221,7 +226,7 @@ pub fn decodeResponse(bytes: []const u8) Error!Response {
 
 /// CORE. What the server says to a player, given what the tick did to them -- or did not.
 pub fn respond(tick: u64, hp: u16, told: ?tick_mod.Tell) Response {
-    const tell = told orelse return .quiet(tick, hp);
+    const tell = told orelse return quiet(tick, hp);
 
     return .{
         .tick = tick,
@@ -318,7 +323,7 @@ test "SILENCE IS THE SAME SIZE AS A WAR" {
         .crowd = .hundreds,
     });
 
-    const nothing = encodeResponse(.quiet(900, 100));
+    const nothing = encodeResponse(quiet(900, 100));
 
     try testing.expectEqual(fighting.len, nothing.len);
     try testing.expectEqual(@as(usize, response_size), fighting.len);
@@ -341,7 +346,7 @@ test "AN EMPTY FIELD AND A CELL BELOW QUORUM SAY EXACTLY THE SAME THING" {
     try testing.expectEqualSlices(u8, &alone_in_a_field, &room_already_fought);
 
     // And it is indistinguishable from the response of a player who is simply not playing.
-    try testing.expectEqualSlices(u8, &alone_in_a_field, &encodeResponse(.quiet(tick, hp)));
+    try testing.expectEqualSlices(u8, &alone_in_a_field, &encodeResponse(quiet(tick, hp)));
 }
 
 test "a response round-trips, fighting or quiet" {
@@ -359,9 +364,9 @@ test "a response round-trips, fighting or quiet" {
     try testing.expectEqual(fighting.momentum, back.momentum);
     try testing.expectEqual(fighting.crowd, back.crowd);
 
-    const quiet = try decodeResponse(&encodeResponse(.quiet(7, 100)));
-    try testing.expectEqual(@as(u16, 0), quiet.damage);
-    try testing.expectEqual(@as(u16, 0), quiet.xp);
+    const nothing = try decodeResponse(&encodeResponse(quiet(7, 100)));
+    try testing.expectEqual(@as(u16, 0), nothing.damage);
+    try testing.expectEqual(@as(u16, 0), nothing.xp);
 }
 
 test "the server tells the client how to quantize" {

@@ -196,15 +196,20 @@ pub fn populate(world: *World, gpa: Allocator, params: Params, seed: u64) Alloca
 
 /// CORE. Move the whole city to where it should be at `tick`.
 ///
-/// Reads each row's player id rather than assuming row order, because the tick sorts the
-/// world and a row is not a person. Allocates nothing.
+/// The city says WHERE each person is. The world decides how that is stored, and does the
+/// writing -- a module never mutates another module's arrays (C4).
 pub fn advance(world: *World, params: Params, seed: u64, tick: u64) void {
-    const players = world.presences.items(.player);
-    const cells = world.presences.items(.cell);
+    const Where = struct {
+        params: Params,
+        seed: u64,
+        tick: u64,
 
-    for (players, cells) |player, *c| {
-        c.* = cellFor(@intFromEnum(player), tick, params, seed);
-    }
+        fn cellOf(ctx: @This(), player: world_mod.PlayerId, _: CellId) CellId {
+            return cellFor(@intFromEnum(player), ctx.tick, ctx.params, ctx.seed);
+        }
+    };
+
+    world_mod.relocate(world, Where{ .params = params, .seed = seed, .tick = tick }, Where.cellOf);
 }
 
 const testing = std.testing;

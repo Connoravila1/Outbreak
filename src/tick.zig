@@ -1,5 +1,10 @@
 //! CORE (B1, B2). The tick (0.7).
 //!
+//! MODULE BOUNDARY: this file and `world.zig` are ONE MODULE (see world.zig's header). The
+//! `Run` indexes below name rows in the world's own columns, and an index is meaningless
+//! without its array (A5) -- so they never leave this module. The combat module, which IS a
+//! separate module, receives slices of plain values and never an index (B5).
+//!
 //!     (world, seed, index) -> (world', tells)
 //!
 //! Pure. Deterministic. Byte-identical on replay (B7, B8). Time and randomness enter as
@@ -495,10 +500,10 @@ test "a fight ends" {
     defer world_mod.deinit(&world, gpa);
     try buildCity(&world, gpa);
 
-    // Six people are in the café, so this room's fight is longer than the five-minute floor:
-    // a café is a skirmish, a stadium is a siege (O5).
+    // Six people: a skirmish. The length comes from the crowd BAND, never the exact count --
+    // deriving it from the headcount leaked an invertible headcount through the clock (I5).
     const length = combat.engagementLength(6, rules);
-    try testing.expect(length > rules.engagement_ticks);
+    try testing.expectEqual(rules.engagement_ticks, length);
 
     var fought: u64 = 0;
     var i: u64 = 0;
@@ -699,10 +704,51 @@ test "a stadium is a siege, and a cafe is a skirmish" {
     try testing.expect(cafe < bar);
     try testing.expect(bar < concert);
 
-    // The café: minutes. The concert: hours, for as long as the crowd is there.
-    try testing.expect(cafe < 30); // under 15 minutes
-    try testing.expectEqual(rules.engagement_max_ticks, concert); // capped at four hours
+    // The café: minutes. The concert: hours.
+    try testing.expect(cafe < 30);
+    try testing.expect(concert >= 300);
 
     // And the floor holds for the smallest possible room.
     try testing.expect(combat.engagementLength(0, rules) >= rules.engagement_ticks);
+}
+
+test "THE DURATION OF A FIGHT IS NOT A HEADCOUNT" {
+    // I5. The leak that the ruleset audit found, and the test that keeps it closed.
+    //
+    // The first version derived the length as `10 + 2 * occupants`. That is invertible: a
+    // player who timed their own fight recovered an EXACT count of everyone in the room,
+    // through the clock, without a single count ever being transmitted.
+    //
+    // Enormous care went into making the crowd a coarse band so no exact number could leak --
+    // and then the number leaked out through the duration instead. A side channel does not care
+    // which field you were guarding.
+    //
+    // Now: two rooms in the same band fight for exactly the same time. Inverting a duration
+    // yields the band, which the player was already told, and nothing else.
+    const rules: combat.Rules = .default;
+
+    // Every crowd inside the `dozens` band is one duration.
+    try testing.expectEqual(combat.engagementLength(12, rules), combat.engagementLength(39, rules));
+    // Every crowd inside `hundreds` is one duration.
+    try testing.expectEqual(combat.engagementLength(150, rules), combat.engagementLength(799, rules));
+    // And a room of four is a room of eleven.
+    try testing.expectEqual(combat.engagementLength(4, rules), combat.engagementLength(11, rules));
+
+    // There are exactly five possible durations in the whole game -- one per band. A player who
+    // measures one learns a band. They already had the band.
+    var seen: [1000]u64 = undefined;
+    var n: usize = 0;
+    var occupants: u32 = 3;
+    while (occupants < 1000) : (occupants += 1) {
+        const length = combat.engagementLength(occupants, rules);
+        var known = false;
+        for (seen[0..n]) |s| {
+            if (s == length) known = true;
+        }
+        if (!known) {
+            seen[n] = length;
+            n += 1;
+        }
+    }
+    try testing.expect(n <= 5);
 }

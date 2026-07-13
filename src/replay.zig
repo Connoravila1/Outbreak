@@ -120,22 +120,26 @@ pub fn replay(gpa: Allocator, bytes: []const u8, rules: combat.Rules) Error!stru
 /// and the simulation simply stopped. It is a map now. (G2: the profiler indicted it
 /// immediately, by never finishing.)
 fn place(world: *World, gpa: Allocator, payload: []const u8, count: u32) Allocator.Error!void {
-    const players = world.presences.items(.player);
-    const cells = world.presences.items(.cell);
-
-    var rows: std.AutoHashMapUnmanaged(world_mod.PlayerId, u32) = .empty;
-    defer rows.deinit(gpa);
-    try rows.ensureTotalCapacity(gpa, @intCast(players.len));
-
-    for (players, 0..) |player, row| {
-        rows.putAssumeCapacity(player, @intCast(row));
-    }
+    var claimed: std.AutoHashMapUnmanaged(world_mod.PlayerId, spatial.CellId) = .empty;
+    defer claimed.deinit(gpa);
+    try claimed.ensureTotalCapacity(gpa, count);
 
     var i: usize = 0;
     while (i < count) : (i += 1) {
         const r = journal.report(payload, i);
-        if (rows.get(r.player)) |row| cells[row] = r.cell;
+        claimed.putAssumeCapacity(r.player, r.cell);
     }
+
+    const Rooms = struct {
+        claimed: *const std.AutoHashMapUnmanaged(world_mod.PlayerId, spatial.CellId),
+
+        fn cellOf(ctx: @This(), player: world_mod.PlayerId, current: spatial.CellId) spatial.CellId {
+            return ctx.claimed.get(player) orelse current;
+        }
+    };
+
+    // The world writes its own columns (C4). We say who is where.
+    world_mod.relocate(world, Rooms{ .claimed = &claimed }, Rooms.cellOf);
 }
 
 const testing = std.testing;

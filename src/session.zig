@@ -48,23 +48,27 @@ pub const Server = struct {
     seed: u64,
     tick_index: u64,
     next_player: u32,
-
-    pub fn empty(seed: u64, precision: u6) Server {
-        return .{
-            .world = .empty,
-            .sessions = .empty,
-            .precision = precision,
-            .seed = seed,
-            .tick_index = 0,
-            .next_player = 1,
-        };
-    }
 };
+
+/// CORE. A fresh server.
+///
+/// A free function, not a method on the type (A1). Records are fields and nothing else, and
+/// that applies to the ones that hold subsystems too.
+pub fn init(seed: u64, precision: u6) Server {
+    return .{
+        .world = .empty,
+        .sessions = .empty,
+        .precision = precision,
+        .seed = seed,
+        .tick_index = 0,
+        .next_player = 1,
+    };
+}
 
 pub fn deinit(server: *Server, gpa: Allocator) void {
     world_mod.deinit(&server.world, gpa);
     server.sessions.deinit(gpa);
-    server.* = .empty(server.seed, server.precision);
+    server.* = init(server.seed, server.precision);
 }
 
 /// CORE. A player joins. Faction is chosen once, here, and never again (2.4).
@@ -134,9 +138,8 @@ pub fn ingest(server: *Server, report: protocol.Report) bool {
 pub fn tick(server: *Server, gpa: Allocator, scratch: Allocator) Allocator.Error![]Reply {
     // Move everyone to where they claimed to be. A player who did not report keeps their last
     // room -- the phone may simply be asleep, and a missing packet is not a teleport.
-    const players = server.world.presences.items(.player);
-    const cells = server.world.presences.items(.cell);
-
+    //
+    // The world does the writing (C4): we say where people are, not how it is stored.
     var by_player: std.AutoHashMapUnmanaged(PlayerId, CellId) = .empty;
     defer by_player.deinit(scratch);
 
@@ -147,9 +150,15 @@ pub fn tick(server: *Server, gpa: Allocator, scratch: Allocator) Allocator.Error
         }
     }
 
-    for (players, cells) |player, *cell| {
-        if (by_player.get(player)) |claimed| cell.* = claimed;
-    }
+    const Claims = struct {
+        claimed: *const std.AutoHashMapUnmanaged(PlayerId, CellId),
+
+        fn cellOf(ctx: @This(), player: PlayerId, current: CellId) CellId {
+            return ctx.claimed.get(player) orelse current;
+        }
+    };
+
+    world_mod.relocate(&server.world, Claims{ .claimed = &by_player }, Claims.cellOf);
 
     const result = try tick_mod.tick(
         &server.world,
@@ -224,7 +233,7 @@ fn joinAt(server: *Server, gpa: Allocator, faction: Faction, fake_session: u64) 
 test "a session is issued, and it is not the player id" {
     const gpa = testing.allocator;
 
-    var server: Server = .empty(0xABC, spatial.default_precision);
+    var server: Server = init(0xABC, spatial.default_precision);
     defer deinit(&server, gpa);
 
     // In production these come from entropy.newSession -- the OS CSPRNG. The core does not
@@ -241,7 +250,7 @@ test "a session is issued, and it is not the player id" {
 test "a report from an unknown session is dropped" {
     const gpa = testing.allocator;
 
-    var server: Server = .empty(1, spatial.default_precision);
+    var server: Server = init(1, spatial.default_precision);
     defer deinit(&server, gpa);
 
     const dropped = ingest(&server, .{
@@ -262,7 +271,7 @@ test "THE PHASE 2 EXIT CRITERION" {
     const cafe = spatial.cellFromKey(0xCAFE, p);
     const empty_field = spatial.cellFromKey(0xF1E1D, p);
 
-    var server: Server = .empty(0x5EED, p);
+    var server: Server = init(0x5EED, p);
     defer deinit(&server, gpa);
 
     // Two players, opposite factions, in the same café. That is BELOW QUORUM (k = 3).
@@ -310,7 +319,7 @@ test "and when quorum is reached, the fight is real" {
     const p = spatial.default_precision;
     const cafe = spatial.cellFromKey(0xCAFE, p);
 
-    var server: Server = .empty(0x5EED, p);
+    var server: Server = init(0x5EED, p);
     defer deinit(&server, gpa);
 
     const a = try joinAt(&server, gpa, .human, 11);
@@ -346,7 +355,7 @@ test "every session gets a reply, every tick, whatever happened" {
     // and the fact of being in a live cell would leak from the traffic pattern alone (I3).
     const gpa = testing.allocator;
 
-    var server: Server = .empty(7, spatial.default_precision);
+    var server: Server = init(7, spatial.default_precision);
     defer deinit(&server, gpa);
 
     var i: u32 = 0;
@@ -372,7 +381,7 @@ test "a client that lies about its cell arrives at silence" {
     const gpa = testing.allocator;
     const p = spatial.default_precision;
 
-    var server: Server = .empty(3, p);
+    var server: Server = init(3, p);
     defer deinit(&server, gpa);
 
     const honest = try joinAt(&server, gpa, .human, 1);
@@ -400,7 +409,7 @@ test "the tick is sacred: a flood of garbage cannot stop it" {
     const gpa = testing.allocator;
     const p = spatial.default_precision;
 
-    var server: Server = .empty(9, p);
+    var server: Server = init(9, p);
     defer deinit(&server, gpa);
 
     const real = try joinAt(&server, gpa, .human, 1);

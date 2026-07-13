@@ -10,13 +10,18 @@
 //! forbidden construct does not fail review -- it fails to compile, on the machine of
 //! the person writing it, in the second they write it.
 //!
-//! Two rules are enforced here:
+//! Four rules are enforced here:
 //!
 //!   1. No geometry, anywhere. No distance, bearing, heading, radius, neighbour, or
 //!      inverse quantizer, in core or shell (A9, I2).
 //!   2. THE COORDINATE WALL (B6). No float appears in a file classified CORE. The core
 //!      has no vocabulary for a position, and this is what makes that literally true
 //!      rather than aspirationally true.
+//!   3. PURITY (B3, B4). No core file may REACH FOR the clock, the disk, the network, a
+//!      syscall, a CSPRNG, or a global allocator. This one was added after B3 was broken in
+//!      the session layer and the build said nothing -- see `forbidden_in_core`.
+//!   4. THE CLIENT IS AUTHORITATIVE OVER NOTHING (H1). Enforced in protocol.zig itself, at
+//!      the definition of the client's message: adding a field fails the build.
 //!
 //! Adding a source file means registering it below, as core or as shell. That is
 //! deliberate: B1 requires every unit be classified, with no third category and nothing
@@ -69,6 +74,39 @@ const forbidden_integrity = [_][]const u8{
     "fn checkMockLocation",
     "fn verifySignature",
     "fn deviceFingerprint",
+};
+
+/// THINGS THE CORE MAY NOT REACH FOR (B3, B4).
+///
+/// The core is pure: no I/O, no clock, no randomness, no network, no GPS, no global allocator.
+///
+/// THIS LIST EXISTS BECAUSE THE GUARD DID NOT HAVE IT, AND I BROKE B3.
+///
+/// The session layer minted session ids with the tick's deterministic mixer -- splitmix64, a
+/// bijection, seeded from values an attacker can guess. Session ids were forgeable. It was
+/// caught by reading another project's security document, not by the build, and that is the
+/// wrong way to find it.
+///
+/// The guard checked what functions were DEFINED. It never checked what the core REACHED FOR.
+/// A clock, a socket, a CSPRNG, or a global allocator could have walked into any core file and
+/// nothing would have stopped it. Now something does.
+///
+/// (`std.crypto` is on the list too: the core has no business with secrets. `Io.randomSecure`
+/// needs an `Io` handle the core does not have, so the language already agreed -- but a rule
+/// enforced by two mechanisms is a rule that survives one of them changing.)
+const forbidden_in_core = [_][]const u8{
+    "std.Io", // I/O, and the clock and CSPRNG that hang off it
+    "std.fs", // the disk
+    "std.net", // the network
+    "std.posix", // syscalls
+    "std.process", // the outside world
+    "std.time", // what time is it -- the core never asks (B7)
+    "std.crypto", // secrets are not the core's business
+    "std.heap.page_allocator", // a hidden allocator is a hidden cost (C1, C2)
+    "std.heap.c_allocator",
+    "std.heap.smp_allocator",
+    "std.debug.print", // the core does not talk to a terminal
+    "randomSecure",
 };
 
 const Source = struct { name: []const u8, text: []const u8 };
@@ -159,6 +197,28 @@ comptime {
                 @compileError("THE COORDINATE WALL (B6): a float appears in " ++ src.name ++
                     ", which is CORE. The raw coordinate dies at the shell boundary. The core " ++
                     "cannot leak a location because it is never given one.");
+            }
+        }
+
+        // PURITY (B3, B4). What does this file REACH FOR?
+        //
+        // Scanned separately, because these do not start with 'f' and the fast path above skips
+        // them. The cost is one pass per core file over a handful of needles; the alternative
+        // was the bug that shipped a forgeable session id.
+        if (is_core) {
+            for (forbidden_in_core) |reached| {
+                var j: usize = 0;
+                while (j < src.text.len) : (j += 1) {
+                    if (src.text[j] != reached[0]) continue;
+                    if (startsWith(src.text[j..], reached)) {
+                        @compileError("PURITY VIOLATION (B3, B4): '" ++ reached ++ "' appears in " ++
+                            src.name ++ ", which is CORE. The core is pure: no I/O, no clock, no " ++
+                            "randomness, no network, no GPS, no global allocator. If this file " ++
+                            "needs one of those, it is SHELL and must be classified as shell -- " ++
+                            "and if it needs a secret, note that a deterministic mixer is not a " ++
+                            "CSPRNG, however similar they look at the call site.");
+                    }
+                }
             }
         }
     }

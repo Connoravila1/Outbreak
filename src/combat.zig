@@ -58,6 +58,13 @@ pub const Rules = struct {
     /// The floor: the shortest a fight can be, however small the room. 10 ticks = 5 minutes.
     engagement_ticks: u64 = 10,
 
+    /// Durations by crowd BAND, never by exact count -- see `engagementLength`, where deriving
+    /// the length from the raw headcount leaked an exact, invertible headcount through the
+    /// clock.
+    engagement_dozens_ticks: u64 = 60, // 30 minutes
+    engagement_scores_ticks: u64 = 180, // 90 minutes
+    engagement_hundreds_ticks: u64 = 360, // 3 hours
+
     /// A BIG ROOM FIGHTS DIFFERENTLY FROM A SMALL ONE (O5).
     ///
     /// The first version of the engagement model gave every room the same five minutes, and
@@ -73,7 +80,6 @@ pub const Rules = struct {
     /// with the CROWD, not with the venue -- an empty stadium is worth nothing at all, and no
     /// exploit conjures five hundred strangers into a room. It is the most spoof-proof reward
     /// in the game precisely because it requires the most real humans.
-    engagement_ticks_per_occupant: u64 = 2,
 
     /// The ceiling. 480 ticks = four hours: about as long as a concert.
     engagement_max_ticks: u64 = 480,
@@ -209,11 +215,35 @@ pub const Crowd = enum(u8) {
 
 /// CORE. How long a fight in this room lasts (O5).
 ///
-/// A café is a skirmish; a stadium is a siege. The length scales with the number of people
-/// in the room, floored at `engagement_ticks` and capped at `engagement_max_ticks`.
+/// A café is a skirmish; a stadium is a siege. The length scales with the SIZE BAND of the
+/// crowd -- never with the exact count.
+///
+/// ============================================================================
+/// A LEAK, FOUND IN THE RULESET AUDIT, AND CLOSED HERE
+///
+/// The first version of this was `10 + 2 * occupants`. That is INVERTIBLE. A player who timed
+/// their own fight could compute `occupants = (duration - 10) / 2` and recover an EXACT
+/// HEADCOUNT of everyone in the room -- through the clock, without a single count ever being
+/// transmitted.
+///
+/// Which makes it worth stating plainly: enormous care went into making the crowd a coarse
+/// band so that no exact number could ever leak (I5), and then the number leaked out through
+/// the duration of the fight instead. A side channel does not care which field you were
+/// guarding.
+///
+/// It also flatly contradicted the design decision that the crowd is GENERIC, never a number.
+///
+/// Now the duration is a function of the BAND. There are five possible durations. Inverting one
+/// tells a player the band -- which is exactly what they were already told, and nothing more.
 pub fn engagementLength(occupants: u32, rules: Rules) u64 {
-    const scaled = rules.engagement_ticks + @as(u64, occupants) * rules.engagement_ticks_per_occupant;
-    return @min(@max(scaled, rules.engagement_ticks), rules.engagement_max_ticks);
+    const ticks: u64 = switch (crowdOf(occupants)) {
+        .a_few => rules.engagement_ticks, // a skirmish: five minutes
+        .dozens => rules.engagement_dozens_ticks, // a busy bar
+        .scores => rules.engagement_scores_ticks,
+        .hundreds => rules.engagement_hundreds_ticks, // a siege
+        .thousands => rules.engagement_max_ticks, // the concert, for as long as it lasts
+    };
+    return @min(ticks, rules.engagement_max_ticks);
 }
 
 /// PROVISIONAL band edges. The lowest band is wide on purpose (see `Crowd`).
