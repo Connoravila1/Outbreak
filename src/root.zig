@@ -27,6 +27,15 @@ pub const territory = @import("territory.zig");
 /// The synthetic city: a pure generator of plausible people in plausible rooms (0.10).
 pub const city = @import("city.zig");
 
+/// The journal: what the world writes down (CellId only), and when it deletes it (I7).
+pub const journal = @import("journal.zig");
+
+/// Replay: rebuild a world from its journal and assert it is the same world (1.4, B8).
+pub const replay = @import("replay.zig");
+
+/// The disk. Four functions, and it does not know what a record is (1.2).
+pub const store = @import("store.zig");
+
 comptime {
     // The forbidden-construct guard runs at compile time, so a distance function or a
     // coordinate in the core fails the build rather than the review. Referencing it here
@@ -46,4 +55,7 @@ test {
     _ = @import("integrity.zig");
     _ = @import("territory.zig");
     _ = @import("city.zig");
+    _ = @import("journal.zig");
+    _ = @import("replay.zig");
+    _ = @import("store.zig");
 }

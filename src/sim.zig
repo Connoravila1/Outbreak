@@ -17,7 +17,10 @@
 const std = @import("std");
 const city = @import("city.zig");
 const combat = @import("combat.zig");
+const journal = @import("journal.zig");
+const replay_mod = @import("replay.zig");
 const spatial = @import("spatial.zig");
+const store = @import("store.zig");
 const tick_mod = @import("tick.zig");
 const world_mod = @import("world.zig");
 
@@ -92,7 +95,7 @@ fn run(gpa: std.mem.Allocator, io: std.Io, params: city.Params, ticks: u64, meas
 
         const started = if (measure) std.Io.Timestamp.now(io, .awake) else undefined;
 
-        const result = try tick_mod.tick(&world, gpa, seed, i, .default);
+        const result = try tick_mod.tick(&world, gpa, gpa, seed, i, .default);
         defer gpa.free(result.tells);
 
         if (measure) {
@@ -308,7 +311,131 @@ pub fn main() !void {
         std.process.exit(1);
     }
 
+    try phaseOne(gpa, io, params);
+
     std.debug.print("  Deterministic. Leak check runs at exit.\n\n", .{});
+}
+
+/// PHASE 1's exit criterion, as a program:
+///
+///   > A process runs for seven simulated days, ticks without drift, persists, restarts from
+///   > disk into an identical world, and never once logs a coordinate.
+///
+/// The last clause is not checked here because it CANNOT FAIL: there is no coordinate in the
+/// journal, no float in the journal, and the build guard fails the compile on one appearing
+/// (B6, I7). A property you cannot violate does not need a test. It needs a compiler.
+fn phaseOne(gpa: std.mem.Allocator, io: std.Io, params: city.Params) !void {
+    const path = "outbreak.journal";
+    defer store.remove(io, path) catch {};
+
+    const days = 7;
+    const ticks = params.ticks_per_day * days;
+
+    // RETENTION, RUNNING (I7). The world is written down every two hours, and everything
+    // older than the last two hours is deleted -- continuously, while the process runs, not
+    // as a cleanup job somebody remembers to write later.
+    //
+    // Without this, the journal for ten thousand players over a week is 2.4 GB and grows
+    // forever. With it, it is bounded, and it still replays exactly. That is not a
+    // compromise between privacy and engineering. It is the same decision twice.
+    const snapshot_every: u64 = 240; // two hours
+    const retain: u64 = 240; // keep two hours of rooms, and no more
+
+    std.debug.print("PHASE 1 -- THE SHELL AROUND THE CORE\n\n", .{});
+
+    var lived: World = .empty;
+    defer world_mod.deinit(&lived, gpa);
+    try city.populate(&lived, gpa, params, seed);
+
+    var log: std.ArrayList(u8) = .empty;
+    defer log.deinit(gpa);
+
+    try journal.writeHeader(&log, gpa, .{ .seed = seed, .precision = spatial.default_precision });
+    try writeSnapshot(&log, gpa, &lived, 0);
+
+    var written_bytes: u64 = 0;
+
+    var i: u64 = 0;
+    while (i < ticks) : (i += 1) {
+        city.advance(&lived, params, seed, i);
+
+        if (i > 0 and i % snapshot_every == 0) {
+            try writeSnapshot(&log, gpa, &lived, i);
+
+            // Delete the past that nothing needs any more.
+            const pruned = try journal.prune(gpa, log.items, i -| retain);
+            log.deinit(gpa);
+            log = pruned;
+        }
+
+        const before = log.items.len;
+        try journal.writeTick(&log, gpa, i, lived.presences.items(.player), lived.presences.items(.cell));
+        written_bytes += log.items.len - before;
+
+        // C3: the tick's working memory is an arena, reset wholesale at the end of the unit
+        // of work. The world's own state uses the world's own allocator -- passing the arena
+        // for both is how the engagement table got freed out from under the world, and the
+        // signature no longer allows the mistake.
+        var arena: std.heap.ArenaAllocator = .init(gpa);
+        defer arena.deinit();
+
+        _ = try tick_mod.tick(&lived, gpa, arena.allocator(), seed, i, .default);
+    }
+
+    // Persist. Restart from nothing but the file.
+    try store.save(io, path, log.items);
+
+    const from_disk = try store.load(io, gpa, path);
+    defer gpa.free(from_disk);
+
+    var restored = try replay_mod.replay(gpa, from_disk, .default);
+    defer world_mod.deinit(&restored.world, gpa);
+
+    const identical = std.mem.eql(u16, lived.presences.items(.hp), restored.world.presences.items(.hp));
+
+    const actually = log.items.len;
+
+    std.debug.print(
+        \\  simulated        {d} days ({d} ticks) of {d} players
+        \\  reports written  {d} bytes
+        \\  journal on disk  {d} bytes -- {d:.2}% deleted while running (I7)
+        \\  retained         the last {d} ticks ({d} hours of rooms)
+        \\  restarted        {s}
+        \\  replayed         {d} ticks, resuming from the snapshot
+        \\  coordinates      0 -- there is no float in the journal, and the build fails on one
+        \\
+        \\
+    , .{
+        days,
+        ticks,
+        params.population,
+        written_bytes,
+        actually,
+        (1.0 - @as(f64, @floatFromInt(actually)) / @as(f64, @floatFromInt(written_bytes))) * 100.0,
+        retain,
+        retain / 120,
+        if (identical) "IDENTICAL WORLD" else "DIVERGED -- THE EXIT CRITERION IS NOT MET",
+        restored.summary.ticks,
+    });
+
+    if (!identical) std.process.exit(1);
+}
+
+fn writeSnapshot(log: *std.ArrayList(u8), gpa: std.mem.Allocator, w: *const World, index: u64) !void {
+    const fights = try world_mod.engagementsSorted(w, gpa);
+    defer gpa.free(fights.cells);
+    defer gpa.free(fights.engagements);
+
+    try journal.writeSnapshot(
+        log,
+        gpa,
+        index,
+        w.presences.items(.player),
+        w.presences.items(.faction),
+        w.presences.items(.hp),
+        fights.cells,
+        fights.engagements,
+    );
 }
 
 fn percent(part: u64, whole: u64) f64 {

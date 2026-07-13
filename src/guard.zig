@@ -86,6 +86,8 @@ const core = [_]Source{
     .{ .name = "integrity.zig", .text = @embedFile("integrity.zig") },
     .{ .name = "territory.zig", .text = @embedFile("territory.zig") },
     .{ .name = "city.zig", .text = @embedFile("city.zig") },
+    .{ .name = "journal.zig", .text = @embedFile("journal.zig") },
+    .{ .name = "replay.zig", .text = @embedFile("replay.zig") },
 };
 
 /// SHELL (B1, B3). Permitted to touch the outside world. Exactly one file here is
@@ -93,6 +95,7 @@ const core = [_]Source{
 const shell = [_]Source{
     .{ .name = "spatial/geohash.zig", .text = @embedFile("spatial/geohash.zig") },
     .{ .name = "sim.zig", .text = @embedFile("sim.zig") },
+    .{ .name = "store.zig", .text = @embedFile("store.zig") },
 };
 
 /// Does `haystack` begin with `needle`? Byte-wise, so that comptime does the least work

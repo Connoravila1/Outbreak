@@ -88,17 +88,31 @@ pub const TickResult = struct {
 /// A player in a cell below quorum receives no tell. Not an empty one, not a quiet one --
 /// none. They are indistinguishable from a player alone in a field, because as far as this
 /// function is concerned they are (I3).
+/// TWO ALLOCATORS, ON PURPOSE (C3, C4).
+///
+/// `gpa` owns LONG-LIVED WORLD STATE -- the engagement table, which outlives this tick and
+/// every tick after it.
+///
+/// `scratch` owns PER-TICK WORKING MEMORY -- the runs, the outcomes, the tells. It is meant
+/// to be an arena that the caller resets wholesale at the end of the tick.
+///
+/// They are separate parameters because the first version of this took one allocator, the
+/// simulation passed it the per-tick arena, and the arena then freed the world's engagement
+/// table out from under the world at the end of every tick. It segfaulted on the next one.
+/// That is C4 in a single line of code: one subsystem freeing memory owned by another. The
+/// signature now makes the mistake impossible to make silently.
 pub fn tick(
     world: *World,
     gpa: Allocator,
+    scratch: Allocator,
     seed: u64,
     index: u64,
     rules: combat.Rules,
 ) Allocator.Error!TickResult {
     // Sort, scan, and discard everything below quorum. Sub-quorum runs do not survive
     // this call and nothing downstream can see them (I3).
-    const runs = try world_mod.liveRuns(world, gpa, spatial.quorum);
-    defer gpa.free(runs);
+    const runs = try world_mod.liveRuns(world, scratch, spatial.quorum);
+    defer scratch.free(runs);
 
     const players = world.presences.items(.player);
     const factions = world.presences.items(.faction);
@@ -116,7 +130,7 @@ pub fn tick(
     // A live cell is not necessarily a fight. It needs hostiles in it, and it needs to not
     // have had its fight already. Everything else is a room with people in it.
     var fighting: std.ArrayList(world_mod.Run) = .empty;
-    defer fighting.deinit(gpa);
+    defer fighting.deinit(scratch);
 
     var live_presences: usize = 0;
     for (runs) |run| {
@@ -131,15 +145,17 @@ pub fn tick(
         // Is this room hosting an engagement right now, or is it spent?
         if (try engage(world, gpa, cells[start], index, rules, heads) == null) continue;
 
-        try fighting.append(gpa, run);
+        try fighting.append(scratch, run);
         live_presences += run.len;
     }
 
-    const outcomes = try gpa.alloc(combat.Outcome, live_presences);
-    defer gpa.free(outcomes);
+    const outcomes = try scratch.alloc(combat.Outcome, live_presences);
+    defer scratch.free(outcomes);
 
-    const tells = try gpa.alloc(Tell, live_presences);
-    errdefer gpa.free(tells);
+    // The tells belong to the caller, and come from the caller's scratch: they are the
+    // product of one tick and they do not outlive it.
+    const tells = try scratch.alloc(Tell, live_presences);
+    errdefer scratch.free(tells);
 
     // SECOND PASS: resolve the fights.
     var written: usize = 0;
@@ -318,7 +334,7 @@ test "the tick resolves live cells and is silent everywhere else" {
     defer world_mod.deinit(&world, gpa);
     try buildCity(&world, gpa);
 
-    const result = try tick(&world, gpa, 0xABC, 1, .default);
+    const result = try tick(&world, gpa, gpa, 0xABC, 1, .default);
     defer gpa.free(result.tells);
     const tells = result.tells;
 
@@ -348,9 +364,9 @@ test "a tick replays byte-identically" {
     defer world_mod.deinit(&b, gpa);
     try buildCity(&b, gpa);
 
-    const result_a = try tick(&a, gpa, 0xDEADBEEF, 42, .default);
+    const result_a = try tick(&a, gpa, gpa, 0xDEADBEEF, 42, .default);
     defer gpa.free(result_a.tells);
-    const result_b = try tick(&b, gpa, 0xDEADBEEF, 42, .default);
+    const result_b = try tick(&b, gpa, gpa, 0xDEADBEEF, 42, .default);
     defer gpa.free(result_b.tells);
     const tells_a = result_a.tells;
     const tells_b = result_b.tells;
@@ -382,9 +398,9 @@ test "the same facts in a different order produce the same tick" {
     try addPresence(&backward, gpa, cafe, 2, .zombie, 90);
     try addPresence(&backward, gpa, cafe, 1, .human, 100);
 
-    const result_f = try tick(&forward, gpa, 7, 3, .default);
+    const result_f = try tick(&forward, gpa, gpa, 7, 3, .default);
     defer gpa.free(result_f.tells);
-    const result_b = try tick(&backward, gpa, 7, 3, .default);
+    const result_b = try tick(&backward, gpa, gpa, 7, 3, .default);
     defer gpa.free(result_b.tells);
 
     try testing.expectEqualSlices(Tell, result_f.tells, result_b.tells);
@@ -405,7 +421,7 @@ test "a week of ticks replays from (world, seed, index)" {
     var checksum_first: u64 = 0;
     var i: u64 = 0;
     while (i < ticks_in_a_week) : (i += 1) {
-        const result = try tick(&first, gpa, seed, i, .default);
+        const result = try tick(&first, gpa, gpa, seed, i, .default);
         defer gpa.free(result.tells);
         for (result.tells) |t| checksum_first +%= @as(u64, t.damage) *% 31 +% @as(u64, t.xp);
     }
@@ -418,7 +434,7 @@ test "a week of ticks replays from (world, seed, index)" {
     var checksum_second: u64 = 0;
     i = 0;
     while (i < ticks_in_a_week) : (i += 1) {
-        const result = try tick(&second, gpa, seed, i, .default);
+        const result = try tick(&second, gpa, gpa, seed, i, .default);
         defer gpa.free(result.tells);
         for (result.tells) |t| checksum_second +%= @as(u64, t.damage) *% 31 +% @as(u64, t.xp);
     }
@@ -434,7 +450,7 @@ test "an empty world ticks" {
     var world: World = .empty;
     defer world_mod.deinit(&world, gpa);
 
-    const result = try tick(&world, gpa, 1, 1, .default);
+    const result = try tick(&world, gpa, gpa, 1, 1, .default);
     defer gpa.free(result.tells);
 
     try testing.expectEqual(@as(usize, 0), result.tells.len);
@@ -460,7 +476,7 @@ test "a world entirely below quorum ticks silently" {
         id += 1;
     }
 
-    const result = try tick(&world, gpa, 1, 1, .default);
+    const result = try tick(&world, gpa, gpa, 1, 1, .default);
     defer gpa.free(result.tells);
 
     try testing.expectEqual(@as(usize, 0), result.tells.len);
@@ -487,7 +503,7 @@ test "a fight ends" {
     var fought: u64 = 0;
     var i: u64 = 0;
     while (i < length * 3) : (i += 1) {
-        const result = try tick(&world, gpa, 1, i, rules);
+        const result = try tick(&world, gpa, gpa, 1, i, rules);
         defer gpa.free(result.tells);
         if (result.tells.len > 0) fought += 1;
     }
@@ -513,12 +529,12 @@ test "a spent room is quiet, and the cell stays live throughout" {
     const length = combat.engagementLength(6, rules);
     var i: u64 = 0;
     while (i < length) : (i += 1) {
-        const result = try tick(&world, gpa, 1, i, rules);
+        const result = try tick(&world, gpa, gpa, 1, i, rules);
         gpa.free(result.tells);
     }
 
     // Mid-cooldown: the cell is live, and nothing is happening.
-    const spent = try tick(&world, gpa, 1, length + 5, rules);
+    const spent = try tick(&world, gpa, gpa, 1, length + 5, rules);
     defer gpa.free(spent.tells);
 
     try testing.expectEqual(@as(usize, 0), spent.tells.len);
@@ -537,13 +553,13 @@ test "a rested room can fight again" {
     const length = combat.engagementLength(6, rules);
     var i: u64 = 0;
     while (i < length) : (i += 1) {
-        const result = try tick(&world, gpa, 1, i, rules);
+        const result = try tick(&world, gpa, gpa, 1, i, rules);
         gpa.free(result.tells);
     }
 
     // After the room has rested, the same café hosts another fight.
     const after = length + rules.cooldown_ticks + 1;
-    const again = try tick(&world, gpa, 1, after, rules);
+    const again = try tick(&world, gpa, gpa, 1, after, rules);
     defer gpa.free(again.tells);
 
     try testing.expect(again.tells.len > 0);
@@ -568,7 +584,7 @@ test "a crowded room of allies is never a fight" {
 
     var i: u64 = 0;
     while (i < 100) : (i += 1) {
-        const result = try tick(&world, gpa, 1, i, .default);
+        const result = try tick(&world, gpa, gpa, 1, i, .default);
         defer gpa.free(result.tells);
         try testing.expectEqual(@as(usize, 0), result.tells.len);
         try testing.expectEqual(@as(u32, 0), result.engaged_cells);
@@ -586,13 +602,13 @@ test "the engagement table forgets rooms it no longer needs" {
     defer world_mod.deinit(&world, gpa);
     try buildCity(&world, gpa);
 
-    const first = try tick(&world, gpa, 1, 0, rules);
+    const first = try tick(&world, gpa, gpa, 1, 0, rules);
     gpa.free(first.tells);
     try testing.expectEqual(@as(usize, 1), world.engagements.count());
 
     // Long after the fight is over and the room has rested, the entry is gone.
     const length = combat.engagementLength(6, rules);
-    const much_later = try tick(&world, gpa, 1, length + rules.cooldown_ticks + 100, rules);
+    const much_later = try tick(&world, gpa, gpa, 1, length + rules.cooldown_ticks + 100, rules);
     gpa.free(much_later.tells);
 
     // It fought again on that tick (the room had rested), so there is one fresh entry --
@@ -621,7 +637,7 @@ test "the crowd band gives scale, and does not move when someone leaves" {
     while (id <= 4) : (id += 1) try addPresence(&world, gpa, cafe, id, .human, 100);
     while (id <= 8) : (id += 1) try addPresence(&world, gpa, cafe, id, .zombie, 100);
 
-    const first = try tick(&world, gpa, 1, 0, .default);
+    const first = try tick(&world, gpa, gpa, 1, 0, .default);
     defer gpa.free(first.tells);
 
     // The lowest band carries no number at all: four hostiles and one hostile are the same
@@ -635,7 +651,7 @@ test "the crowd band gives scale, and does not move when someone leaves" {
         if (@intFromEnum(player) == 8) c.* = spatial.cellFromKey(0xE15E, p);
     }
 
-    const second = try tick(&world, gpa, 1, 1, .default);
+    const second = try tick(&world, gpa, gpa, 1, 1, .default);
     defer gpa.free(second.tells);
 
     // The humans' tell is IDENTICAL. Nobody can correlate the departure with anything.
@@ -656,7 +672,7 @@ test "a concert reads as thousands" {
     var id: u32 = 2;
     while (id <= 1200) : (id += 1) try addPresence(&world, gpa, arena, id, .zombie, 100);
 
-    const result = try tick(&world, gpa, 1, 0, .default);
+    const result = try tick(&world, gpa, gpa, 1, 0, .default);
     defer gpa.free(result.tells);
 
     for (result.tells) |t| {

@@ -116,6 +116,45 @@ pub fn ensureCapacity(world: *World, gpa: Allocator, n: usize) Allocator.Error!v
     return world.presences.ensureTotalCapacity(gpa, n);
 }
 
+/// CORE. The engagement table, flattened and sorted by cell, for writing down.
+///
+/// Sorted because a hash map's iteration order is not something we will ever rely on (B8).
+/// The caller owns the returned slices and frees both with the same allocator (C1, C5).
+pub fn engagementsSorted(world: *const World, gpa: Allocator) Allocator.Error!struct {
+    cells: []CellId,
+    engagements: []Engagement,
+} {
+    const n = world.engagements.count();
+
+    const cells = try gpa.alloc(CellId, n);
+    errdefer gpa.free(cells);
+    const values = try gpa.alloc(Engagement, n);
+    errdefer gpa.free(values);
+
+    var pairs: std.ArrayList(struct { cell: CellId, engagement: Engagement }) = .empty;
+    defer pairs.deinit(gpa);
+    try pairs.ensureTotalCapacity(gpa, n);
+
+    var it = world.engagements.iterator();
+    while (it.next()) |entry| {
+        pairs.appendAssumeCapacity(.{ .cell = entry.key_ptr.*, .engagement = entry.value_ptr.* });
+    }
+
+    const Sort = struct {
+        fn lessThan(_: void, a: @TypeOf(pairs.items[0]), b: @TypeOf(pairs.items[0])) bool {
+            return spatial.lessThan(a.cell, b.cell);
+        }
+    };
+    std.mem.sort(@TypeOf(pairs.items[0]), pairs.items, {}, Sort.lessThan);
+
+    for (pairs.items, cells, values) |pair, *cell, *value| {
+        cell.* = pair.cell;
+        value.* = pair.engagement;
+    }
+
+    return .{ .cells = cells, .engagements = values };
+}
+
 /// CORE. Sort presences by cell, then by player.
 ///
 /// This is the entire spatial algorithm, and it is a sort (0.3). Not an index, not a
