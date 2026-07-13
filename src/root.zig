@@ -42,6 +42,9 @@ pub const protocol = @import("protocol.zig");
 /// Sessions: the whole server, minus the socket (2.4, E5).
 pub const session = @import("session.zig");
 
+/// SHELL. The OS CSPRNG. The only source of unguessable values (B3).
+pub const entropy = @import("entropy.zig");
+
 comptime {
     // The forbidden-construct guard runs at compile time, so a distance function or a
     // coordinate in the core fails the build rather than the review. Referencing it here
@@ -66,4 +69,5 @@ test {
     _ = @import("store.zig");
     _ = @import("protocol.zig");
     _ = @import("session.zig");
+    _ = @import("entropy.zig");
 }

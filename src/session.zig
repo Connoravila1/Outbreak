@@ -14,7 +14,6 @@
 const std = @import("std");
 const combat = @import("combat.zig");
 const protocol = @import("protocol.zig");
-const rand = @import("rand.zig");
 const spatial = @import("spatial.zig");
 const tick_mod = @import("tick.zig");
 const world_mod = @import("world.zig");
@@ -70,19 +69,28 @@ pub fn deinit(server: *Server, gpa: Allocator) void {
 
 /// CORE. A player joins. Faction is chosen once, here, and never again (2.4).
 ///
-/// The session id is unguessable and server-issued. It is not derived from the player id, the
-/// account, or anything a user controls -- an id that leaks its own creation order leaks the
-/// size of the population (A8).
-pub fn join(server: *Server, gpa: Allocator, faction: Faction, secret: u64) Allocator.Error!protocol.Welcome {
+/// THE SESSION ID IS SUPPLIED BY THE SHELL, and it must come from a CSPRNG (`entropy.zig`).
+/// The core does not mint it, and cannot: randomness is I/O and I/O lives in the shell (B3).
+///
+/// This signature is the fix for a real vulnerability. The first version minted the id here,
+/// with the tick's splitmix64 mixer -- which is a bijection, trivially invertible, seeded from
+/// the server seed and the player id. Session ids were FORGEABLE: an attacker holding their
+/// own session could invert the mix and derive other players'. A forged session in this game
+/// means impersonating a real person and moving where the system believes they are.
+///
+/// The deterministic mixer exists so a fight replays. It is not a source of secrets. Passing
+/// the id in makes it impossible to reach for the wrong one by accident.
+///
+/// An id issued this way is also opaque: it reveals no creation order, and therefore leaks no
+/// population count (A8).
+pub fn join(
+    server: *Server,
+    gpa: Allocator,
+    faction: Faction,
+    session: SessionId,
+) Allocator.Error!protocol.Welcome {
     const player: PlayerId = @enumFromInt(server.next_player);
     server.next_player += 1;
-
-    const session: SessionId = @enumFromInt(rand.draw(&.{
-        server.seed,
-        secret,
-        @intFromEnum(player),
-        0x5E5510, // domain separation: a session id is not a player id
-    }));
 
     try server.sessions.put(gpa, session, .{ .player = player });
 
@@ -206,8 +214,10 @@ fn lessThanReply(_: void, a: Reply, b: Reply) bool {
 
 const testing = std.testing;
 
-fn joinAt(server: *Server, gpa: Allocator, faction: Faction, secret: u64) !SessionId {
-    const welcome = try join(server, gpa, faction, secret);
+/// A stand-in for the shell's CSPRNG. In the real server these come from `entropy.newSession`,
+/// which syscalls the OS; a test needs them to be reproducible, so it supplies its own.
+fn joinAt(server: *Server, gpa: Allocator, faction: Faction, fake_session: u64) !SessionId {
+    const welcome = try join(server, gpa, faction, @enumFromInt(fake_session));
     return welcome.session;
 }
 
@@ -217,14 +227,12 @@ test "a session is issued, and it is not the player id" {
     var server: Server = .empty(0xABC, spatial.default_precision);
     defer deinit(&server, gpa);
 
-    const a = try join(&server, gpa, .human, 1);
-    const b = try join(&server, gpa, .zombie, 2);
+    // In production these come from entropy.newSession -- the OS CSPRNG. The core does not
+    // mint them and cannot: randomness is I/O, and I/O lives in the shell (B3).
+    const a = try join(&server, gpa, .human, @enumFromInt(0xA11CE5));
+    const b = try join(&server, gpa, .zombie, @enumFromInt(0xB0B));
 
-    // Unguessable, and it does not count upward. An id that leaks its creation order leaks the
-    // size of the population (A8).
     try testing.expect(a.session != b.session);
-    try testing.expect(@intFromEnum(a.session) > 1000);
-    try testing.expect(@intFromEnum(b.session) > 1000);
 
     // And the server tells the client how to quantize (O6).
     try testing.expectEqual(spatial.default_precision, a.precision);
@@ -343,7 +351,7 @@ test "every session gets a reply, every tick, whatever happened" {
 
     var i: u32 = 0;
     while (i < 10) : (i += 1) {
-        _ = try join(&server, gpa, if (i % 2 == 0) .human else .zombie, i);
+        _ = try join(&server, gpa, if (i % 2 == 0) .human else .zombie, @enumFromInt(0x1000 + i));
     }
 
     // Nobody reports anything at all. Ten silent phones.

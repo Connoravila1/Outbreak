@@ -98,6 +98,7 @@ const shell = [_]Source{
     .{ .name = "spatial/geohash.zig", .text = @embedFile("spatial/geohash.zig") },
     .{ .name = "sim.zig", .text = @embedFile("sim.zig") },
     .{ .name = "store.zig", .text = @embedFile("store.zig") },
+    .{ .name = "entropy.zig", .text = @embedFile("entropy.zig") },
 };
 
 /// Does `haystack` begin with `needle`? Byte-wise, so that comptime does the least work
