@@ -211,9 +211,22 @@ Each of these is *currently* implemented one way and could go another. The colum
 |---|---|---|---|
 | ~~O1~~ | ~~Exact hostile count, or a band?~~ | **DECIDED 2026-07-13: generic. No specific number of people.** The author's call. Implemented as the crowd band. | closed |
 | O2 | How often *should* a fight happen? | ~5/day, 5 min each — an accident of two constants, not a target | Phase 1 (cheap to retune forever, but the target should exist) |
-| O3 | Cell size (39 bits, ~38 m) | Chosen for squareness, not from data | **Phase 2** |
+| O3 | Cell size (39 bits, ~38 m) | Chosen for squareness, not from data | **Phase 2 — but see O6, which removes the deadline** |
+| **O6** | Make cell precision **server-directed** | Planned for Phase 2's handshake | Phase 2 |
 | O4 | Do mass events (concerts, stadiums) behave? | **Answered, and they revealed O5.** The city now has concerts; they produce `hundreds`-scale crowds | done |
 | ~~O5~~ | ~~Should a big room fight differently from a small one?~~ | **DONE.** A café is a skirmish, a stadium is a siege: engagement length scales with the crowd | closed |
+
+### O6 — kill the cell-size deadline
+
+Cell size is the *only* knob with a hard deadline, and the deadline exists for one reason: the client quantizes GPS to a cell and sends it, so the precision is baked into shipped clients. Change it afterwards and old clients keep sending cells at the old precision — and because precision is carried in the sentinel, a 39-bit cell and a 37-bit cell are **different rooms by construction**. Old and new clients would never meet.
+
+**Fix: the server tells the client what precision to use, in the session handshake.**
+
+Then cell size becomes a server config value. And because the server can always *coarsen* a cell it receives (a bit-shift), even a mid-rollout mix of client versions still shares rooms — coarsen everything to the common precision and the world stays whole. Only going *finer* than a live client's precision requires an app update.
+
+This does **not** mean collecting finer location "just in case": the client still quantizes to exactly the precision it was asked for, and the raw coordinate still dies on the phone (B6).
+
+Cost: one field in the handshake. It turns the project's only hard deadline into a config change.
 
 ### O5 — the concert is an anticlimax
 
