@@ -46,6 +46,31 @@ const forbidden = [_][]const u8{
     "fn unquantize",
 };
 
+/// Constructs forbidden by the integrity rules.
+///
+/// H4: a suspicion score is a soft signal. No automated punitive action may be derived from
+/// it, ever. A false positive costs a real player slightly less XP -- never their account.
+///
+/// H6: we do not enter the attestation arms race. No client attestation, no root detection,
+/// no mock-location check, no signature verification. All are bypassable, all break
+/// legitimate players' phones, all demand perpetual maintenance we will never sustain, and
+/// all are unnecessary, because no location carries a reward worth spoofing toward (H2).
+///
+/// Both of these will be proposed in good faith by someone tired and reasonable. Neither
+/// will compile.
+const forbidden_integrity = [_][]const u8{
+    "fn ban",
+    "fn autoBan",
+    "fn suspend",
+    "fn punish",
+    "fn attest",
+    "fn detectRoot",
+    "fn isRooted",
+    "fn checkMockLocation",
+    "fn verifySignature",
+    "fn deviceFingerprint",
+};
+
 const Source = struct { name: []const u8, text: []const u8 };
 
 /// CORE (B1, B2). Pure functions over plain data. A coordinate may not appear here in
@@ -58,6 +83,7 @@ const core = [_]Source{
     .{ .name = "rand.zig", .text = @embedFile("rand.zig") },
     .{ .name = "combat.zig", .text = @embedFile("combat.zig") },
     .{ .name = "tick.zig", .text = @embedFile("tick.zig") },
+    .{ .name = "integrity.zig", .text = @embedFile("integrity.zig") },
 };
 
 /// SHELL (B1, B3). Permitted to touch the outside world. Exactly one file here is
@@ -78,6 +104,15 @@ comptime {
                 @compileError("FORBIDDEN CONSTRUCT: '" ++ construct ++ "' in " ++ src.name ++
                     ". The game has no geometry: no distance, no bearing, no neighbours, " ++
                     "and no inverse quantizer (A9, I2). A CellId is a room, not a point.");
+            }
+        }
+
+        for (forbidden_integrity) |construct| {
+            if (std.mem.indexOf(u8, src.text, construct) != null) {
+                @compileError("FORBIDDEN CONSTRUCT: '" ++ construct ++ "' in " ++ src.name ++
+                    ". A suspicion score never becomes a punishment (H4), and we do not " ++
+                    "enter the attestation arms race (H6). No location carries a reward " ++
+                    "worth spoofing toward, so there is no war here to fight.");
             }
         }
     }
