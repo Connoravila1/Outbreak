@@ -36,6 +36,9 @@ pub const replay = @import("replay.zig");
 /// The disk. Four functions, and it does not know what a record is (1.2).
 pub const store = @import("store.zig");
 
+/// The wire protocol: a session and a cell in, sixteen constant bytes out (2.1, H1, I3).
+pub const protocol = @import("protocol.zig");
+
 comptime {
     // The forbidden-construct guard runs at compile time, so a distance function or a
     // coordinate in the core fails the build rather than the review. Referencing it here
@@ -58,4 +61,5 @@ test {
     _ = @import("journal.zig");
     _ = @import("replay.zig");
     _ = @import("store.zig");
+    _ = @import("protocol.zig");
 }
