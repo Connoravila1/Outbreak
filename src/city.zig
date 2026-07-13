@@ -41,14 +41,32 @@ pub const Params = struct {
     /// 30-second ticks: 120 an hour, 2880 a day.
     ticks_per_day: u64 = 2880,
 
-    /// Homes are many and mostly solitary. This is what a dead suburb is made of.
-    homes: u64 = 6000,
-    /// Workplaces are few and crowded. This is where quorum lives.
-    workplaces: u64 = 250,
-    /// Stations are very few and briefly enormous. The 08:00 platform.
-    stations: u64 = 30,
-    /// Cafés: few, and alive for about an hour a day.
-    cafes: u64 = 120,
+    /// VENUE COUNTS ARE A STATEMENT ABOUT PLAYER DENSITY, NOT ABOUT ARCHITECTURE.
+    ///
+    /// What matters is not how many cafés a city has -- it is how many PLAYERS share one.
+    /// A game with 10,000 players in a city of a million has roughly 1% penetration, so a
+    /// 38-metre cell holding 200 residents holds about two players. These numbers are chosen
+    /// to produce that, and the first version of them did not: 250 workplaces for 7,500
+    /// commuters put thirty players in every office, and 30 stations put 250 on every
+    /// platform for two solid hours. That was not a city. It was a stadium.
+    ///
+    /// Homes: mostly solitary. This is what a quiet suburb is made of, and it is why your
+    /// home is safe unless your neighbours happen to play.
+    homes: u64 = 9000,
+    /// Workplaces: a handful of players each. An office building, not a stadium.
+    workplaces: u64 = 1200,
+    /// Stations: genuinely dense, genuinely briefly. The platform is the one place in a real
+    /// city where a hundred strangers stand still together.
+    stations: u64 = 80,
+    /// Cafés: small rooms, a few players, for the length of a lunch.
+    cafes: u64 = 400,
+
+    /// How widely commute times are spread, in ticks. 60 ticks = 30 minutes either side.
+    commute_spread: u64 = 60,
+    /// How long a person stands on a platform. 10 ticks = 5 minutes.
+    platform_dwell: u64 = 10,
+    /// How long lunch lasts. 40 ticks = 20 minutes.
+    cafe_dwell: u64 = 40,
 
     /// The fraction of the population who do not commute at all -- retired, unemployed,
     /// working from home, or simply not going anywhere today. Their day is spent in a cell
@@ -95,31 +113,39 @@ pub fn cellFor(player: u32, tick: u64, params: Params, seed: u64) CellId {
     const homebody = attribute(player, seed, 5) % 100 < params.homebody_pct;
 
     const day = tick / params.ticks_per_day;
-    const into_day = tick % params.ticks_per_day;
-    const hour = (into_day * 24) / params.ticks_per_day;
+    const now = tick % params.ticks_per_day; // ticks into the day
+    const per_hour = params.ticks_per_day / 24;
 
-    // Weekends. The city empties, the offices go dark, and the game finds out what it is
-    // like to be quiet -- which is a thing worth knowing before ten thousand real people
-    // find out for us.
+    // NOBODY LEAVES AT THE SAME MOMENT. The first version of this model marched the entire
+    // city onto the platform at 07:00 and held it there for two hours. Real platforms fill
+    // and empty over minutes, and the difference is not cosmetic: a synchronised city
+    // manufactures crowds that do not exist, and every number downstream inherits the lie.
+    const stagger = attribute(player, seed, 7) % (2 * params.commute_spread);
+    const offset = stagger -| params.commute_spread; // 0 .. 2*spread, centred
+
+    const leaves = 7 * per_hour + offset;
+    const returns = 17 * per_hour + offset;
+    const lunches = 12 * per_hour + (attribute(player, seed, 8) % per_hour);
+
+    // Weekends. The city empties, the offices go dark, and the game finds out what it is like
+    // to be quiet -- a thing worth knowing before ten thousand real people find out for us.
     const weekend = (day % 7) >= 5;
 
     if (homebody or weekend) {
-        // Even a homebody goes for coffee. Without this the suburbs are not quiet, they are
-        // dead, and a model that says "nothing ever happens to a quarter of your players"
-        // should be made to say it honestly rather than by accident.
-        if (hour == 11 and !homebody) return cell(cafe);
+        // Even a homebody goes out for coffee.
+        if (now >= lunches and now < lunches + params.cafe_dwell) return cell(cafe);
         return cell(home);
     }
 
-    return switch (hour) {
-        0...6 => cell(home),
-        7...8 => cell(station), // the morning platform
-        9...11 => cell(work),
-        12 => cell(cafe), // lunch
-        13...16 => cell(work),
-        17...18 => cell(station), // the evening platform
-        else => cell(home),
-    };
+    // The morning platform: dense, and brief. You are not on it for two hours.
+    if (now >= leaves and now < leaves + params.platform_dwell) return cell(station);
+    if (now >= returns and now < returns + params.platform_dwell) return cell(station);
+
+    if (now >= lunches and now < lunches + params.cafe_dwell) return cell(cafe);
+
+    if (now >= leaves + params.platform_dwell and now < returns) return cell(work);
+
+    return cell(home);
 }
 
 fn cell(key: u64) CellId {
@@ -177,14 +203,24 @@ test "a person's day has a shape" {
     const ticks_per_hour = params.ticks_per_day / 24;
 
     const at_3am = cellFor(commuter, 3 * ticks_per_hour, params, seed);
-    const at_8am = cellFor(commuter, 8 * ticks_per_hour, params, seed);
     const at_10am = cellFor(commuter, 10 * ticks_per_hour, params, seed);
     const at_11pm = cellFor(commuter, 23 * ticks_per_hour, params, seed);
 
-    // Home at night, a station in the rush, work in the morning, home again.
+    // Home at night, at a desk in the morning, home again by bedtime.
     try testing.expectEqual(at_3am, at_11pm);
-    try testing.expect(at_3am != at_8am);
-    try testing.expect(at_8am != at_10am);
+    try testing.expect(at_3am != at_10am);
+
+    // And somewhere in the morning they passed through a station -- briefly. Not for two
+    // hours: a platform is a place you stand for five minutes, and the model now says so.
+    var on_a_platform: u64 = 0;
+    var t: u64 = 6 * ticks_per_hour;
+    while (t < 9 * ticks_per_hour) : (t += 1) {
+        const at = cellFor(commuter, t, params, seed);
+        if (at != at_3am and at != at_10am) on_a_platform += 1;
+    }
+
+    try testing.expect(on_a_platform > 0);
+    try testing.expectEqual(params.platform_dwell, on_a_platform);
 }
 
 test "the weekend empties the offices" {

@@ -2,11 +2,7 @@
 
 A location-based faction game. Zig server, native mobile clients.
 
-The game is built around one refusal: **it never tells anyone where anyone is.**
-
-You choose a faction, permanently. You then live your ordinary life, and the game reads only which ~38-metre *cell* of the world you are in. Most of the time it says nothing. When enough people occupy one cell — a café, a platform, a bar — the cell goes live, and if hostiles are present, combat resolves silently on the server. You learn that a fight is happening and how it is going. You never learn who you are fighting. There is no map pin, no bearing, no distance, no name.
-
-That refusal is not a safety feature bolted onto a game. It is the reason the game is safe, the reason it resists cheating, and the reason it is interesting — those turn out to be the same property.
+A mobile game where you choose a faction, human or zombie, held permanent for the game. You then live your ordinary life, and the game reads only which ~38-metre *cell* of the world you are in. Most of the time it says nothing. When enough people occupy one cell — a café, a platform, a bar — the cell goes live, and if hostiles are present, combat resolves silently on the server. You learn that a fight is happening and how it is going.
 
 ## Status
 
@@ -23,7 +19,6 @@ zig build test    # the test suite, under a leak-detecting allocator
 zig build         # compiles; fails on any size-guard or forbidden-construct regression
 ```
 
-A leak fails the build. It is not a warning.
 
 ## The simulation
 

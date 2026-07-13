@@ -18,7 +18,7 @@ These look like knobs. They are not knobs.
 |---|---|---|---|
 | *k* (quorum) | **3** | `spatial.zig` | **LOCKED as a floor.** May be raised. **Never lowered** (I8). Sparse regions are solved by growing the cell, never by dropping *k*. |
 | Sub-quorum output | **nothing** | `world.zig` `liveRuns` | **LOCKED** (I3). Not a count, not a flag, not "quiet". Discarded at the only place that could have known. |
-| Tell contents | damage, hp, xp, momentum | `tick.zig` | **LOCKED shape** (I1, I5). No occupant count. No identity. No geometry. Additions require a Section I review by name. |
+| Tell contents | damage, hp, xp, momentum, crowd **band** | `tick.zig` | **LOCKED shape** (I1, I5). No identity, no geometry, and no *exact, refreshing* count — see §3a. Additions require a Section I review by name. |
 | Territory reward | **none** | `territory.zig` | **LOCKED** (H2). Territory confers no XP, no loot, no combat modifier, no quorum advantage. It is a statistic. |
 | Automated punishment | **none** | `integrity.zig` | **LOCKED** (H4). Suspicion dampens XP and does nothing else, ever. |
 
@@ -47,6 +47,49 @@ All provisional. Phase 1's named trap is tuning these before anyone has played.
 | `recovery_per_tick` | **1** | You heal when you are **not** in a live cell. Full recovery from zero takes 100 ticks (50 minutes). There is no death and no permanence — nothing may be at stake worth stalking someone over. |
 | `max_hp` | **100** | Placeholder. |
 | `xp_per_tick` | **10** | Earned for **one thing**: a tick in a live cell with ≥1 hostile present (H3). |
+| `engagement_ticks` | **10** (5 min) | How long one fight lasts. **A fight is an event, not a climate.** |
+| `cooldown_ticks` | **240** (2 h) | How long a room is spent afterwards. Keyed to the **room**, not the player. |
+
+### The engagement model — the biggest design change so far
+
+Before this existed, combat ran for as long as two hostiles shared a room. Sitting at a desk in a large office meant being **at war for eight straight hours**, and the simulation reported players in a fight **54% of their entire week**. Worse, it made the optimal XP strategy *"have a job in a crowded building"* — an exploit that requires no spoofing, is entirely legitimate, and which no integrity system can ever touch.
+
+Both the original GDD (*"combat ends when one player's HP reaches 0"*) and the feel prototype (a fight runs five resolutions and stops; the quiet screen reads *"last engagement: 2 days ago"*) describe a fight as a **bounded event**. So:
+
+> A cell that goes live with hostiles **starts an engagement**. It runs for `engagement_ticks`, resolves, and then the **room is spent** for `cooldown_ticks`.
+
+The cooldown is keyed to the **room**, not the player. That is what makes *going somewhere new* the thing that produces a fight — the café you fought in is quiet; the café across the street is not. It is the whole of *"walk around your environment to encounter enemies."*
+
+**Effect: time at war fell from 54% of a player's week to 1.8%.** Fights became roughly 5 a day, of 5 minutes each.
+
+**These two numbers are the main tuning dial for how eventful the game feels.** Longer cooldown → rarer, more precious fights. Shorter → more ambient. They are one edit.
+
+## 3a. The crowd band — scale without a scalpel
+
+The feel prototype shows **"Four hostiles are here."** An exact count, refreshed every tick, cannot ship — and the reason is not squeamishness, it is a concrete attack:
+
+> Sit in a café of twenty people. Watch the count fall from 4 to 3 at the exact moment one specific person stands up and walks out of the door. **You have just identified a player and their faction** — and the server never transmitted a position. The tick-to-tick delta did it alone.
+
+But the *feeling* the count provides is real and worth keeping: you are at a concert, your phone says you are surrounded by **thousands**, and you do not leave the concert — that would be absurd. **Scale is awe, and awe is the game.**
+
+What identifies a person is not the size of a crowd. It is **precision** and the **delta**. So:
+
+> The crowd is a **coarse band**, sampled **once** when the engagement begins, and **never refreshed**.
+
+- **Concert:** *"You are surrounded by thousands."* Intact. One person leaving cannot move "thousands" — the number is useless for identification *precisely because it is enormous*.
+- **Café:** the lowest band carries **no number at all**. Someone leaves; the tell does not move, because it cannot.
+
+This is lawful, not a compromise. I5 forbids a tell from which an identity can be inferred *"alone or by combining tells across ticks"* — a live counter fails on that last clause; a once-sampled band has no across-ticks channel to combine.
+
+| Band | Hostiles | Note |
+|---|---|---|
+| `a_few` | < 12 | **Deliberately carries no number.** The difference between one hostile and six is exactly the difference this band exists to destroy. |
+| `dozens` | 12–39 | |
+| `scores` | 40–149 | |
+| `hundreds` | 150–799 | |
+| `thousands` | 800+ | The concert. |
+
+**Residual risk, stated honestly:** a fight starting or stopping is itself a signal, and always was — in a room of exactly three people, a hostile leaving ends the fight, and that is observable regardless of any count. The engagement model blunts this (fights end on a timer, not on departure), but it does not eliminate it. In a crowded room it is nothing. In a room of three it is the irreducible cost of telling a player anything at all.
 
 ### Decisions made, and why
 
@@ -98,16 +141,21 @@ Contested ground (a tie) is held by **nobody**. We do not invent a winner to tid
 |---|---|---|
 | `population` | 10,000 | The exit-criterion figure. |
 | `ticks_per_day` | 2,880 | 30-second ticks. |
-| `homes` | 6,000 | **Arbitrary.** ~1.7 players per home cell. |
-| `workplaces` | 250 | **Over-concentrated:** ~30 players per office. |
-| `stations` | 30 | **Badly over-concentrated:** ~250 players per platform, for two solid hours. |
-| `cafes` | 120 | |
+| `homes` | 9,000 | Mostly solitary — which is *why home is safe unless your neighbours play.* |
+| `workplaces` | 1,200 | ~6 players per office. An office building, not a stadium. |
+| `stations` | 80 | Dense, and brief. |
+| `cafes` | 400 | Small rooms, a few players, for a lunch. |
+| `commute_spread` | 60 ticks | ±30 min. **Nobody leaves at the same moment.** |
+| `platform_dwell` | 10 ticks | 5 minutes on a platform, not two hours. |
+| `cafe_dwell` | 40 ticks | A 20-minute lunch. |
 | `homebody_pct` | 25% | Players who never commute. |
 
+**Venue counts are a statement about PLAYER DENSITY, not architecture.** What matters is not how many cafés a city has — it is how many *players* share one. At ~1% penetration (10,000 players in a city of a million), a 38 m cell holding 200 residents holds about two players. The first version of these numbers put 30 players in every office and 250 on every platform *for two solid hours*. That was not a city, it was a stadium, and every number downstream inherited the lie.
+
 **Known modelling flaws (do not draw conclusions past these):**
-- Everyone commutes on the *same* schedule with no stagger. Real platforms fill and empty over minutes; ours holds 250 people for two hours.
 - Home assignment is uniform. Real housing is heavy-tailed — most cells hold 0–1 players, a few towers hold many.
 - Nobody travels, visits, goes out at night, or takes a day off.
+- **There are no mass events.** No concerts, no stadiums, no festivals — so the simulation never produces a `hundreds` or `thousands` crowd, and the most dramatic moment the game can offer is currently untested against real numbers.
 
 **Fixed bug worth remembering:** home cell and faction were once sliced from the same hashed value. `homes` is even, so `who % homes` preserved the low bit that chose the faction — **everyone sharing a home was the same faction**, home cells could never hold a hostile, and the fight histogram read exactly 0.00% at night. A slice of a hash is not an independent draw.
 
@@ -123,7 +171,8 @@ At 10,000 players over a simulated week, with the model above:
 | Tick cost (max) | 1.4 ms |
 | Fraction of the 30 s budget | **0.0009%** |
 | Live cells per tick | 972 mean, 1,421 peak |
-| **A player is in a fight** | **54% of their entire week** |
+| **Fights per player** | **5.1 a day**, 5 minutes each |
+| **Time at war** | **1.8% of a player's week** |
 | Replay | byte-identical checksum |
 | Leaks | zero |
 
@@ -160,3 +209,7 @@ Even with homes so sparse they are effectively solitary, fighting stays near 38%
 | 2026-07-13 | `sortByCell` → total order (cell, then player) | Unstable sort made event order depend on arrival order |
 | 2026-07-13 | splitmix64 written in-house, not `std.Random.DefaultPrng` | "Default" may change in any Zig release, breaking replay across a toolchain upgrade |
 | 2026-07-13 | City attributes: one hash sliced → one mix per attribute | Home and faction were correlated; home cells could never hold a hostile |
+| 2026-07-13 | **Combat became an engagement**: bounded, with a per-room cooldown | Combat had no end condition — a desk job was an eight-hour war, and the best XP strategy was a crowded workplace. Time at war: 54% → 1.8% |
+| 2026-07-13 | Momentum: 3 states → 5 (`even`, `edge`, `winning`) | The prototype speaks in sentences that escalate, not in three buckets |
+| 2026-07-13 | **Crowd band added** to the tell, sampled once per engagement | Gives the player scale ("surrounded by thousands") without the tick-to-tick delta that identifies a person leaving a room |
+| 2026-07-13 | City: staggered commutes, realistic venue density | The old model marched the whole city onto 30 platforms at 07:00 and held it for two hours |

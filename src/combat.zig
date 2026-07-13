@@ -42,6 +42,32 @@ pub const Rules = struct {
     damage_per_hostile: u16 = 6,
     /// The width of the random jitter added to each presence's incoming damage.
     jitter: u16 = 5,
+    /// How long one engagement lasts, in ticks.
+    ///
+    /// A FIGHT IS AN EVENT, NOT A CLIMATE. The original design has combat *end* -- "combat
+    /// ends when one player's HP reaches 0" -- and the feel prototype runs a fight for five
+    /// resolutions and then stops, with the quiet screen reading "last engagement: 2 days
+    /// ago". A fight is something that happens to you, not a state you are in.
+    ///
+    /// Before this existed, combat ran for as long as two hostiles shared a room. Sitting at
+    /// a desk in a large office meant being at war for eight straight hours, and the
+    /// simulation duly reported players in a fight 54% of their entire week. Worse, it made
+    /// the optimal XP strategy "have a job in a crowded building" -- an exploit that is
+    /// entirely legitimate, requires no spoofing, and which no integrity system can touch.
+    ///
+    /// 10 ticks = 5 minutes.
+    engagement_ticks: u64 = 10,
+
+    /// How long a room is spent afterwards, before it can host another engagement.
+    ///
+    /// Keyed to the ROOM, not the player. The café you fought in is quiet for a while; the
+    /// café across the street is not. This is what makes going somewhere new the thing that
+    /// produces a fight -- which is the whole of "walk around your environment to encounter
+    /// enemies", and it is the shape the original document asked for.
+    ///
+    /// 240 ticks = 2 hours.
+    cooldown_ticks: u64 = 240,
+
     /// Hit points recovered per tick by a presence that is not in a live cell.
     ///
     /// There is no death and no permanence. A downed player is removed from the fight and
@@ -102,10 +128,78 @@ pub const Outcome = struct {
 /// The aggregate momentum of a fight: how it is going, and nothing else.
 ///
 /// This is the only fight-wide fact a player is ever permitted to learn (I5). It is
-/// categorical, not geometric. It carries no position, no direction, no identity, and no
-/// count -- in particular it does not reveal how many hostiles are present, because a
-/// count is a step toward a person.
-pub const Momentum = enum(u8) { humans_ahead, even, zombies_ahead };
+/// categorical, not geometric. It carries no position, no direction, no identity, and NO
+/// COUNT.
+///
+/// The count is the thing to keep out, and it is worth being explicit about why, because
+/// it will be asked for and it looks harmless. An exact hostile count, refreshed every
+/// tick, is how a player learns WHO. Sit in a café of twenty people, watch the number fall
+/// from four to three at the moment one specific person stands and walks out, and you have
+/// identified a player and their faction -- without the server ever transmitting a
+/// position. The tick-to-tick delta does it alone (I1, I5).
+///
+/// Bands, not numbers. "The Humans are winning" tells you how the fight is going. "Four
+/// hostiles are here" tells you who to follow out of the door.
+pub const Momentum = enum(u8) {
+    even,
+    humans_edge,
+    zombies_edge,
+    humans_winning,
+    zombies_winning,
+};
+
+/// The margin, in percent, above which a side is "winning" rather than merely "ahead".
+const decisive_margin: u64 = 30;
+
+/// How big the thing you have walked into is. SCALE, NOT A COUNT.
+///
+/// You are at a concert. Your phone tells you that you are surrounded by *thousands*. You do
+/// not leave the concert -- that would be absurd -- and that is exactly the point. Scale is
+/// awe, and awe is the game.
+///
+/// WHY THIS IS A BAND, AND WHY IT IS SAMPLED ONCE
+///
+/// What identifies a person is not the size of a crowd. It is PRECISION and the TICK-TO-TICK
+/// DELTA. An exact count that refreshes every tick is a scalpel: sit in a café of twenty
+/// people, watch "4 hostiles" become "3" at the moment one specific person stands and walks
+/// out, and you have identified a player and their faction -- with no position ever
+/// transmitted. The delta did it alone.
+///
+/// A band fixed at the start of the engagement has no such channel. At a concert, one person
+/// leaving cannot move "thousands", so the number is useless for identification precisely
+/// because it is enormous. In a café, the lowest band does not resolve small numbers at all,
+/// so a departure moves nothing.
+///
+/// This is what I5 actually forbids: a tell from which an identity or a sub-quorum count can
+/// be inferred, "alone or by combining tells across ticks". A live counter fails on that last
+/// clause. A once-sampled band has no across-ticks signal to combine, and so the concert
+/// survives and the café attack does not exist.
+///
+/// The lowest band deliberately carries NO NUMBER. "You are not alone, and not among
+/// friends" is the whole of it.
+pub const Crowd = enum(u8) {
+    /// A few. Never a number: the difference between one hostile and six is exactly the
+    /// difference this band exists to destroy.
+    a_few,
+    dozens,
+    scores,
+    hundreds,
+    thousands,
+};
+
+/// PROVISIONAL band edges. The lowest band is wide on purpose (see `Crowd`).
+pub fn crowdOf(hostiles: u32) Crowd {
+    return if (hostiles < 12)
+        .a_few
+    else if (hostiles < 40)
+        .dozens
+    else if (hostiles < 150)
+        .scores
+    else if (hostiles < 800)
+        .hundreds
+    else
+        .thousands;
+}
 
 const assert = std.debug.assert;
 
@@ -194,11 +288,23 @@ pub fn resolve(
     // and no rounding decides who is winning.
     if (humans == 0 or zombies == 0) return .even;
 
-    const humans_per_capita = damage_to_humans * zombies;
-    const zombies_per_capita = damage_to_zombies * humans;
+    const humans_hurt = damage_to_humans * zombies;
+    const zombies_hurt = damage_to_zombies * humans;
 
-    if (humans_per_capita == zombies_per_capita) return .even;
-    return if (humans_per_capita < zombies_per_capita) .humans_ahead else .zombies_ahead;
+    if (humans_hurt == zombies_hurt) return .even;
+
+    // The side taking less punishment per member is the side that is winning. How much less
+    // decides whether they merely have the edge or are plainly winning -- bands, because the
+    // player is told a sentence, not a statistic.
+    const ahead_is_humans = humans_hurt < zombies_hurt;
+    const worse = @max(humans_hurt, zombies_hurt);
+    const better = @min(humans_hurt, zombies_hurt);
+    const margin = ((worse - better) * 100) / worse;
+
+    if (margin < decisive_margin) {
+        return if (ahead_is_humans) .humans_edge else .zombies_edge;
+    }
+    return if (ahead_is_humans) .humans_winning else .zombies_winning;
 }
 
 const testing = std.testing;
@@ -319,7 +425,7 @@ test "the side that outnumbers is the side that is winning" {
     var out: [4]Outcome = undefined;
 
     const momentum = resolve(&r.players, &r.factions, &r.hps, spatial.cellFromKey(1, 39), 1, 1, .default, &out);
-    try testing.expectEqual(Momentum.humans_ahead, momentum);
+    try testing.expectEqual(Momentum.humans_winning, momentum);
 
     // Sanity: the aggregate really does point the other way.
     const total_human_damage = out[0].damage + out[1].damage + out[2].damage;

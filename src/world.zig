@@ -58,12 +58,48 @@ pub const Presence = struct {
 pub const World = struct {
     presences: std.MultiArrayList(Presence),
 
-    pub const empty: World = .{ .presences = .empty };
+    /// When the current engagement in each cell began (0.5).
+    ///
+    /// A fight is an EVENT, not a climate. A cell that goes live with hostiles starts an
+    /// engagement, it runs for a bounded number of ticks, it resolves, and then the room is
+    /// spent for a while. This table is the only thing the world remembers between ticks
+    /// besides the people themselves.
+    ///
+    /// Keyed by cell, never by player: it is the ROOM that is spent, which is what stops a
+    /// crowded office from being an eight-hour war and, incidentally, from being the best
+    /// XP strategy in the game.
+    ///
+    /// I7: this holds a CellId and a tick index. It holds no coordinate, because there is no
+    /// coordinate. Entries are dropped the moment they expire.
+    engagements: std.AutoHashMapUnmanaged(CellId, Engagement),
+
+    pub const empty: World = .{ .presences = .empty, .engagements = .empty };
+};
+
+/// One fight, in one room.
+///
+/// The head counts are sampled ONCE, when the engagement begins, and never updated. That is
+/// what makes the crowd band a horizon rather than a scalpel: a player cannot watch the
+/// number move, because it does not move (I5). See `combat.Crowd`.
+///
+/// These are the true counts, held in the core, where they are safe. What leaves the core is
+/// a band.
+pub const Engagement = struct {
+    started: u64,
+    humans: u16,
+    zombies: u16,
+
+    comptime {
+        // THE SIZE GUARD (A7). One per room currently fighting.
+        // 8 + 2 + 2 = 12 packed, padded to 16 by the u64's alignment.
+        assert(@sizeOf(Engagement) == 16);
+    }
 };
 
 /// CORE. Deterministic cleanup at the point of acquisition (C5).
 pub fn deinit(world: *World, gpa: Allocator) void {
     world.presences.deinit(gpa);
+    world.engagements.deinit(gpa);
     world.* = .empty;
 }
 

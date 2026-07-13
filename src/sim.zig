@@ -46,11 +46,17 @@ const Stats = struct {
     live_by_hour: [24]u64 = @splat(0),
     presences_by_hour: [24]u64 = @splat(0),
 
-    /// Player-ticks actually IN A FIGHT -- a live cell with hostiles in it. A live cell
-    /// full of your own faction is not a fight and pays nothing, so this, not liveness, is
-    /// the number that describes a player's day.
+    /// Player-ticks actually IN A FIGHT -- an engagement, in a live cell, with hostiles.
     fighting_total: u64 = 0,
     fighting_by_hour: [24]u64 = @splat(0),
+
+    /// Engagements STARTED. A fight is an event, so the number that describes a player's day
+    /// is how many events it contains -- not what fraction of it was spent at war.
+    engagements_started: u64 = 0,
+    engaged_cells_total: u64 = 0,
+
+    /// The scale of what people walked into, in bands. No exact count leaves the core.
+    crowd_bands: [5]u64 = @splat(0),
 
     tick_ns_total: u64 = 0,
     tick_ns_max: u64 = 0,
@@ -90,6 +96,8 @@ fn run(gpa: std.mem.Allocator, io: std.Io, params: city.Params, ticks: u64, meas
         stats.max_live_cells = @max(stats.max_live_cells, result.live_cells);
         stats.live_by_hour[hour] += result.live_presences;
         stats.presences_by_hour[hour] += params.population;
+        stats.engaged_cells_total += result.engaged_cells;
+        stats.engagements_started += result.engagements_started;
 
         for (result.tells) |t| {
             stats.total_damage += t.damage;
@@ -98,6 +106,7 @@ fn run(gpa: std.mem.Allocator, io: std.Io, params: city.Params, ticks: u64, meas
                 stats.fighting_total += 1;
                 stats.fighting_by_hour[hour] += 1;
             }
+            stats.crowd_bands[@intFromEnum(t.crowd)] += 1;
             // The replay checksum. If one bit of one fight differs, this differs.
             stats.checksum = stats.checksum *% 31 +%
                 @as(u64, @intFromEnum(t.player)) +%
@@ -219,12 +228,37 @@ pub fn main() !void {
         std.debug.print("    {d:0>2}:00  {d:>6.2}%  {s}\n", .{ hour, pct, bar[0..@min(bar_len, 60)] });
     }
 
+    const days: f64 = 7.0;
+    const pop: f64 = @floatFromInt(params.population);
+
     std.debug.print(
         \\
-        \\  A player is in a fight {d:.1}% of their entire week.
+        \\  A FIGHT IS AN EVENT, NOT A CLIMATE
+        \\    rooms that fought {d} over the week
+        \\    fights per player {d:.2} a day
+        \\    time at war       {d:.1}% of a player's week
+        \\
+        \\  THE SCALE OF IT -- what people walked into (bands; no count leaves the core)
+        \\    a few             {d}
+        \\    dozens            {d}
+        \\    scores            {d}
+        \\    hundreds          {d}
+        \\    thousands         {d}
         \\
         \\
-    , .{percent(first.fighting_total, player_ticks)});
+    , .{
+        first.engagements_started,
+        // A player sits in an engagement for engagement_ticks of it, so their fighting
+        // player-ticks divided by that length is the number of fights they were actually in.
+        @as(f64, @floatFromInt(first.fighting_total)) /
+            @as(f64, @floatFromInt((combat.Rules.default).engagement_ticks)) / pop / days,
+        percent(first.fighting_total, player_ticks),
+        first.crowd_bands[0],
+        first.crowd_bands[1],
+        first.crowd_bands[2],
+        first.crowd_bands[3],
+        first.crowd_bands[4],
+    });
 
     // HOW MUCH OF THAT IS THE GAME, AND HOW MUCH IS MY MODEL?
     //
