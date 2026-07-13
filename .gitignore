@@ -1,0 +1,18 @@
+# Zig build artifacts
+zig-out/
+.zig-cache/
+
+# Local-only: design and governing documents. Not published.
+/CLAUDE.md
+/THE_RULESET.md
+/DESIGN_PHILOSOPHY.md
+/GAME_DESIGN.md
+/ROADMAP.md
+*.docx
+
+# Local-only: reference material and scratch notes
+/multi_array_list.zig
+/Ast_extract_zig.txt
+/To_compile_zig
+/Zig_References
+/outbreak-prototype.html
