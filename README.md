@@ -4,6 +4,10 @@ A location-based faction game. Zig server, native mobile clients.
 
 A mobile game where you choose a faction, human or zombie, held permanent for the game. You then live your ordinary life, and the game reads only which ~38-metre *cell* of the world you are in. Most of the time it says nothing. When enough people occupy one cell — a café, a platform, a bar — the cell goes live, and if hostiles are present, combat resolves silently on the server. You learn that a fight is happening and how it is going.
 
+## Start here
+
+**[HANDOFF.md](HANDOFF.md)** — where the project is, what to do next, and the things that will get you fired.
+
 ## Status
 
 **Phase 0 — the core, in isolation.** No network, no phone, no map, no server. The game currently runs entirely as a test suite and a simulation.
