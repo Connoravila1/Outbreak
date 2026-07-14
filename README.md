@@ -77,6 +77,18 @@ The C ABI is `include/outbreak.h`. **Ten functions.** What is absent is the poin
 
 `outbreak_quantize()` is the only function in the entire system, on either side of the network, that accepts a latitude. **The platform shell must take the location, call it, and drop the coordinate in the same function.** The server has no coordinate and cannot leak one; the phone is the only place a coordinate ever exists, so the phone is the only place it can leak from.
 
+## Battery
+
+**From ~10% of a phone battery every 8 hours to 0.50%** — about 20×, and not one line of it was an optimization in the usual sense. The write-up: **[BATTERY.md](BATTERY.md)**.
+
+| | Inherited spec | Now |
+|---|---|---|
+| GPS fixes / day | 17,280 | **304** |
+| Network sends / day | 2,880 | **16** |
+| Socket held open | all day | **12.5 min** |
+
+The reduction came from noticing that the game never wanted the data. It doesn't follow you — it only learns which room you're in, and only when you stop. **The thing that makes it private is the thing that makes it cheap.**
+
 ## Balance
 
 Every tunable number, why it holds its current value, and what it costs to change it: **[GAME_RULES.md](GAME_RULES.md)**.
