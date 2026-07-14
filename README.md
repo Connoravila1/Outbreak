@@ -4,10 +4,6 @@ A location-based faction game. Zig server, native mobile clients.
 
 A mobile game where you choose a faction, human or zombie, held permanent for the game. You then live your ordinary life, and the game reads only which ~38-metre *cell* of the world you are in. Most of the time it says nothing. When enough people occupy one cell — a café, a platform, a bar — the cell goes live, and if hostiles are present, combat resolves silently on the server. You learn that a fight is happening and how it is going.
 
-## Start here
-
-**[HANDOFF.md](HANDOFF.md)** — where the project is, what to do next, and the things that will get you fired.
-
 ## Status
 
 **Phase 0 — the core, in isolation.** No network, no phone, no map, no server. The game currently runs entirely as a test suite and a simulation.
@@ -83,7 +79,9 @@ The C ABI is `include/outbreak.h`. **Ten functions.** What is absent is the poin
 
 ## Battery
 
-**From ~10% of a phone battery every 8 hours to 0.50%** — about 20×, and not one line of it was an optimization in the usual sense. The write-up: **[BATTERY.md](BATTERY.md)**.
+**From ~10% of a phone battery every 8 hours to a projected 0.50%** — about 20×, and not one line of it was an optimization in the usual sense. It came from asking the GPS for a fix less often, and from holding the socket open only while a fight is live.
+
+The number is a projection, not a measurement. It is measured on real hardware, over eight hours, or it does not count.
 
 | | Inherited spec | Now |
 |---|---|---|

@@ -12,7 +12,7 @@
 //! floats. The coordinate wall (B6) is enforced by a guard that forbids a float from appearing in
 //! any file classified core -- bluntly, textually, by design. These floats are SCREEN PIXELS and
 //! could not be a latitude if they tried; but the guard does not read intent, and it is not to be
-//! weakened to accommodate mine. CLAUDE.md: when in doubt, obey the stricter reading. So: shell.
+//! weakened to accommodate mine. When in doubt, obey the stricter reading. So: shell.
 //!
 //! Being pure anyway is not a loophole, it is the point. It means the entire transform -- the
 //! colour unpacking, the winding order, the pixel geometry -- is tested on a laptop, with no

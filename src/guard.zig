@@ -1,6 +1,6 @@
 //! THE FORBIDDEN-CONSTRUCT GUARD — comptime. Fails the build, not the review.
 //!
-//! CLAUDE.md lists constructs that "will be produced helpfully and wrongly". A distance
+//! THE RULESET lists constructs that "will be produced helpfully and wrongly". A distance
 //! function, a neighbour search, an inverse quantizer, a coordinate carried inward. Each
 //! is a single plausible-looking function that quietly ends the privacy guarantee, and
 //! each will look reasonable on the day someone writes it.
