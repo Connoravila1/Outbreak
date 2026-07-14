@@ -356,10 +356,22 @@ fn onContentRectChanged(_: *ANativeActivity, rect: *const ARect) callconv(.c) vo
 /// until the answer changes. Polling a flag is nothing next to the radio it is gating.
 fn armLocation() void {
     if (location.permitted(&radio)) {
-        // The OS's own throttle, and the first line of the battery budget: the hardware does not
-        // wake for a fix we told it we did not want (G5). `gps.zig` owns the real policy; these
-        // are its floor.
-        location.start(&radio, 30, 20.0);
+        if (comptime flags.diagnostic) {
+            // THE CAFE TEST WANTS FLICKER, FAST. At the production interval you would sit still for
+            // ten minutes to collect twenty samples; that is a fine way to save a battery and a
+            // terrible way to find out whether a stationary phone holds its room. So the diagnostic
+            // build fixes as fast as the GPS will give it -- every second, zero-metre threshold --
+            // and drift, if it is going to happen, happens in seconds.
+            //
+            // This is exactly why it is a diagnostic build and never a shipping one: one fix a
+            // second is the battery bug the production interval exists to prevent.
+            location.start(&radio, 1, 0.0);
+        } else {
+            // The OS's own throttle, and the first line of the battery budget: the hardware does
+            // not wake for a fix we told it we did not want (G5). `gps.zig` owns the real policy;
+            // these are its floor.
+            location.start(&radio, 30, 20.0);
+        }
         return;
     }
 
