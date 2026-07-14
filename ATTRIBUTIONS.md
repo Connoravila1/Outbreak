@@ -52,18 +52,25 @@ linked from here.
 | | |
 |---|---|
 | **Piano Zombie** | `assets/audio/piano-zombie.mp3` |
+| **Creator** | **Tim Beek** — https://timbeek.com/ |
 | Source | https://www.youtube.com/watch?v=JkDIMhhSpR4 |
 | Licence | **Creative Commons Attribution 4.0 International (CC BY 4.0)** — https://creativecommons.org/licenses/by/4.0/deed.en |
+| Modified? | **Not yet.** The file is byte-identical to the download. If we ever trim it, loop it, or re-encode it, that is a modification and this row must say so. |
 | Used for | Ambient background music. **Not yet wired in** — the file is in the tree, nothing plays it. |
 
 **CC BY 4.0 obliges us to credit the creator, link the licence, and state whether we changed the
-work.** That credit has to be somewhere a player can actually reach — this file is where the
-obligation is recorded, but it is not yet discharged in the app itself.
+work.** The first is recorded above. The second and third are recorded above. **None of the three
+are discharged in the app itself, because the app does not yet play the track.**
+
+The credit has to be somewhere a player can actually reach. A line in a repository file is not
+that — it is where we keep our own books.
 
 **Owed, before any build that plays this ships:**
 
-- [ ] The creator's name, as they wish to be credited. The row above has a URL and no name, and a
-      URL is not a credit.
-- [ ] A credits screen, or a line in the app, carrying that name and a link to the licence.
-- [ ] A statement of whether the audio was modified (trimmed, looped, re-encoded — a loop is a
-      modification).
+- [ ] A credits screen, or a line in the app, carrying **Tim Beek**, a link to https://timbeek.com/,
+      and a link to the CC BY 4.0 licence.
+- [ ] If the track is trimmed, looped or re-encoded by then — and looping it almost certainly means
+      trimming it — the **Modified?** row above changes to yes, and the app must say so too.
+
+The attribution is the *price* of the music, not a nicety attached to it. If we cannot put a credit
+on a screen, we do not get to use the track.
