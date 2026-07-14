@@ -659,22 +659,36 @@ fn drawLive(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allocator)
 /// the frame that belongs at millisecond 2,400, forever, on any machine.
 const boot_terminal_ms: u32 = 1900;
 const boot_infection_ms: u32 = 1300;
-/// THE SETTLE. The window between containment failing and the title screen existing.
+/// ============================================================================
+/// THE HOLD, AND THEN THE HIT.
 ///
-/// It used to hold the glitch. When the glitch went, nothing replaced it -- so the bar vanished,
-/// the tagline appeared, and the screen sat frozen for four hundred milliseconds in between. It
-/// blipped, because there was nothing there.
+/// Containment fails. And then the screen MAKES YOU WAIT.
 ///
-/// This is that nothing, given a job: the bar fades out, the wordmark flares as it completes, and
-/// the tagline rises. One state becomes the other instead of being swapped for it.
-const boot_settle_ms: u32 = 700;
+/// The bar sits full. The verdict lands -- CONTAINMENT FAILED -- and blinks at you, three times,
+/// while nothing else happens. It is a beat of dead air with a full bar in it, and dead air after a
+/// completed task is not a pause, it is a THREAT. Something has finished, and it has not told you
+/// what happens next.
+///
+/// Then it does. Bam.
+///
+/// The first version of this was a smooth seven-hundred-millisecond cross-fade, and it was wrong
+/// for a reason worth writing down: a cross-fade is POLITE. It eases you from one state to another
+/// so that you barely notice the change, which is exactly what you want for a settings panel and
+/// exactly what you do not want here. The title should not arrive gently. It should land.
+const boot_hold_ms: u32 = 780;
+
+/// The hit itself. Short and hard -- this is a strike, not a transition.
+const boot_hit_ms: u32 = 240;
 
 /// How long the terminal takes to give way to the field. Short: it is a cut softened, not a
 /// dissolve.
 const boot_blend_ms: u32 = 320;
 
 const boot_infection_end = boot_terminal_ms + boot_infection_ms;
-const boot_settle_end = boot_infection_end + boot_settle_ms;
+const boot_hold_end = boot_infection_end + boot_hold_ms;
+
+/// When the title has fully arrived and the screen is at rest.
+const boot_settle_end = boot_hold_end + boot_hit_ms;
 
 /// The line the terminal is on, and how far into that line we are.
 const boot_line_ms: u32 = boot_terminal_ms / boot_lines.len;
@@ -690,8 +704,12 @@ const boot_line_ms: u32 = boot_terminal_ms / boot_lines.len;
 ///
 /// The pause is the point. It is the breath before the sentence.
 const boot_fade_ms: u32 = 340;
-const boot_hold_ms: u32 = 260;
-const boot_wake_ms = boot_fade_ms + boot_hold_ms;
+
+/// The beat the warm tube sits silent for, before the first character. NOT `boot_hold_ms` -- that
+/// is the hold at the END of the sequence, and two things called "the hold" in one file is how you
+/// get a blink where you wanted a threat.
+const boot_wake_hold_ms: u32 = 260;
+const boot_wake_ms = boot_fade_ms + boot_wake_hold_ms;
 
 /// The sequence's own clock, which starts once the screen is awake.
 ///
@@ -835,7 +853,18 @@ fn drawBoot(state: State, size: Size, insets: Insets, out: *std.ArrayList(Draw),
     // THE WAY OUT. The player tapped, and the infection finishes what it started: the dark closes
     // in from the edges, the wordmark flares, and the screen is taken. Four hundred milliseconds.
     if (state.leaving_ms) |began| {
-        const since = ms -| began;
+        // `raw`, NOT `ms`. THIS IS THE BUG THE WAKE INTRODUCED.
+        //
+        // `leaving_ms` is stamped by `touch` from the app's clock. `ms` is the SEQUENCE's clock,
+        // which starts later. Subtracting an app-clock instant from a sequence-clock one saturates
+        // to zero on every frame, so the exit animation drew its first frame forever and the screen
+        // appeared to cut straight to the next one.
+        //
+        // The screen still CHANGED on time -- `advance` compares app-clock to app-clock and was
+        // never wrong -- so the only symptom was that a transition everyone had seen simply
+        // stopped existing. No test caught it: they all asserted the state machine, and none of
+        // them asserted that the exit had anything to look at.
+        const since = raw -| began;
         const t: i32 = @intCast(@min(@as(u32, 100), since * 100 / boot_exit_ms));
 
         // A FLARE, AND THEN THE DARK. No collapsing vignette -- that was the same mistake as the
@@ -1034,13 +1063,14 @@ fn drawWordmark(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) 
     // A HEARTBEAT, not a shimmer. The first version breathed so gently you had to be told it was
     // moving. It swells hard and falls back -- the light behind the word going in and out, on the
     // slow rhythm of something large and unwell.
-    // THE FLARE. Containment fails, the last letter lands, and the light behind the word SURGES --
-    // once, hard -- then falls back into its heartbeat. This is the moment the two halves of the
-    // sequence are stitched together at: the bar dying, the tagline rising, and the word igniting
-    // fully are all the same event, and it needed to look like one.
-    const settling = ms >= boot_infection_end and ms < boot_settle_end;
-    const flare: u32 = if (settling)
-        130 - @min(@as(u32, 130), (ms - boot_infection_end) * 130 / boot_settle_ms)
+    // THE HIT. The hold ends, the bar is gone in a single frame, and the light behind the word
+    // DETONATES -- once, hard -- then falls back into its heartbeat.
+    //
+    // This is the bam. It is timed to the end of the hold, not to the end of the bar: the bar
+    // finishing is the setup, and the silence after it is the wind-up. The strike lands here.
+    const striking = ms >= boot_hold_end and ms < boot_settle_end;
+    const flare: u32 = if (striking)
+        210 - @min(@as(u32, 210), (ms - boot_hold_end) * 210 / boot_hit_ms)
     else
         0;
 
@@ -1062,17 +1092,25 @@ fn drawWordmark(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) 
 
 /// The infection: the bar fills, and the dark closes in around the wordmark.
 fn drawInfection(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
-    // IT DOES NOT VANISH THE INSTANT IT FILLS. Containment does not simply stop failing -- the bar
-    // sits full for a moment and then fades, while the tagline rises through it. Cutting it dead at
-    // a hundred percent was the blip.
-    if (ms >= boot_settle_end) return;
+    // AND THEN, ON THE HIT, IT IS SIMPLY GONE. One frame. No fade.
+    //
+    // This is the ONE deliberate cut in the whole sequence, and it is deliberate precisely because
+    // everything else blends: a hard edge only reads as a strike if the things around it do not
+    // have hard edges. A fade here would be the sequence apologising for its own ending.
+    if (ms >= boot_hold_end) return;
 
     const into = ms - boot_terminal_ms;
     const elapsed: i32 = @intCast(@min(@as(u32, 100), into * 100 / boot_infection_ms));
     const percent = loading(elapsed);
 
-    const leaving = ms -| boot_infection_end;
-    const alpha: u8 = @intCast(255 - @min(@as(u32, 255), leaving * 255 / boot_settle_ms));
+    // THE HOLD. The bar is full, and the verdict blinks at you while nothing happens.
+    const holding = ms >= boot_infection_end;
+    const held = ms -| boot_infection_end;
+
+    // Three blinks across the hold. Hard on, hard off -- this is a warning light, not a breath.
+    const blink_period = boot_hold_ms / 3;
+    const lit = !holding or (held % blink_period) < (blink_period * 2 / 3);
+    const alpha: u8 = if (lit) 255 else 40;
 
     // THERE IS NO VIGNETTE HERE ANY MORE, AND ITS ABSENCE IS THE POINT.
     //
@@ -1087,15 +1125,17 @@ fn drawInfection(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocator)
     // Well clear of the bottom. It sat 74dp up, which on a phone is jammed against the gesture bar.
     const bar_y = size.h - 210;
 
+    // FAILING, and then FAILED. The tense changes the moment the bar lands, and that one word is
+    // the whole difference between a process and a verdict.
     try out.append(gpa, .{ .text = .{
         .x = left,
         .y = bar_y - 18,
-        .text = "C O N T A I N M E N T   F A I L I N G",
-        .color = dim(.faint, alpha),
+        .text = if (holding) "C O N T A I N M E N T   F A I L E D" else "C O N T A I N M E N T   F A I L I N G",
+        .color = if (holding) dim(.blood_glow, alpha) else dim(.faint, alpha),
         .weight = .label,
     } });
 
-    try out.append(gpa, .{ .rect = .{ .x = left, .y = bar_y, .w = right - left, .h = 3, .color = dim(.char, alpha) } });
+    try out.append(gpa, .{ .rect = .{ .x = left, .y = bar_y, .w = right - left, .h = 3, .color = .char } });
     try out.append(gpa, .{ .rect = .{
         .x = left,
         .y = bar_y,
@@ -1117,10 +1157,10 @@ fn drawBootTail(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) 
     // It shipped. The tests sampled instants either side of the window and stepped clean over it.
     // The test below now walks every millisecond, because a boot sequence that is a pure function
     // of one integer has no excuse for being sampled.
-    // IT RISES THROUGH THE SETTLE, not after it. The tagline comes up while the bar is still going
-    // down, so the two are one movement rather than two events with a gap between them.
-    const rising = ms -| boot_infection_end;
-    const fade: u8 = @intCast(@min(@as(u32, 255), rising * 255 / boot_settle_ms));
+    // IT ARRIVES ON THE HIT. Not before -- during the hold there is a full bar, a blinking verdict
+    // and nothing else, and that emptiness is the tension. The tagline lands with the strike.
+    const rising = ms -| boot_hold_end;
+    const fade: u8 = @intCast(@min(@as(u32, 255), rising * 255 / boot_hit_ms));
 
     // And the invitation waits until the screen has finished becoming itself.
     const since = ms -| boot_settle_end;
@@ -1719,9 +1759,13 @@ test "NOTHING IN THE BOOT SEQUENCE CUTS" {
     defer out.deinit(gpa);
 
     const has = struct {
+        /// VISIBLE, not merely present. A draw command with an alpha of zero is in the list and on
+        /// nobody's screen -- and a test that cannot tell those apart will happily pass a blank
+        /// phone. (This one did, for one commit, until it was pointed at the hold.)
         fn text(list: []const Draw, needle: []const u8) bool {
             for (list) |item| switch (item) {
-                .text => |t| if (std.mem.indexOf(u8, t.text, needle) != null) return true,
+                .text => |t| if (std.mem.indexOf(u8, t.text, needle) != null and
+                    (@intFromEnum(t.color) & 0xFF) > 8) return true,
                 else => {},
             };
             return false;
@@ -1745,15 +1789,16 @@ test "NOTHING IN THE BOOT SEQUENCE CUTS" {
     try draw(.{ .screen = .boot, .boot_ms = boot_wake_ms + boot_terminal_ms + boot_blend_ms + 50 }, size, .{}, &out, gpa);
     try testing.expect(!has.text(out.items, "PERIMETER"));
 
-    // THE BAR OVERLAPS THE TAGLINE. Containment does not simply stop failing: the bar is still on
-    // screen, fading, while the tagline rises through it. This is the transition that was missing
-    // entirely -- the screen used to sit frozen here and then blip to the title.
+    // THE HOLD IS EMPTY, AND THAT IS THE TENSION. Containment has FAILED -- the verdict is up, the
+    // bar is full -- and there is nothing else. No tagline yet. The screen is making you wait.
     try draw(.{ .screen = .boot, .boot_ms = boot_wake_ms + boot_infection_end + 60 }, size, .{}, &out, gpa);
-    try testing.expect(has.text(out.items, "C O N T A I N M E N T"));
-    try testing.expect(has.text(out.items, "L A S T   S T A N D"));
+    try testing.expect(has.text(out.items, "F A I L E D")); // the tense has changed
+    try testing.expect(!has.text(out.items, "F A I L I N G"));
+    try testing.expect(!has.text(out.items, "L A S T   S T A N D")); // and nothing has arrived yet
 
-    // And by the end of the settle the bar has gone and the title is all that is left.
-    try draw(.{ .screen = .boot, .boot_ms = boot_wake_ms + boot_settle_end + 10 }, size, .{}, &out, gpa);
+    // THEN THE HIT. The bar is gone in one frame -- the single deliberate cut in the sequence --
+    // and the title lands. A fade here would be the sequence apologising for its own ending.
+    try draw(.{ .screen = .boot, .boot_ms = boot_wake_ms + boot_hold_end + boot_hit_ms }, size, .{}, &out, gpa);
     try testing.expect(!has.text(out.items, "C O N T A I N M E N T"));
     try testing.expect(has.text(out.items, "L A S T   S T A N D"));
 
@@ -1824,4 +1869,70 @@ test "THE SCREEN WAKES BEFORE IT SPEAKS" {
     // And a tap during the wake does nothing. There is not yet anything to skip.
     const early = touch(.{ .screen = .boot, .boot_ms = 100 }, .{ .x = 10, .y = 10 }, size);
     try testing.expectEqual(@as(?u32, null), early.leaving_ms);
+}
+
+test "THE WAY OUT IS ANIMATED, AND THE CLOCKS DO NOT DISAGREE" {
+    // THIS TEST EXISTS BECAUSE THE EXIT SILENTLY STOPPED EXISTING.
+    //
+    // `leaving_ms` is stamped from the APP's clock. When the wake was added, `drawBoot` began
+    // running on the SEQUENCE's clock, which starts later. Subtracting one from the other saturated
+    // to zero on every frame, so the exit drew its opening frame forever and the screen appeared to
+    // cut straight to the next one.
+    //
+    // The state machine was never wrong -- `advance` compares app-clock to app-clock, and the
+    // screen still changed exactly on time. Every test passed. The only symptom was that a
+    // transition everyone had seen simply was not there any more, and it took a human looking at a
+    // phone to notice.
+    //
+    // So: assert the exit has something to LOOK at, and that it gets darker as it goes.
+    const gpa = testing.allocator;
+    const size: Size = .{ .w = 360, .h = 800 };
+
+    var out: std.ArrayList(Draw) = .empty;
+    defer out.deinit(gpa);
+
+    // The blackout that carries you into the next screen. It is the last thing drawn, so it is the
+    // last full-bleed rect in the list.
+    const blackout = struct {
+        /// The blackout is the SECOND full-bleed black rectangle. The first is the background,
+        /// which is also full-bleed and also black and is always there at full alpha -- so a
+        /// detector that just takes the last match reports 255 on a frame with no blackout at all,
+        /// and the test then asserts that the screen gets LIGHTER as it fades out.
+        ///
+        /// That is what happened. The bug was in the test, not the code, and it is exactly the kind
+        /// of thing that would have been "fixed" by loosening the assertion.
+        fn alpha(list: []const Draw) u32 {
+            var matches: u32 = 0;
+            var last: u32 = 0;
+            for (list) |item| switch (item) {
+                .rect => |r| if (r.w >= 360 and r.h >= 800 and
+                    (@intFromEnum(r.color) >> 8) == (@intFromEnum(Color.void_black) >> 8))
+                {
+                    matches += 1;
+                    last = @intFromEnum(r.color) & 0xFF;
+                },
+                else => {},
+            };
+            return if (matches >= 2) last else 0;
+        }
+    }.alpha;
+
+    const tapped_at = boot_wake_ms + boot_settle_end + 300;
+
+    // Straight after the tap, the screen has not gone dark yet -- it flares first.
+    try draw(.{ .screen = .boot, .boot_ms = tapped_at + 20, .leaving_ms = tapped_at }, size, .{}, &out, gpa);
+    const early = blackout(out.items);
+
+    // By the end of the exit it is very nearly black, so the next screen arrives out of nothing
+    // rather than being revealed behind a half-faded splash.
+    try draw(.{ .screen = .boot, .boot_ms = tapped_at + boot_exit_ms - 1, .leaving_ms = tapped_at }, size, .{}, &out, gpa);
+    const late = blackout(out.items);
+
+    try testing.expect(late > early);
+    try testing.expect(late > 200);
+
+    // AND THE ANIMATION ACTUALLY ADVANCES. This is the assertion that fails if the two clocks ever
+    // disagree again: with `since` stuck at zero, every frame of the exit is identical and this is
+    // the line that catches it.
+    try testing.expect(early < 60);
 }
