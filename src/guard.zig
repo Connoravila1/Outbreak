@@ -123,6 +123,35 @@ const layout_owner = [_][]const u8{ "world.zig", "tick.zig" };
 /// which appears in comments all over the codebase and is not a violation of anything.
 const owned_layout = ".presences";
 
+/// THE PHONE COMPUTES NOTHING (H1), ENFORCED AT THE C ABI.
+///
+/// `ffi.zig` is the entire surface between the Zig core and the phone. What it must never do is
+/// resolve anything: no combat, no tick, no quorum, no XP, no loot, no territory.
+///
+/// The phone can quantize a coordinate, put bytes on a wire, and read bytes off it. That is the
+/// whole vocabulary of a device we have decided to believe nothing from.
+///
+/// Every request to widen this will be reasonable. "Predict the damage locally so the UI feels
+/// instant." "Resolve the fight client-side and reconcile." "Cache the quorum so we can show
+/// something offline." Each is latency, or feel, or offline support -- and each hands authority
+/// to a device that has none. The answer is no, and it fails the build.
+const forbidden_in_ffi = [_][]const u8{
+    "combat.resolve",
+    "combat.engagementLength",
+    "tick.tick",
+    "tick_mod.tick",
+    "world.award",
+    "world_mod.award",
+    "world.liveRuns",
+    "world_mod.liveRuns",
+    "session.tick",
+    "session_mod.tick",
+    "territory.",
+    "integrity.",
+};
+
+const ffi_file = "ffi.zig";
+
 const Source = struct { name: []const u8, text: []const u8 };
 
 /// CORE (B1, B2). Pure functions over plain data. A coordinate may not appear here in
@@ -162,6 +191,9 @@ const shell = [_]Source{
     .{ .name = "credential.zig", .text = @embedFile("credential.zig") },
     .{ .name = "transport.zig", .text = @embedFile("transport.zig") },
     .{ .name = "transport_test.zig", .text = @embedFile("transport_test.zig") },
+    // SHELL: it holds a coordinate. `outbreak_quantize` is the only function on EITHER side of
+    // the network that accepts a latitude, and the float dies before it returns (B6).
+    .{ .name = "ffi.zig", .text = @embedFile("ffi.zig") },
 };
 
 /// Does `haystack` begin with `needle`? Byte-wise, so that comptime does the least work
@@ -243,6 +275,25 @@ comptime {
                             "to write to memory you do not own. Use the read-only accessors " ++
                             "(world.cellsOf, playerIds, factions, hitPoints), or relocate() to " ++
                             "say who is where and let the world do its own writing.");
+                    }
+                }
+            }
+        }
+
+        // THE PHONE COMPUTES NOTHING (H1). What does the C ABI reach for?
+        if (std.mem.eql(u8, src.name, ffi_file)) {
+            for (forbidden_in_ffi) |reached| {
+                var j: usize = 0;
+                while (j < src.text.len) : (j += 1) {
+                    if (src.text[j] != reached[0]) continue;
+                    if (startsWith(src.text[j..], reached)) {
+                        @compileError("H1 VIOLATION at the client boundary: '" ++ reached ++
+                            "' is reachable from " ++ ffi_file ++ ". THE PHONE COMPUTES NOTHING. " ++
+                            "It quantizes a coordinate, puts bytes on a wire, and reads bytes off " ++
+                            "it. It does not resolve a fight, award XP, test quorum, or decide an " ++
+                            "outcome -- every outcome is computed server-side from data the client " ++
+                            "cannot influence. Whatever this is for -- latency, feel, offline -- " ++
+                            "the answer is no.");
                     }
                 }
             }

@@ -110,6 +110,43 @@ pub fn build(b: *std.Build) void {
     const sim_step = b.step("sim", "Run the synthetic city for a simulated week");
     sim_step.dependOn(&run_sim.step);
 
+    // ============================================================================
+    // THE ANDROID STATIC LIBRARY (3.1).
+    //
+    // The pure core, cross-compiled for a phone. This is the payoff the roadmap promised: "the
+    // most portable code that exists" -- no allocations it was not handed, no I/O, no lifetimes.
+    // It cross-compiles because there is nothing in it to be platform-specific about.
+    //
+    // ReleaseSafe, NOT ReleaseFast. This library parses bytes that came off a network from a
+    // server the phone cannot verify, and it runs inside a JVM where a panic is not a crash we
+    // can debug but a corrupted runtime. The overflow and bounds checks stay live.
+    // ============================================================================
+    const android_step = b.step("android", "Build the core as a static library for Android");
+
+    for ([_][]const u8{ "aarch64-linux-android", "x86_64-linux-android" }) |triple| {
+        const query = std.Build.parseTargetQuery(.{ .arch_os_abi = triple }) catch |err| {
+            std.debug.panic("bad android target {s}: {s}", .{ triple, @errorName(err) });
+        };
+
+        const lib = b.addLibrary(.{
+            .name = b.fmt("outbreak-{s}", .{triple}),
+            .linkage = .static,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/ffi.zig"),
+                .target = b.resolveTargetQuery(query),
+                // A library that parses hostile bytes inside a JVM ships with its safety checks
+                // on. A panic across an FFI boundary is undefined behaviour, and a bounds check
+                // is what turns a memory-corruption exploit into a clean abort.
+                .optimize = .ReleaseSafe,
+            }),
+        });
+
+        const install = b.addInstallArtifact(lib, .{
+            .dest_dir = .{ .override = .{ .custom = b.fmt("android/{s}", .{triple}) } },
+        });
+        android_step.dependOn(&install.step);
+    }
+
     // Compiling is enough to fire every comptime guard: the size guards (A7) and the
     // forbidden-construct guard (src/guard.zig). `zig build` must fail on either.
     b.default_step.dependOn(&tests.step);

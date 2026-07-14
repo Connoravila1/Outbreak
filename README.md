@@ -65,6 +65,18 @@ Some rules cannot be left to code review, because the code that breaks them look
 - **No automated punishment, no attestation.** A suspicion score dampens XP and does nothing else. There is no ban, no root detection, no mock-location check, no device fingerprint.
 - **Every hot struct asserts its exact size.** Adding a `bool` to the hot struct costs eight bytes per player per tick, and fails the build rather than passing review.
 
+## Android
+
+```
+zig build android
+```
+
+Cross-compiles the core to a static library for `aarch64-linux-android` and `x86_64-linux-android`, in `ReleaseSafe` — this code parses bytes from a server the phone cannot verify, inside a JVM where a panic is a corrupted runtime rather than a debuggable crash, so the overflow and bounds checks stay on.
+
+The C ABI is `include/outbreak.h`. **Ten functions.** What is absent is the point: there is no combat, no tick, no quorum, no XP, no damage in that library. The phone can quantize a GPS reading into a room, put bytes on a wire, and read bytes off it. It cannot resolve a fight, because the code to resolve one is not there — and the build fails if anyone makes it reachable.
+
+`outbreak_quantize()` is the only function in the entire system, on either side of the network, that accepts a latitude. **The platform shell must take the location, call it, and drop the coordinate in the same function.** The server has no coordinate and cannot leak one; the phone is the only place a coordinate ever exists, so the phone is the only place it can leak from.
+
 ## Balance
 
 Every tunable number, why it holds its current value, and what it costs to change it: **[GAME_RULES.md](GAME_RULES.md)**.

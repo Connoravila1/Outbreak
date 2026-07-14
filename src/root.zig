@@ -54,6 +54,9 @@ pub const credential = @import("credential.zig");
 /// SHELL. The socket. Loopback only; TLS terminates in front (2.3).
 pub const transport = @import("transport.zig");
 
+/// SHELL. The C ABI: what the phone may ask the core to do, and nothing else (3.1, H1).
+pub const ffi = @import("ffi.zig");
+
 comptime {
     // The forbidden-construct guard runs at compile time, so a distance function or a
     // coordinate in the core fails the build rather than the review. Referencing it here
@@ -84,4 +87,5 @@ test {
     _ = @import("credential.zig");
     _ = @import("transport.zig");
     _ = @import("transport_test.zig");
+    _ = @import("ffi.zig");
 }
