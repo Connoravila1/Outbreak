@@ -144,7 +144,7 @@ pub fn build(
             );
         },
 
-        .text => |it| try pushString(out, engine, atlas, gpa, scale, origin, it.x, it.y, it.text, it.weight, it.alignment, rgba(it.color)),
+        .text => |it| try pushString(out, engine, atlas, gpa, scale, origin, it.x, it.y, it.text, it.weight, it.alignment, it.burn, rgba(it.color)),
 
         // A PROCEDURAL SHAPE, SAMPLED FROM THE SAME ATLAS AS THE LETTERS.
         //
@@ -194,6 +194,13 @@ pub fn build(
 /// `{0, 0}` on a device with no insets, which is what a test uses.
 pub const Origin = struct { x: f32 = 0, y: f32 = 0 };
 
+fn countGlyphs(string: []const u8) usize {
+    var n: usize = 0;
+    var it = text.codepoints(string);
+    while (it.next()) |_| n += 1;
+    return n;
+}
+
 /// dp -> physical pixels, snapped to the grid.
 fn px(dp: i32, scale: f32) f32 {
     return @round(@as(f32, @floatFromInt(dp)) * scale);
@@ -217,6 +224,7 @@ fn pushString(
     string: []const u8,
     weight: ui.Weight,
     alignment: ui.Align,
+    burn: u8,
     colour: [4]f32,
 ) Error!void {
     const style = text.styleOf(weight);
@@ -243,12 +251,35 @@ fn pushString(
         .right => anchor - width,
     };
 
+    // ============================================================================
+    // THE BURN. The renderer stages it, because the renderer is the only thing that knows where
+    // the second letter begins.
+    //
+    // Each letter has its own window: it starts igniting a little after the one to its left, and
+    // takes a moment to arrive. While it is arriving it is HOT -- brighter than its final colour,
+    // the way something that is catching light is brighter than something that has caught -- and it
+    // cools to red as it settles.
+    //
+    // The last letter must be fully lit by the time the burn reaches 255, so the stagger is derived
+    // from the length of the string rather than being a magic number that only suits eight letters.
+    const glyphs: f32 = @floatFromInt(@max(1, countGlyphs(string)));
+    const progress: f32 = @as(f32, @floatFromInt(burn)) / 255.0;
+    const dwell: f32 = 0.45; // how long one letter takes to arrive, as a fraction of the whole
+    const stagger: f32 = (1.0 - dwell) / glyphs;
+
+    var index: f32 = 0;
+
     var it = text.codepoints(string);
     while (it.next()) |codepoint| {
         const glyph = try atlas_mod.ensure(atlas, engine, gpa, style.face, physical_px, codepoint);
 
+        // How lit is THIS letter, right now?
+        const began = index * stagger;
+        const lit: f32 = std.math.clamp((progress - began) / dwell, 0.0, 1.0);
+        index += 1;
+
         // A space. It moves the pen and puts no ink on the page (E4).
-        if (glyph.w > 0 and glyph.h > 0) {
+        if (glyph.w > 0 and glyph.h > 0 and lit > 0.0) {
             // `bear_y` is the top of the bitmap relative to the baseline, y DOWN -- so it is
             // normally negative and this SUBTRACTS from the baseline. Adding it here would draw
             // every line of text below where it belongs.
@@ -261,6 +292,17 @@ fn pushString(
             const right: f32 = @as(f32, @floatFromInt(glyph.x + glyph.w)) * inv;
             const bottom: f32 = @as(f32, @floatFromInt(glyph.y + glyph.h)) * inv;
 
+            // Hot while it is arriving, its own colour once it has. The overshoot is what makes it
+            // read as IGNITING rather than fading in -- a letter that merely fades looks like a
+            // slow label; a letter that flares and cools looks like it caught fire.
+            const heat = 1.0 + (1.0 - lit) * 1.4;
+            const burning: [4]f32 = .{
+                @min(1.0, colour[0] * heat),
+                @min(1.0, colour[1] * heat + (1.0 - lit) * 0.35),
+                @min(1.0, colour[2] * heat + (1.0 - lit) * 0.30),
+                colour[3] * lit,
+            };
+
             try pushQuad(
                 out,
                 gpa,
@@ -270,7 +312,7 @@ fn pushString(
                 @floatFromInt(glyph.h),
                 .{ left, top },
                 .{ right, bottom },
-                colour,
+                if (burn == 255) colour else burning,
             );
         }
 

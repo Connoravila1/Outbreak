@@ -109,7 +109,23 @@ pub const Align = enum(u8) { left, center, right };
 /// One thing to put on the screen. Plain data (A1): no methods, no behaviour.
 pub const Draw = union(enum) {
     rect: struct { x: i32, y: i32, w: i32, h: i32, color: Color },
-    text: struct { x: i32, y: i32, text: []const u8, color: Color, weight: Weight, alignment: Align = .left },
+    text: struct {
+        x: i32,
+        y: i32,
+        text: []const u8,
+        color: Color,
+        weight: Weight,
+        alignment: Align = .left,
+
+        /// HOW FAR THROUGH ITS BURN-IN THIS STRING IS. 255 is "fully arrived", and is the default,
+        /// so every other string in the game is unaffected.
+        ///
+        /// Below that, the RENDERER lights the letters one at a time, left to right, each igniting
+        /// hot and cooling to its colour. The core cannot do this itself -- it cannot measure a
+        /// string, so it does not know where the second letter begins. The renderer walks glyphs
+        /// for a living, so the renderer stages the fire; the core only says how far along it is.
+        burn: u8 = 255,
+    },
     sprite: struct { x: i32, y: i32, w: i32, h: i32, color: Color, sprite: Sprite },
 };
 
@@ -739,22 +755,10 @@ fn drawBoot(state: State, size: Size, insets: Insets, out: *std.ArrayList(Draw),
         const since = ms -| began;
         const t: i32 = @intCast(@min(@as(u32, 100), since * 100 / boot_exit_ms));
 
-        // The vignette collapses inward -- the same sprite as the infection wipe, run the rest of
-        // the way. It opened around the wordmark; now it closes over it.
-        const open = 260 - @divTrunc(t * 26, 10); // 260% of the screen down to nothing
-        const w = @divTrunc(size.w * open, 100);
-        const h = @divTrunc(size.h * open, 100);
-        try out.append(gpa, .{ .sprite = .{
-            .x = @divTrunc(size.w, 2) - @divTrunc(w, 2),
-            .y = @divTrunc(size.h, 2) - @divTrunc(h, 2),
-            .w = w,
-            .h = h,
-            .color = .char_deep,
-            .sprite = .vignette,
-        } });
-
-        // And a flare of blood through it as it goes -- brightest in the middle of the wipe, gone
-        // by the end, so the screen does not simply fade: it is TAKEN.
+        // A FLARE, AND THEN THE DARK. No collapsing vignette -- that was the same mistake as the
+        // infection wipe, and it looked like a black rectangle eating the title.
+        //
+        // The screen flares and then goes out. Brightest halfway through, gone by the end.
         const flare: u8 = @intCast(if (t < 50) @as(u32, @intCast(t)) * 90 / 50 else @as(u32, @intCast(100 - t)) * 90 / 50);
         const bloom = size.w * 2;
         try out.append(gpa, .{ .sprite = .{
@@ -781,32 +785,57 @@ fn drawBoot(state: State, size: Size, insets: Insets, out: *std.ArrayList(Draw),
     }
 }
 
+/// How long one character takes to appear. A terminal TYPES; it does not paste.
+const type_ms: u32 = 13;
+
 fn drawBootTerminal(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
-    const shown = @min(boot_lines.len, ms / boot_line_ms + 1);
+    var typing: usize = boot_lines.len; // which line is still being typed, if any
 
-    var i: usize = 0;
-    while (i < shown) : (i += 1) {
+    for (boot_lines, 0..) |l, i| {
+        const began = @as(u32, @intCast(i)) * boot_line_ms;
+        if (ms < began) {
+            typing = @min(typing, i);
+            break;
+        }
+
+        // HOW MUCH OF THIS LINE HAS BEEN TYPED. A slice of the string, not the whole of it -- the
+        // text appears a character at a time, which is the entire difference between a terminal
+        // and a label.
+        const chars = (ms - began) / type_ms;
+        const done = chars >= l.text.len;
+        const upto = @min(l.text.len, chars);
+
         const y: i32 = 90 + @as(i32, @intCast(i)) * 30;
-        const l = boot_lines[i];
 
-        try out.append(gpa, .{ .text = .{ .x = 26, .y = y, .text = l.text, .color = .terminal, .weight = .label } });
-        try out.append(gpa, .{ .text = .{
-            .x = size.w - 26,
-            .y = y,
-            .text = l.status,
-            .color = if (l.bad) .amber else .blood,
-            .weight = .label,
-            .alignment = .right,
-        } });
+        if (upto > 0) {
+            try out.append(gpa, .{ .text = .{ .x = 26, .y = y, .text = l.text[0..upto], .color = .terminal, .weight = .label } });
+        }
+
+        // The verdict lands only once the line has finished saying what it is verdicting.
+        if (done) {
+            try out.append(gpa, .{ .text = .{
+                .x = size.w - 26,
+                .y = y,
+                .text = l.status,
+                .color = if (l.bad) .amber else .blood,
+                .weight = .label,
+                .alignment = .right,
+            } });
+        } else {
+            typing = i;
+        }
     }
 
-    // The cursor, blinking on the next line down. A hard on/off, not a fade -- a terminal cursor
-    // does not breathe.
-    const on = (ms / 500) % 2 == 0;
-    if (on) {
-        const y: i32 = 90 + @as(i32, @intCast(shown)) * 30;
-        try out.append(gpa, .{ .text = .{ .x = 26, .y = y, .text = ">", .color = .terminal, .weight = .label } });
-        try out.append(gpa, .{ .rect = .{ .x = 44, .y = y + 3, .w = 8, .h = 14, .color = .blood } });
+    // The cursor sits at the end of whatever is currently being typed, and on the next line down
+    // once everything is. A hard on/off, not a fade -- a terminal cursor does not breathe.
+    if ((ms / 500) % 2 == 0) {
+        const row = @min(typing, boot_lines.len);
+        const y: i32 = 90 + @as(i32, @intCast(row)) * 30;
+
+        if (row >= boot_lines.len) {
+            try out.append(gpa, .{ .text = .{ .x = 26, .y = y, .text = ">", .color = .terminal, .weight = .label } });
+            try out.append(gpa, .{ .rect = .{ .x = 44, .y = y + 3, .w = 8, .h = 14, .color = .blood } });
+        }
     }
 }
 
@@ -863,32 +892,8 @@ fn drawSpores(ms: u32, size: Size, insets: Insets, out: *std.ArrayList(Draw), gp
 
 /// OUTBREAK. Stencilled, bloomed, and -- for four hundred milliseconds -- broken.
 fn drawWordmark(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
-    // It burns in from sixty percent of the infection, as in the mock.
-    const burn_at = boot_terminal_ms + @divTrunc(boot_infection_ms * 6, 10);
-    if (ms < burn_at) return;
-
     const mid_x = @divTrunc(size.w, 2);
     const mid_y = @divTrunc(size.h, 2);
-
-    // THE HEARTBEAT. Once the sequence has settled, the bloom breathes -- it swells and dims on a
-    // slow cycle, so the title screen is alive rather than a still image with a spinner missing.
-    //
-    // It is the GLOW that pulses, not the letters. Scaling the type would resample the glyphs every
-    // frame and rebuild the atlas; scaling a disc costs one quad and looks like a pulse of light
-    // behind the word, which is what it is meant to be.
-    const idle = ms >= boot_glitch_end;
-    const breath: i32 = if (idle) wander(ms - boot_glitch_end, 2600, 40, 0) else 0;
-    const beat: u8 = if (idle) pulse(ms - boot_glitch_end, 2600, 44, 84) else 60;
-
-    const glow = @divTrunc(size.w * 9, 10) + breath;
-    try out.append(gpa, .{ .sprite = .{
-        .x = mid_x - @divTrunc(glow, 2),
-        .y = mid_y - @divTrunc(glow, 2) - 96,
-        .w = glow,
-        .h = glow,
-        .color = dim(.blood, beat),
-        .sprite = .disc,
-    } });
 
     // HIGHER THAN CENTRE. Optically centred rather than mathematically: a heavy wordmark sitting on
     // the exact middle line reads as low, and there is a tagline hanging beneath it.
@@ -903,7 +908,23 @@ fn drawWordmark(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) 
         try out.append(gpa, .{ .text = .{ .x = mid_x - swing, .y = top, .text = "OUTBREAK", .color = @enumFromInt(0x24A0FFAA), .weight = .wordmark, .alignment = .center } });
     }
 
-    try out.append(gpa, .{ .text = .{ .x = mid_x, .y = top, .text = "OUTBREAK", .color = .blood, .weight = .wordmark, .alignment = .center } });
+    // THE LETTERS BURN IN, ONE AT A TIME, IN LOCKSTEP WITH THE BAR.
+    //
+    // Not a curtain and not a fade. Each letter ignites on its own -- hot, then cooling to red --
+    // fifty milliseconds after the one before it. The left-to-right feel is a CONSEQUENCE of the
+    // stagger, not a wipe passing over the word.
+    const into = ms -| boot_terminal_ms;
+    const burn: u8 = @intCast(@min(@as(u32, 255), into * 255 / boot_infection_ms));
+
+    try out.append(gpa, .{ .text = .{
+        .x = mid_x,
+        .y = top,
+        .text = "OUTBREAK",
+        .color = .blood,
+        .weight = .wordmark,
+        .alignment = .center,
+        .burn = burn,
+    } });
 
     // THE STENCIL BREAKS. The mock does this with a repeating-linear-gradient: 14px clear, 2px of
     // background, over and over. So do we -- except ours are literal rectangles of background
@@ -912,6 +933,33 @@ fn drawWordmark(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) 
     while (x < mid_x + @divTrunc(size.w, 2)) : (x += 18) {
         try out.append(gpa, .{ .rect = .{ .x = x, .y = top - 8, .w = 2, .h = 84, .color = dim(.char_deep, 140) } });
     }
+
+    // ============================================================================
+    // THE BLOOM GOES ON LAST, AND THAT ORDER IS THE WHOLE FIX.
+    //
+    // Painted BEHIND the letters, the curtain that hides the unrevealed half also punches a
+    // hard-edged rectangle out of the glow -- a black box, sitting in the middle of the screen,
+    // with corners. It was the first thing you saw.
+    //
+    // Painted LAST, the glow lies over everything: the letters, the curtain, and the seam between
+    // them. It is a soft radial disc, so it has no edges of its own to give the game away, and the
+    // curtain becomes invisible. The word simply arrives out of the light.
+    //
+    // It is the GLOW that pulses when idle, not the letters. Scaling the type would re-rasterize
+    // every glyph and rebuild the atlas sixty times a second; scaling a disc is one quad.
+    const idle = ms >= boot_glitch_end;
+    const breath: i32 = if (idle) wander(ms - boot_glitch_end, 2600, 40, 0) else 0;
+    const beat: u8 = if (idle) pulse(ms - boot_glitch_end, 2600, 44, 84) else 60;
+
+    const glow = @divTrunc(size.w * 9, 10) + breath;
+    try out.append(gpa, .{ .sprite = .{
+        .x = mid_x - @divTrunc(glow, 2),
+        .y = mid_y - @divTrunc(glow, 2) - 96,
+        .w = glow,
+        .h = glow,
+        .color = dim(.blood, beat),
+        .sprite = .disc,
+    } });
 }
 
 /// The infection: the bar fills, and the dark closes in around the wordmark.
@@ -919,24 +967,18 @@ fn drawInfection(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocator)
     const into = ms - boot_terminal_ms;
     const percent: i32 = @intCast(@min(100, into * 100 / boot_infection_ms));
 
-    // THE WIPE. The vignette sprite, tinted with the background and scaled far past the screen, so
-    // its transparent centre is a hole that CLOSES as the infection takes hold. In the mock this
-    // is a radial-gradient whose radius shrinks; here it is one quad, and the same one draw call.
-    const open = 320 - percent * 3; // percent of the screen, 320 -> 20
-    const wipe_w = @divTrunc(size.w * open, 100);
-    const wipe_h = @divTrunc(size.h * open, 100);
-    try out.append(gpa, .{ .sprite = .{
-        .x = @divTrunc(size.w, 2) - @divTrunc(wipe_w, 2),
-        .y = @divTrunc(size.h, 2) - @divTrunc(wipe_h, 2),
-        .w = wipe_w,
-        .h = wipe_h,
-        .color = .char_deep,
-        .sprite = .vignette,
-    } });
+    // THERE IS NO VIGNETTE HERE ANY MORE, AND ITS ABSENCE IS THE POINT.
+    //
+    // I read the mock's radius backwards and shipped a dark disc that CLOSED over the wordmark --
+    // a black rectangle shrinking onto the title, which is exactly as bad as it sounds. The
+    // infection is not something that hides the word. The infection IS the word arriving.
+    //
+    // The reveal lives in `drawWordmark`, in lockstep with the bar below.
 
     const left: i32 = 38;
     const right: i32 = size.w - 38;
-    const bar_y = size.h - 74;
+    // Well clear of the bottom. It sat 74dp up, which on a phone is jammed against the gesture bar.
+    const bar_y = size.h - 210;
 
     try out.append(gpa, .{ .text = .{ .x = left, .y = bar_y - 18, .text = "C O N T A I N M E N T   F A I L I N G", .color = .faint, .weight = .label } });
 
@@ -1334,17 +1376,32 @@ test "THE BOOT SEQUENCE IS A PURE FUNCTION OF A MILLISECOND" {
     try draw(.{ .screen = .boot, .boot_ms = 300 }, size, .{}, &out, gpa);
     try testing.expect(!wordmarkAt(out.items));
 
-    var saw_first_line = false;
+    // THE TERMINAL TYPES. At 300ms the first line is a PREFIX of itself -- a few characters in --
+    // and the last line has not been reached at all. A test that looked for the whole string would
+    // be asserting that the terminal pastes.
+    var partial_first = false;
     var saw_last_line = false;
     for (out.items) |item| switch (item) {
         .text => |t| {
-            if (std.mem.eql(u8, t.text, boot_lines[0].text)) saw_first_line = true;
-            if (std.mem.eql(u8, t.text, boot_lines[4].text)) saw_last_line = true;
+            if (t.text.len > 0 and t.text.len < boot_lines[0].text.len and
+                std.mem.startsWith(u8, boot_lines[0].text, t.text)) partial_first = true;
+            if (std.mem.startsWith(u8, boot_lines[4].text, t.text) and t.text.len > 2) saw_last_line = true;
         },
         else => {},
     };
-    try testing.expect(saw_first_line);
-    try testing.expect(!saw_last_line); // the terminal types; it does not paste
+    try testing.expect(partial_first);
+    try testing.expect(!saw_last_line);
+
+    // And by the end of its slot, the line is complete and its verdict has landed.
+    try draw(.{ .screen = .boot, .boot_ms = boot_line_ms - 1 }, size, .{}, &out, gpa);
+    var complete_first = false;
+    for (out.items) |item| switch (item) {
+        .text => |t| if (std.mem.eql(u8, t.text, boot_lines[0].text)) {
+            complete_first = true;
+        },
+        else => {},
+    };
+    try testing.expect(complete_first);
 
     // LATE IN THE TERMINAL: every line is up, including the one that is not OK.
     try draw(.{ .screen = .boot, .boot_ms = boot_terminal_ms - 1 }, size, .{}, &out, gpa);
@@ -1357,12 +1414,38 @@ test "THE BOOT SEQUENCE IS A PURE FUNCTION OF A MILLISECOND" {
     };
     try testing.expect(saw_contamination);
 
-    // THE WORDMARK burns in partway through the infection, not before it.
-    try draw(.{ .screen = .boot, .boot_ms = boot_terminal_ms + 100 }, size, .{}, &out, gpa);
+    // THE WORDMARK IS NOT ON THE TERMINAL SCREEN AT ALL.
+    try draw(.{ .screen = .boot, .boot_ms = boot_terminal_ms - 1 }, size, .{}, &out, gpa);
     try testing.expect(!wordmarkAt(out.items));
 
-    try draw(.{ .screen = .boot, .boot_ms = boot_infection_end - 1 }, size, .{}, &out, gpa);
+    // AND FROM THE FIRST MILLISECOND OF THE INFECTION IT IS THERE -- but barely lit. The letters
+    // BURN IN one at a time, in lockstep with the bar, and the string carries how far through that
+    // fire it is. The renderer stages the stagger, because only the renderer knows where the second
+    // letter begins.
+    const burnAt = struct {
+        fn at(list: []const Draw) u8 {
+            for (list) |item| switch (item) {
+                .text => |t| if (t.weight == .wordmark) return t.burn,
+                else => {},
+            };
+            return 255;
+        }
+    }.at;
+
+    try draw(.{ .screen = .boot, .boot_ms = boot_terminal_ms + 20 }, size, .{}, &out, gpa);
     try testing.expect(wordmarkAt(out.items));
+    const early = burnAt(out.items);
+
+    try draw(.{ .screen = .boot, .boot_ms = boot_terminal_ms + @divTrunc(boot_infection_ms, 2) }, size, .{}, &out, gpa);
+    const midway = burnAt(out.items);
+
+    // The fire spreads. If it does not, the word is popping in rather than igniting.
+    try testing.expect(early < midway);
+
+    // And by the end of the infection it has fully caught: every letter is lit, at its own colour.
+    try draw(.{ .screen = .boot, .boot_ms = boot_infection_end }, size, .{}, &out, gpa);
+    try testing.expect(wordmarkAt(out.items));
+    try testing.expectEqual(@as(u8, 255), burnAt(out.items));
 
     // AT REST: the wordmark is up, the invitation is pulsing, and nothing is still loading.
     try draw(.{ .screen = .boot, .boot_ms = boot_glitch_end + 1200 }, size, .{}, &out, gpa);
