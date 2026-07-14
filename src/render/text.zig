@@ -89,6 +89,9 @@ pub fn styleOf(weight: ui.Weight) Style {
         .body => .{ .face = .inter, .px = 17 },
         .heading => .{ .face = .oxanium_bold, .px = 22 },
         .alarm => .{ .face = .oxanium_extrabold, .px = 22 },
+
+        // THE WORDMARK. The one piece of type in the game that is a picture rather than a sentence.
+        .wordmark => .{ .face = .oxanium_extrabold, .px = 52 },
     };
 }
 

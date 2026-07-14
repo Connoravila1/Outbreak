@@ -144,7 +144,44 @@ pub fn build(
             );
         },
 
-        .text => |it| try pushString(out, engine, atlas, gpa, scale, origin, it.x, it.y, it.text, it.weight, rgba(it.color)),
+        .text => |it| try pushString(out, engine, atlas, gpa, scale, origin, it.x, it.y, it.text, it.weight, it.alignment, rgba(it.color)),
+
+        // A PROCEDURAL SHAPE, SAMPLED FROM THE SAME ATLAS AS THE LETTERS.
+        //
+        // This is the whole of the gradient support in this renderer: a quad, a tint, and a soft
+        // coverage bitmap that was written into the texture at startup. A spore, a bloom, a wipe.
+        // No second shader, no second pass, no gradient code.
+        .sprite => |it| {
+            if (it.w <= 0 or it.h <= 0) continue;
+
+            const shape = atlas_mod.spriteRect(atlas, it.sprite);
+            if (shape.w == 0) continue;
+
+            const inv: f32 = 1.0 / @as(f32, @floatFromInt(atlas.dim));
+
+            // HALF A TEXEL IN FROM EVERY EDGE. Sampling exactly on the boundary lets a LINEAR
+            // filter reach into the gutter -- and the neighbour of a soft disc is whatever glyph
+            // was packed next to it, which would ring the glow with a faint letter.
+            const left = (@as(f32, @floatFromInt(shape.x)) + 0.5) * inv;
+            const top = (@as(f32, @floatFromInt(shape.y)) + 0.5) * inv;
+            const right = (@as(f32, @floatFromInt(shape.x + shape.w)) - 0.5) * inv;
+            const bottom = (@as(f32, @floatFromInt(shape.y + shape.h)) - 0.5) * inv;
+
+            const x = px(it.x, scale) + origin.x;
+            const y = px(it.y, scale) + origin.y;
+
+            try pushQuad(
+                out,
+                gpa,
+                x,
+                y,
+                px(it.x + it.w, scale) - px(it.x, scale),
+                px(it.y + it.h, scale) - px(it.y, scale),
+                .{ left, top },
+                .{ right, bottom },
+                rgba(it.color),
+            );
+        },
     };
 }
 
@@ -179,6 +216,7 @@ fn pushString(
     y: i32,
     string: []const u8,
     weight: ui.Weight,
+    alignment: ui.Align,
     colour: [4]f32,
 ) Error!void {
     const style = text.styleOf(weight);
@@ -194,7 +232,16 @@ fn pushString(
 
     // Everything from here down is in PHYSICAL pixels.
     const baseline: i32 = @as(i32, @intFromFloat(px(y, scale) + origin.y)) + line.ascent;
-    var pen: i32 = @intFromFloat(px(x, scale) + origin.x);
+
+    // THE CORE ASKED FOR AN ALIGNMENT; THE RENDERER HAS THE FONT, SO THE RENDERER DOES THE SUM.
+    // This is the only place in the system that knows how wide a sentence is.
+    const width = text.measure(engine, style.face, physical_px, string);
+    const anchor: i32 = @intFromFloat(px(x, scale) + origin.x);
+    var pen: i32 = switch (alignment) {
+        .left => anchor,
+        .center => anchor - @divTrunc(width, 2),
+        .right => anchor - width,
+    };
 
     var it = text.codepoints(string);
     while (it.next()) |codepoint| {
@@ -530,7 +577,7 @@ test "DENSITY: a touch in physical pixels finds the button that was laid out in 
     try testing.expectEqual(@as(i32, 800), size_dp.h);
 
     // A player taps the middle of the Confirm button. `ui.zig` decides where that is, in dp.
-    var state: ui.State = .{};
+    var state: ui.State = .{ .screen = .choose_side };
     state = ui.touch(state, .{ .x = 60, .y = 300 }, size_dp); // a faction card
     try testing.expect(state.hovering != null);
 
@@ -544,7 +591,7 @@ test "DENSITY: a touch in physical pixels finds the button that was laid out in 
         .y = @intFromFloat(@round(@as(f32, @floatFromInt(physical_y)) / scale)),
     };
 
-    var same: ui.State = .{};
+    var same: ui.State = .{ .screen = .choose_side };
     same = ui.touch(same, back_to_dp, size_dp);
     try testing.expectEqual(state.hovering, same.hovering);
     try testing.expect(same.hovering != null);
@@ -621,7 +668,7 @@ test "the real screens rasterise, the background is first, and every screen has 
     const size: ui.Size = .{ .w = 1080, .h = 2400 };
 
     for ([_]ui.State{
-        .{},
+        .{ .screen = .choose_side },
         .{ .screen = .quiet, .faction = .human },
         .{ .screen = .live, .faction = .zombie, .hp = 40, .crowd = .dozens, .momentum = .zombies_winning },
     }) |state| {

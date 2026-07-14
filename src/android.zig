@@ -530,6 +530,14 @@ fn render() void {
 
     _ = ALooper_prepare(0);
 
+    // WHEN THE APP OPENED. The boot sequence is a pure function of the milliseconds since this
+    // instant -- the core never asks the time, it is handed a number (B3, B7).
+    //
+    // `.awake` rather than `.real`: a monotonic clock that cannot be dragged backwards by NTP, and
+    // that stops counting while the phone is suspended. A boot animation should not jump because a
+    // time server corrected the clock halfway through it.
+    const opened_at = Io.Timestamp.now(io, .awake);
+
     // ---- THE SCREEN IS REDRAWN WHEN IT CHANGES, AND NEVER OTHERWISE.
     //
     // The tick is thirty seconds wide and the screen is a still image between ticks. Redrawing it
@@ -635,6 +643,15 @@ fn render() void {
         const state = blk: {
             host.mutex.lock(io) catch break;
             defer host.mutex.unlock(io);
+
+            // The clock, handed to the core as a plain number. This is the ONLY place the boot
+            // animation gets its time, and the core cannot reach for it (B3).
+            if (host.state.screen == .boot) {
+                const now = Io.Timestamp.now(io, .awake);
+                const elapsed = now.nanoseconds - opened_at.nanoseconds;
+                host.state.boot_ms = @intCast(@divTrunc(@max(0, elapsed), std.time.ns_per_ms));
+            }
+
             break :blk host.state;
         };
 
@@ -642,7 +659,14 @@ fn render() void {
         ui.draw(state, sizeInDp(&surface), &draws, gpa) catch continue;
 
         present(&surface, draws.items, &engine, &atlas, &verts, gpa);
-        dirty = false;
+
+        // THE BOOT SEQUENCE IS THE ONE THING IN THIS GAME THAT ANIMATES, so it is the one thing
+        // that redraws without being asked. It lasts about four seconds, once, at startup.
+        //
+        // Everything else in the game is a still image between thirty-second ticks, and it is not
+        // redrawn until something changes. That is the difference between an animation and a
+        // battery leak, and it is why this line is a condition rather than a `true` (G5).
+        dirty = state.screen == .boot;
     }
 }
 

@@ -41,7 +41,7 @@ const Crowd = combat.Crowd;
 const Faction = world_mod.Faction;
 const Momentum = combat.Momentum;
 
-/// Packed RGBA. The palette of the feel prototype: near-black, bone, and blood.
+/// Packed RGBA. Near-black, bone, and blood.
 pub const Color = enum(u32) {
     void_black = 0x08080AFF,
     carrion = 0x101013FF,
@@ -54,22 +54,78 @@ pub const Color = enum(u32) {
     clot = 0x4A1416FF,
     scab = 0x2A0D0EFF,
     serum = 0x7A5A5AFF,
+
+    // ---- the boot sequence. Scorched char, and blood under a bad light.
+    char = 0x171514FF,
+    char_deep = 0x0D0C0BFF,
+    blood = 0xE30613FF,
+    blood_deep = 0xA30410FF,
+    blood_glow = 0xFF2436FF,
+    amber = 0xF0A020FF,
+    terminal = 0x8A8078FF,
+    faint = 0x6A625DFF,
+
+    // Non-exhaustive, so the shell can carry an alpha-varied tint without a new name for every
+    // step of a fade. `dim()` below is the only sanctioned way to make one.
     _,
 };
 
-pub const Weight = enum(u8) { label, body, heading, alarm };
+/// The same colour, at a fraction of its opacity.
+///
+/// A fade is not a new colour and does not deserve a new name in the palette. `alpha` is 0..255,
+/// and the RGB is untouched -- the renderer multiplies it into the coverage.
+pub fn dim(colour: Color, alpha: u8) Color {
+    return @enumFromInt((@intFromEnum(colour) & 0xFFFFFF00) | @as(u32, alpha));
+}
+
+/// A shape the renderer bakes into its atlas at startup, so that one shader and one draw call can
+/// still produce something that is not a rectangle.
+///
+/// The whole renderer is "colour times a coverage value sampled from a texture". A letter samples
+/// its glyph; a rectangle samples a white texel. So a RADIAL FALLOFF baked into that same texture
+/// is a soft dot -- and a soft dot, tinted and scaled, is every gradient the boot screen needs.
+///
+/// This is why there is no second shader and no gradient code: there did not need to be one.
+pub const Sprite = enum {
+    /// Opaque at the centre, fading to nothing at the rim. A spore. A glow. A bloom.
+    disc,
+    /// The inverse: a hole in the middle, opaque at the edges. Scaled up over the screen and
+    /// tinted with the background, it is a circular wipe that opens outward.
+    vignette,
+};
+
+pub const Weight = enum(u8) { label, body, heading, alarm, wordmark };
+
+/// WHERE THE TEXT SITS RELATIVE TO ITS x.
+///
+/// The core cannot measure a string -- it has no font, and it is never going to have one. The
+/// RENDERER has the font, so the renderer does the arithmetic: the core says "centre this here"
+/// and the shell works out where "here" begins.
+///
+/// Before this existed, `ui.zig` right-aligned by guessing a pixel offset (`size.w - pad - 80`),
+/// which is a magic number that is wrong for every string except the one it was tuned against.
+pub const Align = enum(u8) { left, center, right };
 
 /// One thing to put on the screen. Plain data (A1): no methods, no behaviour.
 pub const Draw = union(enum) {
     rect: struct { x: i32, y: i32, w: i32, h: i32, color: Color },
-    text: struct { x: i32, y: i32, text: []const u8, color: Color, weight: Weight },
+    text: struct { x: i32, y: i32, text: []const u8, color: Color, weight: Weight, alignment: Align = .left },
+    sprite: struct { x: i32, y: i32, w: i32, h: i32, color: Color, sprite: Sprite },
 };
 
 /// What the phone knows. All of it.
 ///
 /// A7.2: cold struct, size guard waived -- there is exactly one of these.
 pub const State = struct {
-    screen: Screen = .choose_side,
+    screen: Screen = .boot,
+
+    /// MILLISECONDS SINCE THE APP OPENED. Supplied by the shell; the core never asks the time.
+    ///
+    /// This is the same trick as the tick: time is not something the core reaches for, it is a
+    /// value handed in (B3, B7). The boot sequence is therefore a PURE FUNCTION of this number --
+    /// which means the whole animation is testable at any instant, on a laptop, with no phone and
+    /// no clock, by simply passing the millisecond you want to look at.
+    boot_ms: u32 = 0,
 
     /// Chosen once, permanently. Null until they choose.
     faction: ?Faction = null,
@@ -95,6 +151,9 @@ pub const State = struct {
 };
 
 pub const Screen = enum {
+    /// The boot sequence. Terminal, infection, wordmark.
+    boot,
+
     choose_side,
     quiet,
     live,
@@ -172,6 +231,10 @@ pub fn touch(state: State, at: Touch, size: Size) State {
     var next = state;
 
     switch (state.screen) {
+        // A tap ends the boot sequence, at ANY point in it. A splash screen you cannot skip is a
+        // splash screen that is being shown to you for someone else's benefit.
+        .boot => next.screen = if (state.faction == null) .choose_side else .quiet,
+
         .choose_side => {
             const human = factionButton(size, .human);
             const zombie = factionButton(size, .zombie);
@@ -331,6 +394,7 @@ pub fn draw(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allocator)
     try out.append(gpa, .{ .rect = .{ .x = 0, .y = 0, .w = size.w, .h = size.h, .color = .void_black } });
 
     switch (state.screen) {
+        .boot => try drawBoot(state, size, out, gpa),
         .choose_side => try drawChooseSide(state, size, out, gpa),
         .quiet => try drawQuiet(state, size, out, gpa),
         .live => try drawLive(state, size, out, gpa),
@@ -472,6 +536,266 @@ fn drawLive(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allocator)
     try out.append(gpa, .{ .text = .{ .x = leave.x, .y = leave.y, .text = "Walk away", .color = .grave, .weight = .body } });
 }
 
+// ============================================================================ the boot sequence
+
+/// The phases, in milliseconds since the app opened.
+///
+/// A PURE FUNCTION OF `boot_ms` AND NOTHING ELSE. There is no timer, no callback, no animation
+/// state machine, and nothing to get out of step -- ask for millisecond 2,400 and you get exactly
+/// the frame that belongs at millisecond 2,400, forever, on any machine.
+const boot_terminal_ms: u32 = 1900;
+const boot_infection_ms: u32 = 1300;
+const boot_glitch_ms: u32 = 420;
+
+const boot_infection_end = boot_terminal_ms + boot_infection_ms;
+const boot_glitch_end = boot_infection_end + boot_glitch_ms;
+
+/// The line the terminal is on, and how far into that line we are.
+const boot_line_ms: u32 = boot_terminal_ms / boot_lines.len;
+
+const BootLine = struct { text: []const u8, status: []const u8, bad: bool };
+
+const boot_lines = [_]BootLine{
+    .{ .text = "> SECTOR SCAN . . . . . . .", .status = "[ OK ]", .bad = false },
+    .{ .text = "> QUARANTINE PROTOCOL", .status = "[ OK ]", .bad = false },
+    .{ .text = "> SIGNAL LOCK ACQUIRED", .status = "[ OK ]", .bad = false },
+    .{ .text = "> CONTAMINATION DETECTED", .status = "[ !! ]", .bad = true },
+    .{ .text = "> ESTABLISHING PERIMETER", .status = "[ OK ]", .bad = false },
+};
+
+/// Spores. Fixed positions, as thousandths of the band, so the field is identical every boot and
+/// on every screen size. A random scatter would need a clock or a seed, and the core has neither.
+const Spore = struct { fx: i32, fy: i32, r: i32, hot: bool };
+
+const spores = [_]Spore{
+    .{ .fx = 100, .fy = 200, .r = 3, .hot = false },
+    .{ .fx = 220, .fy = 550, .r = 4, .hot = false },
+    .{ .fx = 330, .fy = 120, .r = 2, .hot = true },
+    .{ .fx = 460, .fy = 700, .r = 5, .hot = false },
+    .{ .fx = 580, .fy = 300, .r = 3, .hot = false },
+    .{ .fx = 670, .fy = 600, .r = 2, .hot = true },
+    .{ .fx = 780, .fy = 180, .r = 4, .hot = false },
+    .{ .fx = 880, .fy = 480, .r = 3, .hot = false },
+    .{ .fx = 150, .fy = 800, .r = 4, .hot = false },
+    .{ .fx = 400, .fy = 900, .r = 2, .hot = true },
+    .{ .fx = 720, .fy = 850, .r = 4, .hot = false },
+    .{ .fx = 920, .fy = 780, .r = 3, .hot = false },
+    .{ .fx = 280, .fy = 400, .r = 6, .hot = false },
+    .{ .fx = 520, .fy = 500, .r = 4, .hot = false },
+};
+
+/// A triangle wave, 0..255, integer only. The core has no floats and does not need them for this.
+fn pulse(ms: u32, period: u32, low: u32, high: u32) u8 {
+    const half = period / 2;
+    const phase = ms % period;
+    const rising = phase < half;
+    const t = if (rising) phase else half - (phase - half);
+    return @intCast(low + (high - low) * t / half);
+}
+
+fn drawBoot(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
+    const ms = state.boot_ms;
+
+    // Scorched char, not the game's usual near-black. The boot screen is a different room.
+    try out.append(gpa, .{ .rect = .{ .x = 0, .y = 0, .w = size.w, .h = size.h, .color = .char_deep } });
+
+    if (ms < boot_terminal_ms) {
+        try drawBootTerminal(ms, size, out, gpa);
+    } else {
+        try drawSpores(size, out, gpa);
+        try drawWordmark(ms, size, out, gpa);
+
+        if (ms < boot_infection_end) {
+            try drawInfection(ms, size, out, gpa);
+        } else {
+            try drawBootTail(ms, size, out, gpa);
+        }
+    }
+
+    try drawScanlines(size, out, gpa);
+}
+
+fn drawBootTerminal(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
+    const shown = @min(boot_lines.len, ms / boot_line_ms + 1);
+
+    var i: usize = 0;
+    while (i < shown) : (i += 1) {
+        const y: i32 = 90 + @as(i32, @intCast(i)) * 30;
+        const l = boot_lines[i];
+
+        try out.append(gpa, .{ .text = .{ .x = 26, .y = y, .text = l.text, .color = .terminal, .weight = .label } });
+        try out.append(gpa, .{ .text = .{
+            .x = size.w - 26,
+            .y = y,
+            .text = l.status,
+            .color = if (l.bad) .amber else .blood,
+            .weight = .label,
+            .alignment = .right,
+        } });
+    }
+
+    // The cursor, blinking on the next line down. A hard on/off, not a fade -- a terminal cursor
+    // does not breathe.
+    const on = (ms / 500) % 2 == 0;
+    if (on) {
+        const y: i32 = 90 + @as(i32, @intCast(shown)) * 30;
+        try out.append(gpa, .{ .text = .{ .x = 26, .y = y, .text = ">", .color = .terminal, .weight = .label } });
+        try out.append(gpa, .{ .rect = .{ .x = 44, .y = y + 3, .w = 8, .h = 14, .color = .blood } });
+    }
+}
+
+/// The spore fields: a band at the top, and the same band mirrored at the bottom.
+fn drawSpores(size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
+    const band = @divTrunc(size.h * 34, 100);
+
+    for (spores) |s| {
+        const x = @divTrunc(size.w * s.fx, 1000);
+        const y = @divTrunc(band * s.fy, 1000);
+        const colour: Color = if (s.hot) .blood_glow else .blood_deep;
+
+        // Top.
+        try out.append(gpa, .{ .sprite = .{ .x = x - s.r, .y = y - s.r, .w = s.r * 2, .h = s.r * 2, .color = colour, .sprite = .disc } });
+        // And mirrored at the bottom, exactly as the mock flips the band.
+        try out.append(gpa, .{ .sprite = .{ .x = x - s.r, .y = size.h - y - s.r, .w = s.r * 2, .h = s.r * 2, .color = colour, .sprite = .disc } });
+    }
+
+    // The two soft blooms that make it a field rather than a scatter of dots.
+    const bloom = @divTrunc(size.w * 7, 10);
+    try out.append(gpa, .{ .sprite = .{
+        .x = @divTrunc(size.w * 3, 10) - @divTrunc(bloom, 2),
+        .y = @divTrunc(band * 3, 10) - @divTrunc(bloom, 2),
+        .w = bloom,
+        .h = bloom,
+        .color = dim(.blood, 26),
+        .sprite = .disc,
+    } });
+    try out.append(gpa, .{ .sprite = .{
+        .x = @divTrunc(size.w * 7, 10) - @divTrunc(bloom, 2),
+        .y = size.h - @divTrunc(band * 6, 10) - @divTrunc(bloom, 2),
+        .w = bloom,
+        .h = bloom,
+        .color = dim(.blood, 20),
+        .sprite = .disc,
+    } });
+}
+
+/// OUTBREAK. Stencilled, bloomed, and -- for four hundred milliseconds -- broken.
+fn drawWordmark(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
+    // It burns in from sixty percent of the infection, as in the mock.
+    const burn_at = boot_terminal_ms + @divTrunc(boot_infection_ms * 6, 10);
+    if (ms < burn_at) return;
+
+    const mid_x = @divTrunc(size.w, 2);
+    const mid_y = @divTrunc(size.h, 2);
+
+    // The bloom. This is the disc doing the work a `text-shadow` does in CSS -- and it is the same
+    // one draw call as everything else.
+    const glow = @divTrunc(size.w * 9, 10);
+    try out.append(gpa, .{ .sprite = .{
+        .x = mid_x - @divTrunc(glow, 2),
+        .y = mid_y - @divTrunc(glow, 2) - 10,
+        .w = glow,
+        .h = glow,
+        .color = dim(.blood, 60),
+        .sprite = .disc,
+    } });
+
+    const top = mid_y - 40;
+
+    // THE GLITCH. Two off-register copies, red and cold blue, for the length of one flinch. The
+    // channels tear apart and snap back -- exactly what the CSS does with `text-shadow` offsets.
+    const glitching = ms >= boot_infection_end and ms < boot_glitch_end;
+    if (glitching) {
+        const swing: i32 = if ((ms / 60) % 2 == 0) 3 else -3;
+        try out.append(gpa, .{ .text = .{ .x = mid_x + swing, .y = top, .text = "OUTBREAK", .color = dim(.blood_glow, 170), .weight = .wordmark, .alignment = .center } });
+        try out.append(gpa, .{ .text = .{ .x = mid_x - swing, .y = top, .text = "OUTBREAK", .color = @enumFromInt(0x24A0FFAA), .weight = .wordmark, .alignment = .center } });
+    }
+
+    try out.append(gpa, .{ .text = .{ .x = mid_x, .y = top, .text = "OUTBREAK", .color = .blood, .weight = .wordmark, .alignment = .center } });
+
+    // THE STENCIL BREAKS. The mock does this with a repeating-linear-gradient: 14px clear, 2px of
+    // background, over and over. So do we -- except ours are literal rectangles of background
+    // colour painted back over the letters, which is what that gradient was always describing.
+    var x: i32 = mid_x - @divTrunc(size.w, 2);
+    while (x < mid_x + @divTrunc(size.w, 2)) : (x += 16) {
+        try out.append(gpa, .{ .rect = .{ .x = x, .y = top - 6, .w = 2, .h = 68, .color = dim(.char_deep, 140) } });
+    }
+}
+
+/// The infection: the bar fills, and the dark closes in around the wordmark.
+fn drawInfection(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
+    const into = ms - boot_terminal_ms;
+    const percent: i32 = @intCast(@min(100, into * 100 / boot_infection_ms));
+
+    // THE WIPE. The vignette sprite, tinted with the background and scaled far past the screen, so
+    // its transparent centre is a hole that CLOSES as the infection takes hold. In the mock this
+    // is a radial-gradient whose radius shrinks; here it is one quad, and the same one draw call.
+    const open = 320 - percent * 3; // percent of the screen, 320 -> 20
+    const wipe_w = @divTrunc(size.w * open, 100);
+    const wipe_h = @divTrunc(size.h * open, 100);
+    try out.append(gpa, .{ .sprite = .{
+        .x = @divTrunc(size.w, 2) - @divTrunc(wipe_w, 2),
+        .y = @divTrunc(size.h, 2) - @divTrunc(wipe_h, 2),
+        .w = wipe_w,
+        .h = wipe_h,
+        .color = .char_deep,
+        .sprite = .vignette,
+    } });
+
+    const left: i32 = 38;
+    const right: i32 = size.w - 38;
+    const bar_y = size.h - 74;
+
+    try out.append(gpa, .{ .text = .{ .x = left, .y = bar_y - 18, .text = "C O N T A I N M E N T   F A I L I N G", .color = .faint, .weight = .label } });
+
+    try out.append(gpa, .{ .rect = .{ .x = left, .y = bar_y, .w = right - left, .h = 3, .color = .char } });
+    try out.append(gpa, .{ .rect = .{
+        .x = left,
+        .y = bar_y,
+        .w = @divTrunc((right - left) * percent, 100),
+        .h = 3,
+        .color = .blood_glow,
+    } });
+}
+
+/// The tagline, and the invitation.
+fn drawBootTail(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
+    const mid_x = @divTrunc(size.w, 2);
+
+    const since = ms - boot_glitch_end;
+    const fade: u8 = @intCast(@min(@as(u32, 255), since * 255 / 400));
+
+    try out.append(gpa, .{ .text = .{
+        .x = mid_x,
+        .y = @divTrunc(size.h, 2) + 44,
+        .text = "H U M A N I T Y ' S   L A S T   S T A N D",
+        .color = dim(.faint, fade),
+        .weight = .label,
+        .alignment = .center,
+    } });
+
+    // Breathing, not blinking. It is an invitation, not an alarm.
+    if (since > 300) {
+        try out.append(gpa, .{ .text = .{
+            .x = mid_x,
+            .y = size.h - 52,
+            .text = "T A P   T O   E N T E R",
+            .color = dim(.terminal, pulse(since, 1600, 90, 255)),
+            .weight = .label,
+            .alignment = .center,
+        } });
+    }
+}
+
+/// The CRT. Six percent white, every third row. It costs a few hundred rectangles and it is what
+/// makes the whole thing feel like it is being displayed rather than drawn.
+fn drawScanlines(size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
+    var y: i32 = 0;
+    while (y < size.h) : (y += 3) {
+        try out.append(gpa, .{ .rect = .{ .x = 0, .y = y, .w = size.w, .h = 1, .color = dim(.bone, 15) } });
+    }
+}
+
 fn factionLabel(faction: ?Faction) []const u8 {
     const f = faction orelse return "";
     return switch (f) {
@@ -533,7 +857,9 @@ test "the fight reads the same to both sides" {
 test "choosing a side is permanent" {
     const size: Size = .{ .w = 380, .h = 760 };
 
-    var state: State = .{};
+    // Explicit now that the app opens on the boot sequence. A test that relied on the default was
+    // a test that would have silently changed meaning the day the default did.
+    var state: State = .{ .screen = .choose_side };
     try testing.expectEqual(Screen.choose_side, state.screen);
 
     // Tapping a card highlights it. It does not commit.
@@ -625,7 +951,7 @@ test "the draw list says nothing the state did not" {
             if (std.mem.eql(u8, t.text, "Nothing here.")) found_nothing_here = true;
             for (t.text) |char| try testing.expect(!std.ascii.isDigit(char));
         },
-        .rect => {},
+        .rect, .sprite => {},
     };
 
     try testing.expect(found_nothing_here);
@@ -648,7 +974,7 @@ test "THE CREDIT IS REACHABLE, AND IT NAMES THE PEOPLE" {
 
     // Reachable from the two screens a player looks at when nothing is happening.
     for ([_]State{
-        .{},
+        .{ .screen = .choose_side },
         .{ .screen = .quiet, .faction = .human },
     }) |start| {
         const link = creditsLink(size);
@@ -689,7 +1015,7 @@ test "THE CREDIT IS REACHABLE, AND IT NAMES THE PEOPLE" {
             if (std.mem.indexOf(u8, t.text, "Open Font License") != null) has_fonts = true;
             if (std.mem.indexOf(u8, t.text, "stb_truetype") != null) has_stb = true;
         },
-        .rect => {},
+        .rect, .sprite => {},
     };
 
     try testing.expect(has_creator);
@@ -704,7 +1030,95 @@ test "THE CREDIT IS REACHABLE, AND IT NAMES THE PEOPLE" {
     try testing.expectEqual(Screen.quiet, left.screen);
 
     // Reading the credits is not a way to skip choosing a side.
-    const undecided = touch(.{ .screen = .credits }, .{ .x = back.x + 4, .y = back.y + 4 }, size);
+    const undecided = touch(.{ .screen = .credits, .faction = null }, .{ .x = back.x + 4, .y = back.y + 4 }, size);
     try testing.expectEqual(Screen.choose_side, undecided.screen);
     try testing.expectEqual(@as(?Faction, null), undecided.faction);
+}
+
+test "THE BOOT SEQUENCE IS A PURE FUNCTION OF A MILLISECOND" {
+    // There is no timer here, no callback, and no animation state machine that can fall out of
+    // step. Ask for millisecond 2,400 and you get the frame that belongs at 2,400 -- forever, on
+    // any machine, with no clock anywhere near the core.
+    //
+    // Which means the whole animation is testable at any instant, on a laptop.
+    const gpa = testing.allocator;
+    const size: Size = .{ .w = 360, .h = 800 };
+
+    var out: std.ArrayList(Draw) = .empty;
+    defer out.deinit(gpa);
+
+    const wordmarkAt = struct {
+        fn at(list: []const Draw) bool {
+            for (list) |item| switch (item) {
+                .text => |t| if (std.mem.eql(u8, t.text, "OUTBREAK") and t.weight == .wordmark) return true,
+                else => {},
+            };
+            return false;
+        }
+    }.at;
+
+    // EARLY: the terminal is up and the wordmark has not burned in.
+    try draw(.{ .screen = .boot, .boot_ms = 300 }, size, &out, gpa);
+    try testing.expect(!wordmarkAt(out.items));
+
+    var saw_first_line = false;
+    var saw_last_line = false;
+    for (out.items) |item| switch (item) {
+        .text => |t| {
+            if (std.mem.eql(u8, t.text, boot_lines[0].text)) saw_first_line = true;
+            if (std.mem.eql(u8, t.text, boot_lines[4].text)) saw_last_line = true;
+        },
+        else => {},
+    };
+    try testing.expect(saw_first_line);
+    try testing.expect(!saw_last_line); // the terminal types; it does not paste
+
+    // LATE IN THE TERMINAL: every line is up, including the one that is not OK.
+    try draw(.{ .screen = .boot, .boot_ms = boot_terminal_ms - 1 }, size, &out, gpa);
+    var saw_contamination = false;
+    for (out.items) |item| switch (item) {
+        .text => |t| if (std.mem.eql(u8, t.text, boot_lines[3].text)) {
+            saw_contamination = true;
+        },
+        else => {},
+    };
+    try testing.expect(saw_contamination);
+
+    // THE WORDMARK burns in partway through the infection, not before it.
+    try draw(.{ .screen = .boot, .boot_ms = boot_terminal_ms + 100 }, size, &out, gpa);
+    try testing.expect(!wordmarkAt(out.items));
+
+    try draw(.{ .screen = .boot, .boot_ms = boot_infection_end - 1 }, size, &out, gpa);
+    try testing.expect(wordmarkAt(out.items));
+
+    // AT REST: the wordmark is up, the invitation is pulsing, and nothing is still loading.
+    try draw(.{ .screen = .boot, .boot_ms = boot_glitch_end + 1200 }, size, &out, gpa);
+    try testing.expect(wordmarkAt(out.items));
+
+    var saw_tap = false;
+    var saw_bar = false;
+    for (out.items) |item| switch (item) {
+        .text => |t| {
+            if (std.mem.indexOf(u8, t.text, "T A P") != null) saw_tap = true;
+            if (std.mem.indexOf(u8, t.text, "C O N T A I N M E N T") != null) saw_bar = true;
+        },
+        else => {},
+    };
+    try testing.expect(saw_tap);
+    try testing.expect(!saw_bar); // the containment bar is gone once containment has failed
+
+    // DETERMINISTIC. The same millisecond twice is the same frame twice, to the byte.
+    var again: std.ArrayList(Draw) = .empty;
+    defer again.deinit(gpa);
+    try draw(.{ .screen = .boot, .boot_ms = 2400 }, size, &out, gpa);
+    try draw(.{ .screen = .boot, .boot_ms = 2400 }, size, &again, gpa);
+    try testing.expectEqual(out.items.len, again.items.len);
+
+    // AND IT IS SKIPPABLE. A splash screen you cannot escape is being shown for someone else's
+    // benefit, not the player's.
+    const tapped = touch(.{ .screen = .boot, .boot_ms = 200 }, .{ .x = 100, .y = 100 }, size);
+    try testing.expectEqual(Screen.choose_side, tapped.screen);
+
+    const returning = touch(.{ .screen = .boot, .faction = .human }, .{ .x = 100, .y = 100 }, size);
+    try testing.expectEqual(Screen.quiet, returning.screen);
 }

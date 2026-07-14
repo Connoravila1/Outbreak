@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const text = @import("text.zig");
+const ui = @import("../ui.zig");
 
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
@@ -60,6 +61,9 @@ pub const Atlas = struct {
 
     rects: std.AutoHashMapUnmanaged(u64, Rect) = .empty,
 
+    /// The procedural shapes, baked once at init. Indexed by `ui.Sprite`.
+    sprites: [2]Rect = @splat(.{ .x = 0, .y = 0, .w = 0, .h = 0, .advance = 0, .bear_x = 0, .bear_y = 0 }),
+
     /// The bitmap changed and the GPU has an old copy. The shell re-uploads and clears this.
     /// Starts true: the white texel alone is a change worth uploading.
     dirty: bool = true,
@@ -71,7 +75,7 @@ pub const dim = 1024;
 /// set to LINEAR cannot possibly interpolate an edge into it.
 const white_px = 2;
 
-pub fn init(gpa: Allocator) Allocator.Error!Atlas {
+pub fn init(gpa: Allocator) Error!Atlas {
     const coverage = try gpa.alloc(u8, dim * dim);
     @memset(coverage, 0);
 
@@ -85,7 +89,87 @@ pub fn init(gpa: Allocator) Allocator.Error!Atlas {
     atlas.pen_x = white_px + 1;
     atlas.shelf_h = white_px;
 
+    // ============================================================================
+    // THE PROCEDURAL SHAPES.
+    //
+    // The renderer is "colour times a coverage value sampled from a texture", and nothing else. So
+    // a radial falloff written into that same texture is a soft dot, and a soft dot -- tinted, and
+    // scaled -- is every gradient the boot sequence needs: a spore, the bloom behind the wordmark,
+    // and the wipe that opens the screen.
+    //
+    // No second shader. No gradient code. No extra draw call. The capability was already there;
+    // it only needed something in the atlas to point at.
+    atlas.sprites[@intFromEnum(ui.Sprite.disc)] = try bake(&atlas, disc_px, discCoverage);
+    atlas.sprites[@intFromEnum(ui.Sprite.vignette)] = try bake(&atlas, vignette_px, vignetteCoverage);
+
     return atlas;
+}
+
+const disc_px = 64;
+const vignette_px = 128;
+
+/// Opaque at the centre, gone at the rim. Smoothstep rather than linear, because a linear falloff
+/// has a visible hard edge where it reaches zero and reads as a circle rather than a glow.
+fn discCoverage(dx: f32, dy: f32) u8 {
+    const r = @sqrt(dx * dx + dy * dy);
+    if (r >= 1.0) return 0;
+    const t = 1.0 - r;
+    const smooth = t * t * (3.0 - 2.0 * t);
+    return @intFromFloat(@round(smooth * 255.0));
+}
+
+/// The inverse. A hole in the middle, solid at the edges. Painted in the background colour and
+/// scaled up over the screen, the hole grows and the screen opens.
+fn vignetteCoverage(dx: f32, dy: f32) u8 {
+    const r = @sqrt(dx * dx + dy * dy);
+    if (r >= 1.0) return 255;
+    const smooth = r * r * (3.0 - 2.0 * r);
+    return @intFromFloat(@round(smooth * 255.0));
+}
+
+/// Write a procedurally generated square of coverage into the atlas and return where it landed.
+fn bake(atlas: *Atlas, size: u32, comptime coverage: fn (f32, f32) u8) Error!Rect {
+    if (atlas.pen_x + size > atlas.dim) {
+        atlas.pen_y += atlas.shelf_h + 1;
+        atlas.pen_x = 0;
+        atlas.shelf_h = 0;
+    }
+    if (atlas.pen_x + size > atlas.dim or atlas.pen_y + size > atlas.dim) return Error.AtlasFull;
+
+    const x = atlas.pen_x;
+    const y = atlas.pen_y;
+    const half: f32 = @as(f32, @floatFromInt(size)) / 2.0;
+
+    var row: u32 = 0;
+    while (row < size) : (row += 1) {
+        var col: u32 = 0;
+        while (col < size) : (col += 1) {
+            // The centre of the texel, not its corner -- otherwise the disc is half a pixel
+            // off-centre and the bloom sits crooked behind the wordmark.
+            const dx = (@as(f32, @floatFromInt(col)) + 0.5 - half) / half;
+            const dy = (@as(f32, @floatFromInt(row)) + 0.5 - half) / half;
+            atlas.coverage[(y + row) * atlas.dim + x + col] = coverage(dx, dy);
+        }
+    }
+
+    atlas.pen_x += size + 1;
+    if (size > atlas.shelf_h) atlas.shelf_h = size;
+    atlas.dirty = true;
+
+    return .{
+        .x = @intCast(x),
+        .y = @intCast(y),
+        .w = @intCast(size),
+        .h = @intCast(size),
+        .advance = 0,
+        .bear_x = 0,
+        .bear_y = 0,
+    };
+}
+
+/// Where a procedural shape lives in the atlas.
+pub fn spriteRect(atlas: *const Atlas, sprite: ui.Sprite) Rect {
+    return atlas.sprites[@intFromEnum(sprite)];
 }
 
 pub fn deinit(atlas: *Atlas, gpa: Allocator) void {
@@ -279,4 +363,45 @@ test "the whole game's copy fits in the atlas, at every size it is drawn at" {
     // 95 printable ASCII, four faces, three sizes. If this number changes, a face or a size was
     // added and the atlas budget deserves a fresh look rather than a nudged constant.
     try testing.expectEqual(@as(u32, 95 * 4 * 3), atlas.rects.count());
+}
+
+test "the procedural sprites are baked, and they are actually gradients" {
+    const gpa = testing.allocator;
+
+    var atlas = try init(gpa);
+    defer deinit(&atlas, gpa);
+
+    const disc = spriteRect(&atlas, .disc);
+    try testing.expectEqual(@as(u16, disc_px), disc.w);
+    try testing.expectEqual(@as(u16, disc_px), disc.h);
+
+    // A u16 row index times a 1024-wide atlas overflows a u16 long before it is an offset. Widen
+    // once, here, rather than sprinkling casts down the expression.
+    const at = struct {
+        fn coverage(a: *const Atlas, x: u32, y: u32) u8 {
+            return a.coverage[@as(usize, y) * a.dim + x];
+        }
+    }.coverage;
+
+    // Bright in the middle, nothing at the rim. If this is flat, the "glow" is a square.
+    const centre = at(&atlas, disc.x + disc_px / 2, disc.y + disc_px / 2);
+    const corner = at(&atlas, disc.x, disc.y);
+    try testing.expect(centre > 250);
+    try testing.expectEqual(@as(u8, 0), corner);
+
+    // And it falls off in between rather than stepping -- a hard edge reads as a circle, not a glow.
+    const midway = at(&atlas, disc.x + disc_px / 2 + disc_px / 4, disc.y + disc_px / 2);
+    try testing.expect(midway > 0 and midway < centre);
+
+    // The vignette is the inverse: a hole in the middle, solid at the edge. Painted in the
+    // background colour, that hole is what opens the screen.
+    const vig = spriteRect(&atlas, .vignette);
+    const vig_centre = at(&atlas, vig.x + vignette_px / 2, vig.y + vignette_px / 2);
+    const vig_corner = at(&atlas, vig.x, vig.y);
+    try testing.expect(vig_centre < 5);
+    try testing.expectEqual(@as(u8, 255), vig_corner);
+
+    // Neither landed on the white texel that every rectangle in the game samples.
+    try testing.expect(disc.x >= white_px or disc.y >= white_px);
+    try testing.expectEqual(@as(u8, 255), atlas.coverage[0]);
 }
