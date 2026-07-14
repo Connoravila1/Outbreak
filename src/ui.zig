@@ -31,6 +31,7 @@
 //! So the copy lives here, in the core, next to a test that asserts it never contains a number.
 
 const std = @import("std");
+const flags = @import("flags");
 const combat = @import("combat.zig");
 const world_mod = @import("world.zig");
 
@@ -169,7 +170,36 @@ pub const State = struct {
     tells: [max_tells][]const u8 = @splat(""),
     tell_count: u8 = 0,
 
+    /// THE CAFE TEST, ON THE GLASS. Null in every build that is not the diagnostic one.
+    ///
+    /// It reports on THIS PHONE and nothing else: which room it thinks it is in, how wrong its own
+    /// receiver believes it might be, and how many times the room has changed underneath it. Not
+    /// one of those says anything about another person. There is no count of anyone, no direction
+    /// to anyone, and no identity within a mile of it.
+    ///
+    /// It exists because O3 cannot be answered from a chair. See build.zig.
+    diagnostic: ?Diagnostic = null,
+
     pub const max_tells = 8;
+};
+
+/// What the phone knows about ITS OWN sense of place. Never about anyone else's.
+pub const Diagnostic = struct {
+    /// The room. An opaque u64 with no inverse -- a group-by key, not a compressed coordinate (A9).
+    room: u64,
+
+    /// How wrong the receiver thinks it might be, in metres.
+    ///
+    /// THIS IS THE NUMBER O3 TURNS ON. If it is larger than the cell, then a player sitting
+    /// perfectly still flickers between rooms and breaks their own quorum -- and that is not a bug
+    /// we can code around, it is the cell size being wrong.
+    accuracy_metres: u32,
+
+    fixes: u32,
+
+    /// How many fixes landed in a DIFFERENT room. Sitting still, this should stay at zero. If it
+    /// climbs while you are not moving, you are watching O3 fail in real time.
+    room_changes: u32,
 };
 
 pub const Screen = enum {
@@ -570,6 +600,66 @@ fn drawQuiet(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allocator
     try out.append(gpa, .{ .text = .{ .x = pad, .y = size.h - 110, .text = "LEVEL", .color = .grave, .weight = .label } });
 
     try drawCreditsLink(size, out, gpa);
+    try drawDiagnostic(state, size, out, gpa);
+}
+
+/// THE CAFE READOUT. Present only in a diagnostic build (`-Ddiagnostic=true`).
+///
+/// Sit still. Watch `drift`. If it climbs while you are not moving, the room is smaller than the
+/// phone's own error, and a still player is breaking their own quorum by existing. That is O3, and
+/// it is the most consequential unvalidated number in the project.
+fn drawDiagnostic(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
+    // COMPTIME-GATED, not just runtime-gated. In a shipping build this whole function -- format
+    // strings and all -- is never analysed, so `strings` on the shipped library finds no trace of
+    // it. Guarding only on the null field would leave the readout's text sitting in every binary,
+    // dormant, which for a rule this sensitive is not tight enough.
+    if (comptime !flags.diagnostic) return;
+
+    const d = state.diagnostic orelse return;
+
+    // HIGH ON THE SCREEN, and unmistakable. The first version put it at the very bottom, in the
+    // band the credits and the gesture bar already crowd, where it was invisible against the dark.
+    // A diagnostic you cannot find is not a diagnostic. This one sits under the top label, in
+    // amber, so there is no question whether the build is the diagnostic one.
+    const y: i32 = 100;
+
+    // Before the first fix the room is zero. Say so in words, rather than showing `room 0` and
+    // leaving the tester to wonder whether zero is a real room (it is not -- every real cell
+    // carries a sentinel bit).
+    if (d.fixes == 0) {
+        try out.append(gpa, .{ .text = .{
+            .x = pad,
+            .y = y,
+            .text = "GPS: waiting for a fix",
+            .color = .amber,
+            .weight = .label,
+        } });
+        return;
+    }
+
+    var left_text: [64]u8 = undefined;
+
+    // The room. Hex, because it is an opaque key and should look like one -- a decimal number
+    // invites arithmetic, and there is no arithmetic to do on a room.
+    const room = std.fmt.bufPrint(&left_text, "room {x}", .{d.room}) catch return;
+    try out.append(gpa, .{ .text = .{ .x = pad, .y = y, .text = room, .color = .amber, .weight = .label } });
+
+    var right_text: [64]u8 = undefined;
+    const stats = std.fmt.bufPrint(&right_text, "acc {d}m  fix {d}  drift {d}", .{
+        d.accuracy_metres,
+        d.fixes,
+        d.room_changes,
+    }) catch return;
+
+    try out.append(gpa, .{ .text = .{
+        .x = size.w - pad,
+        .y = y,
+        .text = stats,
+        // Drift turns the whole line red. That is O3 failing, and it should be impossible to miss.
+        .color = if (d.room_changes > 0) .wound else .amber,
+        .weight = .label,
+        .alignment = .right,
+    } });
 }
 
 fn drawCreditsLink(size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
@@ -1935,4 +2025,45 @@ test "THE WAY OUT IS ANIMATED, AND THE CLOCKS DO NOT DISAGREE" {
     // disagree again: with `since` stuck at zero, every frame of the exit is identical and this is
     // the line that catches it.
     try testing.expect(early < 60);
+}
+
+test "THE DIAGNOSTIC READOUT IS ABSENT BY DEFAULT AND ONLY SPEAKS OF THIS PHONE" {
+    // Two things this pins. First: with no diagnostic, the readout is not drawn -- the flag
+    // defaults off and the field defaults null, so a shipping build cannot show it by accident.
+    //
+    // Second, and the one that matters: everything it CAN show is about this device's own sense of
+    // where it is. There is no count of other people, no direction to anyone, no identity. A
+    // diagnostic that leaked one of those would be an I-rule violation wearing a debugging coat.
+    const gpa = testing.allocator;
+    const size: Size = .{ .w = 360, .h = 800 };
+
+    var out: std.ArrayList(Draw) = .empty;
+    defer out.deinit(gpa);
+
+    // No diagnostic -> nothing on the quiet screen mentions a room.
+    try draw(.{ .screen = .quiet, .faction = .human }, size, .{}, &out, gpa);
+    for (out.items) |item| switch (item) {
+        .text => |t| try testing.expect(std.mem.indexOf(u8, t.text, "room") == null),
+        else => {},
+    };
+
+    // With a diagnostic set, the readout appears ONLY in a diagnostic build. This test binary is
+    // not one -- the flag defaults off -- so the readout stays absent even with the field set, and
+    // that is the property that matters: the gate is comptime, so a shipping build cannot draw the
+    // readout no matter what the state says.
+    const with: State = .{
+        .screen = .quiet,
+        .faction = .human,
+        .diagnostic = .{ .room = 0xBEEF, .accuracy_metres = 8, .fixes = 3, .room_changes = 0 },
+    };
+    try draw(with, size, .{}, &out, gpa);
+
+    var saw_room = false;
+    for (out.items) |item| switch (item) {
+        .text => |t| if (std.mem.indexOf(u8, t.text, "room") != null) {
+            saw_room = true;
+        },
+        else => {},
+    };
+    try testing.expectEqual(flags.diagnostic, saw_room);
 }

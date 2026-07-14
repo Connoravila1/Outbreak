@@ -86,6 +86,27 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     // ============================================================================
+    // THE DIAGNOSTIC BUILD. OFF UNLESS ASKED FOR.
+    //
+    //     ./android/package.sh --diagnostic
+    //
+    // O3 -- the cell size -- is the most consequential unvalidated number in the project, and it
+    // CANNOT BE ANSWERED FROM A CHAIR. It needs a person sitting still in a real cafe, watching
+    // whether their room holds or flickers.
+    //
+    // So the phone has to show it. Which means a build in which the game tells you your own cell id
+    // and your own receiver's error, and that is not a build that should ever reach a player: not
+    // because it leaks anything about anyone else (it cannot -- it is your own device reporting on
+    // itself), but because "we will take it out before we ship" is the sentence that ships it.
+    //
+    // A flag, defaulting to false, is a decision the compiler records. A comment saying REMOVE
+    // BEFORE SHIPPING is a decision nobody records.
+    const diagnostic = b.option(bool, "diagnostic", "Show the GPS readout on screen (O3, the cafe test)") orelse false;
+
+    const flags = b.addOptions();
+    flags.addOption(bool, "diagnostic", diagnostic);
+
+    // ============================================================================
     // B1, ENFORCED: EVERY UNIT IS CLASSIFIED. NO THIRD CATEGORY. NOTHING UNCLASSIFIED.
     //
     // The comptime guard in src/guard.zig can only check the files it has been TOLD about. It
@@ -112,6 +133,7 @@ pub fn build(b: *std.Build) void {
 
     addFonts(b, mod);
     addStb(b, mod);
+    mod.addOptions("flags", flags);
 
     const tests = b.addTest(.{ .root_module = mod });
     const run_tests = b.addRunArtifact(tests);
@@ -216,6 +238,7 @@ pub fn build(b: *std.Build) void {
         // Fonts, but NOT the C. See `addStb`: the host is type-checked here and linked by the
         // APK, which compiles the same shim against the NDK.
         addFonts(b, host_mod);
+        host_mod.addOptions("flags", flags);
 
         const host = b.addObject(.{
             .name = b.fmt("host-{s}", .{triple}),
@@ -268,6 +291,7 @@ pub fn build(b: *std.Build) void {
         });
 
         addFonts(b, so_mod);
+        so_mod.addOptions("flags", flags);
 
         // The stb shim, compiled for the PHONE this time -- which is why the NDK is needed at all.
         // Zig does not ship bionic's headers, so `#include <math.h>` only resolves here.

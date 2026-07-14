@@ -47,6 +47,7 @@ const gles = @import("render/gles.zig");
 const text = @import("render/text.zig");
 const atlas_mod = @import("render/atlas.zig");
 const location = @import("location.zig");
+const flags = @import("flags");
 
 const Io = std.Io;
 
@@ -714,6 +715,22 @@ fn render() void {
             const elapsed = now.nanoseconds - opened_at.nanoseconds;
             const ms: u32 = @intCast(@divTrunc(@max(0, elapsed), std.time.ns_per_ms));
             host.state = ui.advance(host.state, ms);
+
+            // THE CAFE READOUT. Compiled out entirely unless this is a diagnostic build -- and the
+            // default is off, so it cannot ship by accident. See build.zig.
+            if (comptime flags.diagnostic) {
+                const fix = location.read();
+                host.state.diagnostic = .{
+                    .room = fix.cell,
+                    .accuracy_metres = fix.accuracy_metres,
+                    .fixes = fix.fixes,
+                    .room_changes = fix.room_changes,
+                };
+
+                // The readout changes when a fix lands, and a screen that does not redraw is a
+                // screen that shows a stale number for thirty seconds.
+                dirty = true;
+            }
 
             break :blk host.state;
         };

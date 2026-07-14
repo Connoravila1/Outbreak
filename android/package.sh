@@ -18,6 +18,17 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# --diagnostic builds the cafe readout onto the screen (O3). Off by default: the flag is a decision
+# the compiler records, and a shipping build must not carry it.
+ZIG_FLAGS=""
+INSTALL=1
+for arg in "$@"; do
+    case "$arg" in
+        --diagnostic) ZIG_FLAGS="-Ddiagnostic=true" ;;
+        --no-install) INSTALL=0 ;;
+    esac
+done
+
 : "${ANDROID_HOME:=$HOME/Android/Sdk}"
 : "${JAVA_HOME:=$HOME/Android/jdk}"
 : "${NDK:=$ANDROID_HOME/ndk/26.3.11579264}"
@@ -38,7 +49,7 @@ KEYSTORE="$ROOT/zig-out/debug.keystore"
 
 # ---- 1. the library. This is where android.zig is finally LINKED, not merely type-checked.
 echo "==> linking liboutbreak.so"
-( cd "$ROOT" && zig build so -Dndk="$NDK" )
+( cd "$ROOT" && zig build so -Dndk="$NDK" $ZIG_FLAGS )
 
 test -f "$OUT/lib/arm64-v8a/liboutbreak.so" || { echo "no .so; aborting"; exit 1; }
 
@@ -112,7 +123,7 @@ echo "==> apksigner"
 ls -la "$OUT/outbreak.apk"
 
 # ---- 5. onto the phone.
-if [ "${1:-}" != "--no-install" ]; then
+if [ "$INSTALL" = "1" ]; then
     echo "==> installing"
     "$ADB" install -r "$OUT/outbreak.apk"
     echo "==> launching"
