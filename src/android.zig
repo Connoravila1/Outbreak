@@ -42,10 +42,10 @@
 
 const std = @import("std");
 const ui = @import("ui.zig");
-const quads = @import("quads.zig");
-const gles = @import("gles.zig");
-const text = @import("text.zig");
-const atlas_mod = @import("atlas.zig");
+const quads = @import("render/quads.zig");
+const gles = @import("render/gles.zig");
+const text = @import("render/text.zig");
+const atlas_mod = @import("render/atlas.zig");
 
 const Io = std.Io;
 

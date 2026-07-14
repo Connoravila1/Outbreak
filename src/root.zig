@@ -69,7 +69,7 @@ pub const gps = @import("gps.zig");
 /// `android.zig`, because its `extern fn`s are resolved by the APK's linker and there is no
 /// libGLESv2 on a laptop. Everything about the renderer that can be tested without a GPU was put
 /// in `quads.zig` precisely so that this line could exist.
-pub const quads = @import("quads.zig");
+pub const quads = @import("render/quads.zig");
 
 comptime {
     // The forbidden-construct guard runs at compile time, so a distance function or a
@@ -104,6 +104,6 @@ test {
     _ = @import("ffi.zig");
     _ = @import("ui.zig");
     _ = @import("gps.zig");
-    _ = @import("quads.zig");
-    _ = @import("gles.zig");
+    _ = @import("render/quads.zig");
+    _ = @import("render/gles.zig");
 }

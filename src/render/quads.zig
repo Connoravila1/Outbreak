@@ -34,7 +34,7 @@
 //! writes no game state, and nothing in the game imports it (D7). It has never heard of a cell.
 
 const std = @import("std");
-const ui = @import("ui.zig");
+const ui = @import("../ui.zig");
 const text = @import("text.zig");
 const atlas_mod = @import("atlas.zig");
 

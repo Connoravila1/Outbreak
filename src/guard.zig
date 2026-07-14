@@ -175,6 +175,25 @@ const forbidden_on_the_phone = [_][]const u8{
 
 const phone_file = "android.zig";
 
+/// THE RENDERER IS QUARANTINED (D7).
+///
+/// "The map/rendering module is quarantined absolutely. It may consume a CellId and produce
+/// pixels. NO GAME-STATE MODULE MAY IMPORT IT, and it may not write to game state. If the map SDK
+/// vanished tomorrow, only the map module would fail to compile."
+///
+/// That was true, and it was true by luck: nothing enforced it. Now the directory says it and the
+/// build means it -- a core file that reaches into `render/` does not compile.
+///
+/// The renderer is also where the ONE sanctioned rendering dependency lives (stb_truetype, F1/F6).
+/// The quarantine is what bounds it: a dependency you can delete by deleting a directory is a
+/// dependency you can actually remove.
+const render_dir = "@import(\"render/";
+
+/// `root.zig` is the module manifest, not a unit of logic -- it re-exports everything so the test
+/// binary can reach it, and it imports the shell too. It is the one file permitted to name the
+/// renderer, and it is named here rather than left as an unexplained hole.
+const render_importer_exempt = "root.zig";
+
 const Source = struct { name: []const u8, text: []const u8 };
 
 /// CORE (B1, B2). Pure functions over plain data. A coordinate may not appear here in
@@ -232,15 +251,15 @@ const shell = [_]Source{
     //
     // Being pure regardless is the point, not a loophole: the whole transform is tested on a
     // laptop, and only `gles.zig` needs a GPU.
-    .{ .name = "quads.zig", .text = @embedFile("quads.zig") },
+    .{ .name = "render/quads.zig", .text = @embedFile("render/quads.zig") },
     // SHELL: the GLES2 backend. Shaders, a vertex buffer, and one draw call. This is the whole of
     // what needs a GPU to run, which is why it is the whole of what cannot be tested without one.
-    .{ .name = "gles.zig", .text = @embedFile("gles.zig") },
+    .{ .name = "render/gles.zig", .text = @embedFile("render/gles.zig") },
     // SHELL: the glyph engine. The one file that knows what a font is, and the only one that
     // reaches for the second sanctioned dependency (F1, F6 -- justified in vendor/stb_impl.c).
-    .{ .name = "text.zig", .text = @embedFile("text.zig") },
+    .{ .name = "render/text.zig", .text = @embedFile("render/text.zig") },
     // SHELL: the glyph atlas. Pure, and tested without a GPU -- it makes a byte array, not pixels.
-    .{ .name = "atlas.zig", .text = @embedFile("atlas.zig") },
+    .{ .name = "render/atlas.zig", .text = @embedFile("render/atlas.zig") },
 };
 
 /// Does `haystack` begin with `needle`? Byte-wise, so that comptime does the least work
@@ -364,6 +383,22 @@ comptime {
                             "`idle()`, which sleeps in the kernel and stops counting while the " ++
                             "phone is suspended.");
                     }
+                }
+            }
+        }
+
+        // THE RENDERER IS QUARANTINED (D7). Does a game-state file reach into it?
+        if (is_core and !std.mem.eql(u8, src.name, render_importer_exempt)) {
+            var j: usize = 0;
+            while (j < src.text.len) : (j += 1) {
+                if (src.text[j] != render_dir[0]) continue;
+                if (startsWith(src.text[j..], render_dir)) {
+                    @compileError("D7 VIOLATION: " ++ src.name ++ " imports the renderer. " ++
+                        "The rendering module is quarantined ABSOLUTELY: it may consume a CellId " ++
+                        "and produce pixels, and no game-state module may import it or be written " ++
+                        "to by it. If the renderer vanished tomorrow, only the renderer should " ++
+                        "fail to compile. It is also where the one sanctioned rendering dependency " ++
+                        "lives, and the quarantine is what makes that dependency removable at all.");
                 }
             }
         }

@@ -32,7 +32,7 @@
 //! wrong glyphs, no error, on a phone. The key here is built from named bit ranges instead.
 
 const std = @import("std");
-const ui = @import("ui.zig");
+const ui = @import("../ui.zig");
 
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
