@@ -60,6 +60,9 @@ pub const ffi = @import("ffi.zig");
 /// The interface, as a pure function: (told, touched) -> a list of things to draw (3.4).
 pub const ui = @import("ui.zig");
 
+/// When to turn the GPS on. Battery is a hard constraint, not an optimization (3.3, G5).
+pub const gps = @import("gps.zig");
+
 comptime {
     // The forbidden-construct guard runs at compile time, so a distance function or a
     // coordinate in the core fails the build rather than the review. Referencing it here
@@ -92,4 +95,5 @@ test {
     _ = @import("transport_test.zig");
     _ = @import("ffi.zig");
     _ = @import("ui.zig");
+    _ = @import("gps.zig");
 }

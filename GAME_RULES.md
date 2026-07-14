@@ -140,6 +140,47 @@ Contested ground (a tie) is held by **nobody**. We do not invent a winner to tid
 
 ---
 
+## 5a. GPS cadence — `src/gps.zig` (`Policy`)
+
+**Battery is a hard constraint, not an optimization (G5).** *"A game that drains a phone in three hours is not shipped."* This is the one criterion that can fail Phase 3 outright — combat can be retuned, cell size can be retuned, a phone that dies at lunchtime cannot be retuned into a game anyone plays.
+
+### The insight that makes it cheap
+
+> **The game only cares where you are when you STOP.**
+
+An engagement needs you present across many ticks, with other people, in one room. Someone walking past a café is not *in* the café. Someone on a bus is not in a room at all — they are in transit, and **transit is not a place**.
+
+So we don't track people. We notice when they **settle**:
+
+| | |
+|---|---|
+| **Moving** (in a vehicle) | GPS **off**. Report `nowhere`. You are not in a room. |
+| **Just stopped** | **One fix.** Quantize it. That is your room. |
+| **Still stopped** | GPS **off**. You haven't moved; your room hasn't changed. |
+
+| Knob | Value | Note |
+|---|---|---|
+| `base_seconds` | 30 | One tick. The floor. |
+| `max_seconds` | 900 (15 min) | Exponential backoff for someone who hasn't moved. |
+| `max_seconds_in_fight` | 120 | So walking out of a room registers promptly. |
+| `patience` | 2 | Unchanged fixes before we start doubling. |
+| `max_seconds_background` | 1800 | Lazier still when off-screen. |
+
+### The number
+
+**101 GPS fixes in a simulated commuter's day. The dead v1.0 spec was 17,280 — a 171× reduction.**
+
+And note where it came from: **not** from optimizing the polling loop, but from *the game never wanting the data*. The thing that makes it safe is the thing that makes it cheap — again.
+
+**What that proves, and what it doesn't.** It proves the GPS radio is no longer the problem. It does **not** prove the phase passes. Two costs remain, and one is probably now the *bigger* one:
+
+1. **The persistent connection.** A report every 30 s is 2,880 sends a day, each waking the radio. Every chat app does this, so it's solved — but it is now plausibly a larger draw than the GPS, and it must be **measured, not assumed**.
+2. **The foreground service.** A floor cost of staying alive, with nothing to do with us.
+
+Only a real phone over eight real hours settles it (3.5). This test exists to say whether that measurement is **worth taking**. At 17,280 fixes it would not have been — the phase would already be over.
+
+---
+
 ## 6. The synthetic city — `src/city.zig` (`Params`)
 
 **This is a model of a city, not a city.** Its numbers are the least trustworthy on this page, and conclusions drawn from it must say so.
