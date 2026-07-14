@@ -152,6 +152,29 @@ const forbidden_in_ffi = [_][]const u8{
 
 const ffi_file = "ffi.zig";
 
+/// A BUSY-WAIT ON THE PHONE IS A DEAD BATTERY (G5).
+///
+/// THIS LIST EXISTS BECAUSE THE RENDER THREAD SPUN, AND THE COMMENT ABOVE IT SAID IT DID NOT.
+///
+/// The idle paths of the render loop called the thread-yield function under a comment reading
+/// "Do not spin. Sleep and cost nothing (G5)." That function is `sched_yield`. It surrenders the
+/// timeslice and returns IMMEDIATELY -- it is a busy-wait, not a sleep. The loop around it pegged
+/// a core for the entire time the app was backgrounded, which for an ambient location game is
+/// nearly all of its life. BATTERY.md claims 0.50% over eight hours. A spinning core does not do
+/// 0.50% over eight hours.
+///
+/// It looked like a sleep at the call site. That is the whole trap, and it is the same trap as the
+/// deterministic mixer that looked like a CSPRNG: the rule was about a CATEGORY (do not burn the
+/// battery), the code was about a PROPERTY (it yields), and they did not visibly collide.
+///
+/// So the category is mechanised. The phone sleeps in the kernel, via `idle()`, or it does not
+/// sleep at all.
+const forbidden_on_the_phone = [_][]const u8{
+    "Thread.yield",
+};
+
+const phone_file = "android.zig";
+
 const Source = struct { name: []const u8, text: []const u8 };
 
 /// CORE (B1, B2). Pure functions over plain data. A coordinate may not appear here in
@@ -313,6 +336,28 @@ comptime {
                             "outcome -- every outcome is computed server-side from data the client " ++
                             "cannot influence. Whatever this is for -- latency, feel, offline -- " ++
                             "the answer is no.");
+                    }
+                }
+            }
+        }
+
+        // THE PHONE DOES NOT SPIN (G5). What does the render thread do when it has nothing to do?
+        if (std.mem.eql(u8, src.name, phone_file)) {
+            for (forbidden_on_the_phone) |reached| {
+                var j: usize = 0;
+                while (j < src.text.len) : (j += 1) {
+                    if (src.text[j] != reached[0]) continue;
+                    if (startsWith(src.text[j..], reached)) {
+                        @compileError("BATTERY VIOLATION (G5): '" ++ reached ++ "' appears in " ++
+                            phone_file ++ ". IT IS NOT A SLEEP. It is `sched_yield`: it gives up " ++
+                            "the timeslice and returns immediately, so a loop around it is a " ++
+                            "busy-wait that pegs a core. This shipped once, under a comment " ++
+                            "promising it did not burn battery, on the thread that runs for the " ++
+                            "whole time the app is backgrounded -- which for an ambient game is " ++
+                            "nearly always. Battery is a hard constraint and the exit criterion " ++
+                            "for this phase is a real number on real hardware. Sleep with " ++
+                            "`idle()`, which sleeps in the kernel and stops counting while the " ++
+                            "phone is suspended.");
                     }
                 }
             }

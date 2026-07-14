@@ -250,10 +250,15 @@ fn onWindowDestroyed(_: *ANativeActivity, _: *ANativeWindow) callconv(.c) void {
         host.awake.store(false, .release);
     }
 
-    // Spin until the render thread has torn its surface down. It checks every frame, so this is
-    // bounded by one frame.
+    // Wait until the render thread has torn its surface down. Bounded by one pass of its loop --
+    // it sleeps at most `backgrounded_ms` and checks the window first thing on waking.
+    //
+    // This waits in millisecond SLEEPS. It used to spin on the thread-yield call, which is
+    // `sched_yield` underneath and returns immediately -- so the wait burned the OS thread's core
+    // for its whole duration. This is the one place the OS thread is permitted to block, and it
+    // should block, not spin. The guard now fails the build on the spinning version.
     while (!host.released.load(.acquire)) {
-        std.Thread.yield() catch {};
+        idle(io, 1);
     }
 }
 
@@ -310,6 +315,40 @@ const Surface = struct {
     renderer: ?gles.Renderer = null,
 };
 
+// ---- how long the render thread sleeps when it has nothing to do (G5) ----
+//
+// These are not frame rates. Nothing is being drawn at any of them; they are how often the thread
+// wakes to ASK whether anything has changed. Every one of them is a sleep in the kernel, not a
+// spin, and the difference between those two words is the difference between a phone that lasts a
+// day and a phone that is warm in your pocket by lunchtime.
+
+/// Visible, in the player's hand, but the screen is already correct. Wakes often enough that a tap
+/// feels instant; a touch is picked up within one of these and the frame follows immediately.
+const idle_awake_ms: i64 = 16;
+
+/// Backgrounded. THE STATE THE GAME IS IN ALMOST ALL OF THE TIME, and the one that decides whether
+/// the battery budget is met. There is nothing to draw and nothing to poll -- the GPS and the
+/// socket do not live on this thread (M.6, M.7) -- so this could be far longer still. It is 250ms
+/// because `onNativeWindowDestroyed` blocks the OS thread until this loop notices, and the OS kills
+/// an app whose main thread stops answering. Four wakeups a second, each of them microseconds, is
+/// a rounding error against the budget; a pegged core is not.
+const backgrounded_ms: i64 = 250;
+
+/// No window: either the OS has taken it, or EGL would not come up. Short, for the same reason --
+/// the OS thread may be blocked waiting for us to let go.
+const no_window_ms: i64 = 20;
+
+/// Sleep. Actually sleep -- in the kernel, off the CPU, until the clock says otherwise.
+///
+/// `Clock.awake` stops counting while the phone is suspended, which is the behaviour we want: a
+/// suspended phone must not be woken up merely to be told to go back to sleep.
+///
+/// A cancelled sleep is not an error worth a code path. The loop condition is re-read immediately
+/// afterwards, so the worst a failure can do is spin one iteration early (E4).
+fn idle(io: Io, milliseconds: i64) void {
+    io.sleep(Io.Duration.fromMilliseconds(milliseconds), .awake) catch {};
+}
+
 fn render() void {
     var threaded: Io.Threaded = .init(std.heap.smp_allocator, .{});
     defer threaded.deinit();
@@ -331,6 +370,16 @@ fn render() void {
 
     _ = ALooper_prepare(0);
 
+    // ---- THE SCREEN IS REDRAWN WHEN IT CHANGES, AND NEVER OTHERWISE.
+    //
+    // The tick is thirty seconds wide and the screen is a still image between ticks. Redrawing it
+    // at sixty frames a second would put roughly EIGHTEEN HUNDRED identical frames on the glass
+    // between one piece of news and the next, and every one of them costs a vertex upload, a draw
+    // call, and a buffer swap on a battery that has to last eight hours (G5).
+    //
+    // So: draw when something changed. `dirty` starts true because the first frame always must be.
+    var dirty = true;
+
     while (host.running.load(.acquire)) {
         // ---- has the window come or gone?
         var window: ?*ANativeWindow = null;
@@ -348,15 +397,20 @@ fn render() void {
             if (surface.display != null) tearDown(&surface);
             host.released.store(true, .release);
 
-            std.Thread.yield() catch {};
+            // Short, because `onNativeWindowDestroyed` is blocking the OS thread until we get
+            // here, and the OS kills an app whose main thread stops answering.
+            idle(io, no_window_ms);
             continue;
         }
 
         if (surface.display == null) {
             surface = standUp(window.?) orelse {
-                std.Thread.yield() catch {};
+                idle(io, no_window_ms);
                 continue;
             };
+
+            // A new surface is a new framebuffer, with nothing in it.
+            dirty = true;
         }
 
         drainInput(queue, io);
@@ -369,12 +423,35 @@ fn render() void {
             if (host.pending_touch) |at| {
                 host.state = ui.touch(host.state, at, .{ .w = surface.width, .h = surface.height });
                 host.pending_touch = null;
+
+                // The state moved. That is the ONLY thing that makes the screen stale.
+                //
+                // M.7 WIRES THE SOCKET, AND A REPLY FROM THE SERVER IS THE OTHER THING THAT MOVES
+                // IT. Whatever folds a `Tell` into `host.state` must set this too, or the news
+                // will arrive and the screen will not show it.
+                dirty = true;
             }
         }
 
         if (!host.awake.load(.acquire)) {
-            // Not visible. Do not draw. Do not spin. Sleep and cost nothing (G5).
-            std.Thread.yield() catch {};
+            // Not visible. Do not draw, and DO NOT SPIN.
+            //
+            // This line used to be the thread-yield call, under a comment promising it did not
+            // burn battery. That call is `sched_yield`: it gives up the timeslice and returns
+            // IMMEDIATELY. It is a busy-wait. This thread pegged a core, flat out, for the whole
+            // time the app was backgrounded -- which for an ambient game is nearly always.
+            //
+            // The comment asserted the property. Nothing enforced it. See POSTMORTEM_2026-07-13.
+            // Something enforces it now: the guard fails the build if that call comes back.
+            idle(io, backgrounded_ms);
+            continue;
+        }
+
+        if (!dirty) {
+            // Visible, and nothing has changed. Poll for a touch and go back to sleep. The phone
+            // is in the player's hand here, so this wakes often enough to feel instant -- and it
+            // is still a sleep, not a spin.
+            idle(io, idle_awake_ms);
             continue;
         }
 
@@ -388,6 +465,7 @@ fn render() void {
         ui.draw(state, .{ .w = surface.width, .h = surface.height }, &draws, gpa) catch continue;
 
         present(&surface, draws.items, &verts, gpa);
+        dirty = false;
     }
 }
 
