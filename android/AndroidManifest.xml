@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    THERE IS NO KOTLIN. THERE IS NO JAVA. THIS FILE IS WHAT MAKES THAT TRUE.
+
+    `android:hasCode="false"` tells the framework there is no dex in this APK. It loads
+    `android.app.NativeActivity`  —  a class that already ships on every device  —  which in turn
+    dlopens `liboutbreak.so` and calls `ANativeActivity_onCreate`. That symbol is in `android.zig`.
+
+    So the entire application is one shared library of Zig. No JVM class of ours is ever written,
+    no Java is ever compiled, and there is no bridge to maintain between two languages.
+
+    `android.app.lib_name` is the ONLY link between this file and the code: it names the library,
+    without the `lib` prefix and without the `.so`.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.outbreak.game"
+    android:versionCode="1"
+    android:versionName="0.1-phase3">
+
+    <uses-sdk
+        android:minSdkVersion="24"
+        android:targetSdkVersion="34" />
+
+    <!--
+        NOT YET REQUESTED, AND DELIBERATELY SO.
+
+        Location is M.5. It is the highest-stakes permission in the app and the highest-stakes
+        line of code in the client, and it is not going in as an afterthought alongside a
+        renderer. When it arrives it arrives on its own, with the coordinate dying in the same
+        function that receives it.
+
+        INTERNET is M.7, for the same reason. This build talks to nobody and knows where nobody
+        is  —  which is exactly what a build that only draws a screen should be able to do.
+    -->
+
+    <!--
+        `extractNativeLibs="true"` on purpose. From targetSdk 30 the default is false, which
+        requires the .so to be stored UNCOMPRESSED and page-aligned inside the APK. That is a
+        smaller install and a faster start, and it is worth doing before this ships  —  but it is
+        a packaging constraint, and a packaging constraint that fails produces an install error
+        with no obvious cause. Explicit beats defaulted while the thing is being brought up.
+    -->
+    <application
+        android:label="Outbreak"
+        android:hasCode="false"
+        android:allowBackup="false"
+        android:extractNativeLibs="true">
+
+        <activity
+            android:name="android.app.NativeActivity"
+            android:exported="true"
+            android:screenOrientation="portrait"
+            android:configChanges="orientation|keyboardHidden|screenSize|density">
+
+            <meta-data
+                android:name="android.app.lib_name"
+                android:value="outbreak" />
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

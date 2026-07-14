@@ -212,8 +212,8 @@ test "a glyph is packed once, and the same glyph comes back to the same rectangl
     var atlas = try init(gpa);
     defer deinit(&atlas, gpa);
 
-    const first = try ensure(&atlas, &engine, gpa, .regular, 17, 'H');
-    const again = try ensure(&atlas, &engine, gpa, .regular, 17, 'H');
+    const first = try ensure(&atlas, &engine, gpa, .inter, 17, 'H');
+    const again = try ensure(&atlas, &engine, gpa, .inter, 17, 'H');
 
     try testing.expectEqual(first.x, again.x);
     try testing.expectEqual(first.y, again.y);
@@ -243,8 +243,8 @@ test "two glyphs do not overlap, and the gutter between them is clean" {
     var atlas = try init(gpa);
     defer deinit(&atlas, gpa);
 
-    const h = try ensure(&atlas, &engine, gpa, .regular, 17, 'H');
-    const i = try ensure(&atlas, &engine, gpa, .regular, 17, 'I');
+    const h = try ensure(&atlas, &engine, gpa, .inter, 17, 'H');
+    const i = try ensure(&atlas, &engine, gpa, .inter, 17, 'I');
 
     // On the same shelf, side by side, with at least one pixel between them. Without that gutter a
     // LINEAR sampler drags the neighbour's ink into this glyph's edge, and every letter grows a
@@ -265,7 +265,7 @@ test "the whole game's copy fits in the atlas, at every size it is drawn at" {
     defer deinit(&atlas, gpa);
 
     // Every printable ASCII character -- a superset of the game's copy -- at all four styles.
-    for ([_]text.Face{ .regular, .semibold }) |face| {
+    for ([_]text.Face{ .inter, .oxanium_semibold, .oxanium_bold, .oxanium_extrabold }) |face| {
         for ([_]u16{ 13, 17, 22 }) |px| {
             var codepoint: u21 = 32;
             while (codepoint < 127) : (codepoint += 1) {
@@ -276,5 +276,7 @@ test "the whole game's copy fits in the atlas, at every size it is drawn at" {
 
     // It fits, and it fits with room to spare -- the pen has not even reached the bottom.
     try testing.expect(atlas.pen_y + atlas.shelf_h < dim);
-    try testing.expectEqual(@as(u32, 95 * 6), atlas.rects.count());
+    // 95 printable ASCII, four faces, three sizes. If this number changes, a face or a size was
+    // added and the atlas budget deserves a fresh look rather than a nudged constant.
+    try testing.expectEqual(@as(u32, 95 * 4 * 3), atlas.rects.count());
 }

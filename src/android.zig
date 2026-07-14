@@ -196,6 +196,24 @@ const Host = struct {
 
     /// A touch that arrived and has not been folded into the state yet.
     pending_touch: ?ui.Touch = null,
+
+    /// ============================================================================
+    /// THE SAFE RECTANGLE. WHERE THE PHONE WILL ACTUALLY LET US DRAW.
+    ///
+    /// A modern phone is not a rectangle of pixels we own. There is a status bar at the top, a
+    /// gesture bar at the bottom, and on this one a camera cutout that reserves 172 physical pixels
+    /// before our first row. Draw from y=0 and the game's own name renders UNDERNEATH the clock.
+    ///
+    /// It is not a crash and no test can see it: the pixels are exactly where we asked for them.
+    /// They are simply behind something.
+    ///
+    /// The framework tells us the usable region through `onContentRectChanged`. `ui.zig` is handed
+    /// the SIZE of that region and never learns it has an origin -- the shell translates on the way
+    /// out and translates back on the way in, exactly as it already does for density.
+    ///
+    /// Zeroed until the framework says otherwise, which means "the whole window" -- the right
+    /// answer on a device with no insets at all.
+    content: ARect = .{ .left = 0, .top = 0, .right = 0, .bottom = 0 },
 };
 
 var host: Host = .{};
@@ -224,7 +242,7 @@ export fn ANativeActivity_onCreate(
         .onNativeWindowDestroyed = onWindowDestroyed,
         .onInputQueueCreated = onInputQueueCreated,
         .onInputQueueDestroyed = onInputQueueDestroyed,
-        .onContentRectChanged = null,
+        .onContentRectChanged = onContentRectChanged,
         .onConfigurationChanged = null,
         .onLowMemory = null,
     };
@@ -303,6 +321,19 @@ fn onInputQueueDestroyed(_: *ANativeActivity, _: *AInputQueue) callconv(.c) void
     host.input = null;
 }
 
+/// The framework has told us where we may draw. On this phone that is 172 physical pixels below
+/// the top of the window, because there is a camera up there.
+fn onContentRectChanged(_: *ANativeActivity, rect: *const ARect) callconv(.c) void {
+    var threaded: Io.Threaded = .init(std.heap.smp_allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    host.mutex.lock(io) catch return;
+    defer host.mutex.unlock(io);
+
+    host.content = rect.*;
+}
+
 fn onPause(_: *ANativeActivity) callconv(.c) void {
     // Not visible. We stop drawing entirely -- a game that renders to a screen nobody is looking
     // at is a game that drains a battery for nothing (G5).
@@ -375,9 +406,42 @@ fn toDp(physical: i32) i32 {
     return @intFromFloat(@round(@as(f32, @floatFromInt(physical)) / density_scale));
 }
 
-/// The surface, in the units `ui.zig` lays out in.
+/// EXTRA ROOM AT THE BOTTOM, BEYOND WHAT THE SYSTEM ASKS FOR.
+///
+/// The gesture bar is a thin line and the framework reserves exactly enough for it. That is the
+/// right answer for a keyboard and the wrong one for a game: text that stops one pixel above the
+/// bar you swipe with feels like it is about to fall off the phone. This is breathing room, and it
+/// is a judgement, not a measurement.
+const bottom_breathing_room_dp: i32 = 16;
+
+/// The rectangle the phone will actually let us draw in, in physical pixels.
+///
+/// Zeroed content means the framework has not told us yet, which means "all of it".
+fn safeArea(surface: *const Surface) ARect {
+    const content = blk: {
+        const c = host.content;
+        if (c.right > c.left and c.bottom > c.top) break :blk c;
+        break :blk ARect{ .left = 0, .top = 0, .right = surface.width, .bottom = surface.height };
+    };
+
+    const breathing: i32 = @intFromFloat(@round(@as(f32, @floatFromInt(bottom_breathing_room_dp)) * density_scale));
+
+    return .{
+        .left = content.left,
+        .top = content.top,
+        .right = @min(content.right, surface.width),
+        .bottom = @max(content.top, @min(content.bottom, surface.height) - breathing),
+    };
+}
+
+/// The safe area, in the units `ui.zig` lays out in. It is handed a SIZE and never learns it has
+/// an origin -- the shell translates on the way out and back on the way in.
 fn sizeInDp(surface: *const Surface) ui.Size {
-    return .{ .w = toDp(surface.width), .h = toDp(surface.height) };
+    const safe = safeArea(surface);
+    return .{
+        .w = toDp(safe.right - safe.left),
+        .h = toDp(safe.bottom - safe.top),
+    };
 }
 
 const Surface = struct {
@@ -526,9 +590,12 @@ fn render() void {
                 // The touch arrived in PHYSICAL pixels; the UI thinks in dp. Divide here, or a tap
                 // on the Confirm button lands three times too far down the screen and the game
                 // appears not to respond to touch at all.
+                // Back into the safe area's own coordinates, then into dp. The UI placed that
+                // button relative to a rectangle whose origin it has never been told about.
+                const safe = safeArea(&surface);
                 const in_dp: ui.Touch = .{
-                    .x = toDp(at.x),
-                    .y = toDp(at.y),
+                    .x = toDp(at.x - safe.left),
+                    .y = toDp(at.y - safe.top),
                 };
                 host.state = ui.touch(host.state, in_dp, sizeInDp(&surface));
                 host.pending_touch = null;
@@ -617,7 +684,12 @@ fn present(
     // The draw list is in dp. `scale` turns it back into the pixels this surface actually has --
     // and rasterizes the glyphs at the physical size, so the type is sharp rather than a blur
     // magnified from a smaller one.
-    quads.build(draws, engine, atlas, density_scale, verts, gpa) catch {
+    const safe = safeArea(surface);
+
+    quads.build(draws, engine, atlas, density_scale, .{
+        .x = @floatFromInt(safe.left),
+        .y = @floatFromInt(safe.top),
+    }, verts, gpa) catch {
         _ = eglSwapBuffers(surface.display, surface.surface);
         return;
     };

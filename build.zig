@@ -40,28 +40,20 @@ fn checkEveryFileIsClassified(b: *std.Build) void {
     }
 }
 
-/// stb_truetype and the two font faces, attached to a module that needs to draw text.
+/// The four faces. Two typefaces, and the split is a design decision, not an accident:
 ///
-/// F1/F6: this is the SECOND sanctioned dependency, and F6 says plainly that it does not inherit
-/// the map SDK's blessing. The written justification is at the import site, in `vendor/stb_impl.c`.
-/// In short: it parses TrueType outlines to an anti-aliased coverage bitmap; it is one vendored
-/// public-domain file with no transitive dependencies; and removing it means deleting that file,
-/// `src/text.zig`, and this function.
+///   * INTER carries the PROSE -- the sentences a player actually reads. It is a face designed to
+///     disappear, and the words are the product.
+///   * OXANIUM carries the CHROME and the SHOUTING -- labels, headings, and the alarm. It is a
+///     squared display face, and it is the game's voice rather than its speech.
 ///
-/// THE LICENCES ARE CARRIED, AND THEY ARE THE ONES ACTUALLY EMBEDDED.
-///
-/// The prior art's own comments claim it embeds IBM Plex Sans. Its build file embeds Inter. If the
-/// comments had been ported with the code, this repository would have shipped a false attribution
-/// for a font it does not contain -- and the OFL requires the attribution to be correct. So:
-///
-///   * `assets/Inter-Regular.ttf`, `assets/Inter-SemiBold.ttf` -- SIL Open Font License 1.1,
-///     (c) 2016 The Inter Project Authors. Licence text at `assets/Inter-LICENSE.txt`.
-///   * `vendor/stb_truetype.h` -- stb_truetype v1.26, Sean Barrett, public domain (Unlicense).
-///
-/// Verified by reading the files, not the comments about them.
+/// Both are SIL OFL 1.1 and both licences travel with them, in `assets/fonts/`, as the OFL
+/// requires. See ATTRIBUTIONS.md.
 fn addFonts(b: *std.Build, mod: *std.Build.Module) void {
-    mod.addImport("font_regular", b.createModule(.{ .root_source_file = b.path("assets/Inter-Regular.ttf") }));
-    mod.addImport("font_semibold", b.createModule(.{ .root_source_file = b.path("assets/Inter-SemiBold.ttf") }));
+    mod.addImport("font_body", b.createModule(.{ .root_source_file = b.path("assets/fonts/Inter-Regular.ttf") }));
+    mod.addImport("font_label", b.createModule(.{ .root_source_file = b.path("assets/fonts/Oxanium-SemiBold.ttf") }));
+    mod.addImport("font_heading", b.createModule(.{ .root_source_file = b.path("assets/fonts/Oxanium-Bold.ttf") }));
+    mod.addImport("font_alarm", b.createModule(.{ .root_source_file = b.path("assets/fonts/Oxanium-ExtraBold.ttf") }));
 }
 
 /// Compile stb_truetype and link it in. NATIVE TARGETS ONLY.
@@ -235,6 +227,97 @@ pub fn build(b: *std.Build) void {
         // And it is checked by the DEFAULT build too, so a broken host fails `zig build` on the
         // machine of whoever broke it, in the second they break it -- not months later, in a cafe.
         b.default_step.dependOn(&host.step);
+    }
+
+    // ============================================================================
+    // THE SHARED LIBRARY THE PHONE ACTUALLY LOADS.
+    //
+    //     zig build so -Dndk=$HOME/Android/Sdk/ndk/26.3.11579264
+    //
+    // Everything above this point is compiled but never LINKED -- the host object leaves EGL,
+    // GLES and the NDK unresolved on purpose, because a laptop has none of them. This is where
+    // they get resolved, against the NDK's own stubs, and it is the first time anything in this
+    // project becomes a thing a phone can run.
+    //
+    // The NDK is passed in rather than discovered. A build that hunts around the filesystem for a
+    // toolchain is a build that behaves differently on two machines, and `zig build` and
+    // `zig build test` must never need it at all -- which is the whole reason the host is
+    // type-checked as an object.
+    // ============================================================================
+    if (b.option([]const u8, "ndk", "Path to the Android NDK (only needed for `zig build so`)")) |ndk| {
+        const so_step = b.step("so", "Link liboutbreak.so for the phone (needs -Dndk=...)");
+
+        const abi = "aarch64-linux-android";
+        const api = "24"; // minSdkVersion in android/AndroidManifest.xml. Keep them in step.
+
+        const prebuilt = b.fmt("{s}/toolchains/llvm/prebuilt/linux-x86_64", .{ndk});
+        const sysroot = b.fmt("{s}/sysroot", .{prebuilt});
+
+        const query = std.Build.parseTargetQuery(.{ .arch_os_abi = abi }) catch |err| {
+            std.debug.panic("bad android target: {s}", .{@errorName(err)});
+        };
+
+        const so_mod = b.createModule(.{
+            .root_source_file = b.path("src/android.zig"),
+            .target = b.resolveTargetQuery(query),
+            // ReleaseSafe. This library will one day parse bytes off a network from a server the
+            // phone cannot verify, and the overflow and bounds checks are what turn a memory
+            // corruption bug into a clean abort. It is also the mode the battery number must be
+            // measured in, or the number means nothing.
+            .optimize = .ReleaseSafe,
+        });
+
+        addFonts(b, so_mod);
+
+        // The stb shim, compiled for the PHONE this time -- which is why the NDK is needed at all.
+        // Zig does not ship bionic's headers, so `#include <math.h>` only resolves here.
+        so_mod.addIncludePath(b.path("vendor"));
+        so_mod.addCSourceFile(.{
+            .file = b.path("vendor/stb_impl.c"),
+            .flags = &.{"-fno-sanitize=undefined"},
+        });
+        so_mod.link_libc = true;
+        so_mod.addSystemIncludePath(.{ .cwd_relative = b.fmt("{s}/usr/include", .{sysroot}) });
+        so_mod.addSystemIncludePath(.{ .cwd_relative = b.fmt("{s}/usr/include/{s}", .{ sysroot, abi }) });
+        so_mod.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/usr/lib/{s}/{s}", .{ sysroot, abi, api }) });
+
+        // The four the host actually reaches for: the NDK (lifecycle, input, looper, density),
+        // EGL (the surface), GLES2 (the pixels), and the log. Nothing else.
+        so_mod.linkSystemLibrary("android", .{});
+        so_mod.linkSystemLibrary("EGL", .{});
+        so_mod.linkSystemLibrary("GLESv2", .{});
+        so_mod.linkSystemLibrary("log", .{});
+
+        // `outbreak` -> `liboutbreak.so`, which is what `android.app.lib_name` names in the
+        // manifest. That string is the only link between the manifest and the code.
+        const so = b.addLibrary(.{
+            .name = "outbreak",
+            .linkage = .dynamic,
+            .root_module = so_mod,
+        });
+
+        // ZIG MUST NOT PROVIDE LIBC HERE. Android's libc is bionic, it lives in the NDK, and it is
+        // already on the phone. `link_libc = true` otherwise asks Zig to supply one, and Zig quite
+        // correctly answers that it cannot supply bionic.
+        //
+        // So we hand it the NDK's paths instead: bionic's headers, and the versioned stub
+        // directory for our minimum API level. The API level is not cosmetic -- it is which
+        // bionic symbols the linker will admit exist.
+        const libc_conf = b.addWriteFiles().add("android-libc.conf", b.fmt(
+            \\include_dir={s}/usr/include
+            \\sys_include_dir={s}/usr/include
+            \\crt_dir={s}/usr/lib/{s}/{s}
+            \\msvc_lib_dir=
+            \\kernel32_lib_dir=
+            \\gcc_dir=
+            \\
+        , .{ sysroot, sysroot, sysroot, abi, api }));
+        so.setLibCFile(libc_conf);
+
+        const install_so = b.addInstallArtifact(so, .{
+            .dest_dir = .{ .override = .{ .custom = "apk/lib/arm64-v8a" } },
+        });
+        so_step.dependOn(&install_so.step);
     }
 
     // Compiling is enough to fire every comptime guard: the size guards (A7) and the

@@ -110,6 +110,7 @@ pub fn build(
     engine: *text.Engine,
     atlas: *atlas_mod.Atlas,
     scale: f32,
+    origin: Origin,
     out: *std.ArrayList(Vertex),
     gpa: Allocator,
 ) Error!void {
@@ -123,8 +124,8 @@ pub fn build(
 
             // Snapped to whole pixels. A rectangle edge on a half-pixel is a rectangle with a
             // blurry grey line down one side.
-            const x = px(it.x, scale);
-            const y = px(it.y, scale);
+            const x = px(it.x, scale) + origin.x;
+            const y = px(it.y, scale) + origin.y;
             const white = atlas_mod.whiteUv();
 
             try pushQuad(
@@ -132,8 +133,8 @@ pub fn build(
                 gpa,
                 x,
                 y,
-                px(it.x + it.w, scale) - x,
-                px(it.y + it.h, scale) - y,
+                px(it.x + it.w, scale) - px(it.x, scale),
+                px(it.y + it.h, scale) - px(it.y, scale),
                 // Every corner samples the SAME point. The uv is therefore constant across the
                 // whole quad, so every fragment lands exactly on the white texel's centre -- no
                 // interpolation, no bleeding from a neighbour, whatever the sampler is doing.
@@ -143,9 +144,18 @@ pub fn build(
             );
         },
 
-        .text => |it| try pushString(out, engine, atlas, gpa, scale, it.x, it.y, it.text, it.weight, rgba(it.color)),
+        .text => |it| try pushString(out, engine, atlas, gpa, scale, origin, it.x, it.y, it.text, it.weight, rgba(it.color)),
     };
 }
+
+/// WHERE THE SAFE AREA STARTS, in physical pixels.
+///
+/// A modern phone is not a rectangle of pixels we own. There is a status bar, a gesture bar, and a
+/// camera cutout. `ui.zig` is handed the SIZE of what is left and never learns it has an origin --
+/// so the origin is added here, at the same moment the dp become pixels.
+///
+/// `{0, 0}` on a device with no insets, which is what a test uses.
+pub const Origin = struct { x: f32 = 0, y: f32 = 0 };
 
 /// dp -> physical pixels, snapped to the grid.
 fn px(dp: i32, scale: f32) f32 {
@@ -164,6 +174,7 @@ fn pushString(
     atlas: *atlas_mod.Atlas,
     gpa: Allocator,
     scale: f32,
+    origin: Origin,
     x: i32,
     y: i32,
     string: []const u8,
@@ -182,8 +193,8 @@ fn pushString(
     const line = text.lineOf(engine, style.face, physical_px);
 
     // Everything from here down is in PHYSICAL pixels.
-    const baseline: i32 = @as(i32, @intFromFloat(px(y, scale))) + line.ascent;
-    var pen: i32 = @intFromFloat(px(x, scale));
+    const baseline: i32 = @as(i32, @intFromFloat(px(y, scale) + origin.y)) + line.ascent;
+    var pen: i32 = @intFromFloat(px(x, scale) + origin.x);
 
     var it = text.codepoints(string);
     while (it.next()) |codepoint| {
@@ -310,7 +321,7 @@ const Rig = struct {
 
     fn rasterise(rig: *Rig, gpa: Allocator, state: ui.State, size: ui.Size) !void {
         try ui.draw(state, size, &rig.draws, gpa);
-        try build(rig.draws.items, &rig.engine, &rig.atlas, rig.scale, &rig.verts, gpa);
+        try build(rig.draws.items, &rig.engine, &rig.atlas, rig.scale, .{}, &rig.verts, gpa);
     }
 };
 
@@ -335,7 +346,7 @@ test "a rectangle is six vertices, wound clockwise, sampling the white texel at 
     const draws = [_]ui.Draw{
         .{ .rect = .{ .x = 10, .y = 20, .w = 30, .h = 40, .color = .bone } },
     };
-    try build(&draws, &rig.engine, &rig.atlas, rig.scale, &rig.verts, gpa);
+    try build(&draws, &rig.engine, &rig.atlas, rig.scale, .{}, &rig.verts, gpa);
 
     try testing.expectEqual(@as(usize, 6), rig.verts.items.len);
 
@@ -363,14 +374,14 @@ test "a string becomes one quad per inked glyph, and spaces are not quads" {
     const draws = [_]ui.Draw{
         .{ .text = .{ .x = 0, .y = 0, .text = "AB", .color = .bone, .weight = .body } },
     };
-    try build(&draws, &rig.engine, &rig.atlas, rig.scale, &rig.verts, gpa);
+    try build(&draws, &rig.engine, &rig.atlas, rig.scale, .{}, &rig.verts, gpa);
     try testing.expectEqual(@as(usize, 2 * vertices_per_quad), rig.verts.items.len);
 
     // A space advances the pen and emits nothing. "A B" is three characters and still two quads.
     const spaced = [_]ui.Draw{
         .{ .text = .{ .x = 0, .y = 0, .text = "A B", .color = .bone, .weight = .body } },
     };
-    try build(&spaced, &rig.engine, &rig.atlas, rig.scale, &rig.verts, gpa);
+    try build(&spaced, &rig.engine, &rig.atlas, rig.scale, .{}, &rig.verts, gpa);
     try testing.expectEqual(@as(usize, 2 * vertices_per_quad), rig.verts.items.len);
 }
 
@@ -383,7 +394,7 @@ test "text advances to the right, and the pen does not run backwards" {
     const draws = [_]ui.Draw{
         .{ .text = .{ .x = 100, .y = 50, .text = "Hi", .color = .bone, .weight = .body } },
     };
-    try build(&draws, &rig.engine, &rig.atlas, rig.scale, &rig.verts, gpa);
+    try build(&draws, &rig.engine, &rig.atlas, rig.scale, .{}, &rig.verts, gpa);
 
     // First glyph starts at or near the requested x; the second is to the RIGHT of the first.
     const first_x = rig.verts.items[0].x;
@@ -406,7 +417,7 @@ test "THE BASELINE: text sits inside the line box it was given, not below it" {
     const draws = [_]ui.Draw{
         .{ .text = .{ .x = 0, .y = top, .text = "Hxg", .color = .bone, .weight = .body } },
     };
-    try build(&draws, &rig.engine, &rig.atlas, rig.scale, &rig.verts, gpa);
+    try build(&draws, &rig.engine, &rig.atlas, rig.scale, .{}, &rig.verts, gpa);
 
     const style = text.styleOf(.body);
     const line = text.lineOf(&rig.engine, style.face, style.px);
@@ -448,14 +459,14 @@ test "DENSITY: the same layout is physically the same size on a cheap phone and 
     };
 
     rig.scale = 1.0;
-    try build(&draws, &rig.engine, &rig.atlas, rig.scale, &rig.verts, gpa);
+    try build(&draws, &rig.engine, &rig.atlas, rig.scale, .{}, &rig.verts, gpa);
     const mdpi_x = rig.verts.items[0].x;
     const mdpi_w = rig.verts.items[2].x - rig.verts.items[0].x;
 
     var big: std.ArrayList(Vertex) = .empty;
     defer big.deinit(gpa);
 
-    try build(&draws, &rig.engine, &rig.atlas, 3.0, &big, gpa);
+    try build(&draws, &rig.engine, &rig.atlas, 3.0, .{}, &big, gpa);
     const xxhdpi_x = big.items[0].x;
     const xxhdpi_w = big.items[2].x - big.items[0].x;
 
@@ -489,13 +500,13 @@ test "DENSITY: the type is rasterized at the physical size, not magnified from a
         .{ .text = .{ .x = 0, .y = 0, .text = "H", .color = .bone, .weight = .body } },
     };
 
-    try build(&draws, &rig.engine, &rig.atlas, 1.0, &rig.verts, gpa);
+    try build(&draws, &rig.engine, &rig.atlas, 1.0, .{}, &rig.verts, gpa);
     const small_h = rig.verts.items[2].y - rig.verts.items[0].y;
 
     var big: std.ArrayList(Vertex) = .empty;
     defer big.deinit(gpa);
 
-    try build(&draws, &rig.engine, &rig.atlas, 3.0, &big, gpa);
+    try build(&draws, &rig.engine, &rig.atlas, 3.0, .{}, &big, gpa);
     const large_h = big.items[2].y - big.items[0].y;
 
     try testing.expect(large_h > small_h * 2.0);
@@ -598,7 +609,7 @@ fn collectRects(
     for (draws) |item| {
         if (item == .rect) try only_rects.append(gpa, item);
     }
-    try build(only_rects.items, engine, atlas, 1.0, out, gpa);
+    try build(only_rects.items, engine, atlas, 1.0, .{}, out, gpa);
 }
 
 test "the real screens rasterise, the background is first, and every screen has words on it" {

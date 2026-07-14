@@ -37,8 +37,10 @@ const ui = @import("../ui.zig");
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 
-const regular_ttf = @embedFile("font_regular");
-const semibold_ttf = @embedFile("font_semibold");
+const body_ttf = @embedFile("font_body");
+const label_ttf = @embedFile("font_label");
+const heading_ttf = @embedFile("font_heading");
+const alarm_ttf = @embedFile("font_alarm");
 
 // ---- the shim (vendor/stb_impl.c). No header, no @cImport, no bindings. ----
 
@@ -62,7 +64,20 @@ pub const Style = struct {
     px: u16,
 };
 
-pub const Face = enum(u1) { regular, semibold };
+/// TWO TYPEFACES, FOUR CUTS.
+///
+/// Inter carries the prose. Oxanium carries the chrome and the shouting. A game whose entire
+/// payload is words on a black screen gets to care about this.
+pub const Face = enum(u2) {
+    /// Inter Regular. The sentences a player actually reads.
+    inter,
+    /// Oxanium SemiBold. Labels: CONDITION, LEVEL, the faction tag.
+    oxanium_semibold,
+    /// Oxanium Bold. Headings, and the name of a side.
+    oxanium_bold,
+    /// Oxanium ExtraBold. THIS CELL IS LIVE.
+    oxanium_extrabold,
+};
 
 /// THE TYPE RAMP.
 ///
@@ -70,10 +85,10 @@ pub const Face = enum(u1) { regular, semibold };
 /// already committed. They are not a design; they are the sizes that fit the layout that exists.
 pub fn styleOf(weight: ui.Weight) Style {
     return switch (weight) {
-        .label => .{ .face = .semibold, .px = 13 },
-        .body => .{ .face = .regular, .px = 17 },
-        .heading => .{ .face = .semibold, .px = 22 },
-        .alarm => .{ .face = .semibold, .px = 22 },
+        .label => .{ .face = .oxanium_semibold, .px = 13 },
+        .body => .{ .face = .inter, .px = 17 },
+        .heading => .{ .face = .oxanium_bold, .px = 22 },
+        .alarm => .{ .face = .oxanium_extrabold, .px = 22 },
     };
 }
 
@@ -109,8 +124,8 @@ pub const Line = struct {
 };
 
 pub const Engine = struct {
-    /// The two `stbtt_fontinfo`s, sized by the C side and owned by us (C4).
-    faces: [2][]align(16) u8,
+    /// One `stbtt_fontinfo` per face, sized by the C side and owned by us (C4).
+    faces: [4][]align(16) u8,
 
     /// Coverage bytes for every glyph ever rasterized, appended and never freed until deinit.
     ///
@@ -137,26 +152,32 @@ fn keyOf(face: Face, px: u16, codepoint: u21) u64 {
 /// SHELL. Parse the two faces. Everything else is lazy.
 pub fn init(gpa: Allocator) Error!Engine {
     const size = glyphshim_fontinfo_size();
+    const ttfs = [_][]const u8{ body_ttf, label_ttf, heading_ttf, alarm_ttf };
 
-    const regular = try gpa.alignedAlloc(u8, .of(u128), size);
-    errdefer gpa.free(regular);
+    var faces: [4][]align(16) u8 = undefined;
+    var made: usize = 0;
 
-    const semibold = try gpa.alignedAlloc(u8, .of(u128), size);
-    errdefer gpa.free(semibold);
+    // If the third face fails to parse, the two before it are still ours to free (C5).
+    errdefer for (faces[0..made]) |face| gpa.free(face);
 
-    if (glyphshim_font_init(regular.ptr, regular_ttf.ptr) == 0) return Error.FontCorrupt;
-    if (glyphshim_font_init(semibold.ptr, semibold_ttf.ptr) == 0) return Error.FontCorrupt;
+    while (made < ttfs.len) : (made += 1) {
+        faces[made] = try gpa.alignedAlloc(u8, .of(u128), size);
+        if (glyphshim_font_init(faces[made].ptr, ttfs[made].ptr) == 0) {
+            // Allocated but not parsed: hand it to the errdefer above by counting it.
+            made += 1;
+            return Error.FontCorrupt;
+        }
+    }
 
     return .{
-        .faces = .{ regular, semibold },
+        .faces = faces,
         .pool = .empty,
         .cache = .empty,
     };
 }
 
 pub fn deinit(engine: *Engine, gpa: Allocator) void {
-    gpa.free(engine.faces[0]);
-    gpa.free(engine.faces[1]);
+    for (engine.faces) |face| gpa.free(face);
     engine.pool.deinit(gpa);
     engine.cache.deinit(gpa);
     engine.* = undefined;
@@ -331,7 +352,7 @@ test "the faces parse, and every character the game can say has a glyph" {
         while (it.next()) |codepoint| {
             // A zero index means the face has neither the glyph nor U+FFFD -- nothing to draw at
             // all. Space is allowed to have no ink, but it must still be a real glyph.
-            const index = glyphshim_find_glyph(faceOf(&engine, .regular), codepoint);
+            const index = glyphshim_find_glyph(faceOf(&engine, .inter), codepoint);
             try testing.expect(index != 0);
         }
     }
@@ -343,7 +364,7 @@ test "a glyph has ink, an advance, and sits above the baseline" {
     var engine = try init(gpa);
     defer deinit(&engine, gpa);
 
-    const g, const coverage = try glyph(&engine, gpa, .regular, 17, 'H');
+    const g, const coverage = try glyph(&engine, gpa, .inter, 17, 'H');
 
     try testing.expect(g.w > 0 and g.h > 0);
     try testing.expectEqual(@as(usize, @as(usize, g.w) * g.h), coverage.len);
@@ -369,7 +390,7 @@ test "a space has no ink but still moves the pen" {
     var engine = try init(gpa);
     defer deinit(&engine, gpa);
 
-    const g, const coverage = try glyph(&engine, gpa, .regular, 17, ' ');
+    const g, const coverage = try glyph(&engine, gpa, .inter, 17, ' ');
 
     try testing.expectEqual(@as(u16, 0), g.w);
     try testing.expectEqual(@as(usize, 0), coverage.len);
@@ -382,8 +403,8 @@ test "the cache returns the same glyph, and the key does not alias across faces 
     var engine = try init(gpa);
     defer deinit(&engine, gpa);
 
-    const first, _ = try glyph(&engine, gpa, .regular, 17, 'A');
-    const again, _ = try glyph(&engine, gpa, .regular, 17, 'A');
+    const first, _ = try glyph(&engine, gpa, .inter, 17, 'A');
+    const again, _ = try glyph(&engine, gpa, .inter, 17, 'A');
     try testing.expectEqual(first.offset, again.offset);
     try testing.expectEqual(@as(u32, 1), engine.cache.count());
 
@@ -391,17 +412,17 @@ test "the cache returns the same glyph, and the key does not alias across faces 
     // the same codepoint, same face, different size. Each must be a DIFFERENT cached glyph. The
     // prior art shifts the face into bit 63 of the key; widen its weight enum past one bit and
     // these collide silently, drawing the wrong glyph with no error anywhere.
-    _ = try glyph(&engine, gpa, .semibold, 17, 'A');
-    _ = try glyph(&engine, gpa, .regular, 22, 'A');
+    _ = try glyph(&engine, gpa, .oxanium_bold, 17, 'A');
+    _ = try glyph(&engine, gpa, .inter, 22, 'A');
     try testing.expectEqual(@as(u32, 3), engine.cache.count());
 
     // And the keys themselves are distinct, which is the property underneath.
-    try testing.expect(keyOf(.regular, 17, 'A') != keyOf(.semibold, 17, 'A'));
-    try testing.expect(keyOf(.regular, 17, 'A') != keyOf(.regular, 22, 'A'));
-    try testing.expect(keyOf(.regular, 17, 'A') != keyOf(.regular, 17, 'B'));
+    try testing.expect(keyOf(.inter, 17, 'A') != keyOf(.oxanium_bold, 17, 'A'));
+    try testing.expect(keyOf(.inter, 17, 'A') != keyOf(.inter, 22, 'A'));
+    try testing.expect(keyOf(.inter, 17, 'A') != keyOf(.inter, 17, 'B'));
 
     // The widest codepoint and the largest size must not overflow into each other's bits.
-    try testing.expect(keyOf(.semibold, 65535, 0x10FFFF) != keyOf(.regular, 65535, 0x10FFFF));
+    try testing.expect(keyOf(.oxanium_bold, 65535, 0x10FFFF) != keyOf(.inter, 65535, 0x10FFFF));
 }
 
 test "measure is the sum of the advances, and an empty string is zero" {
@@ -410,18 +431,18 @@ test "measure is the sum of the advances, and an empty string is zero" {
     var engine = try init(gpa);
     defer deinit(&engine, gpa);
 
-    try testing.expectEqual(@as(i32, 0), measure(&engine, .regular, 17, ""));
+    try testing.expectEqual(@as(i32, 0), measure(&engine, .inter, 17, ""));
 
-    const h = advance(&engine, .regular, 17, 'H');
-    const i = advance(&engine, .regular, 17, 'i');
-    try testing.expectEqual(h + i, measure(&engine, .regular, 17, "Hi"));
+    const h = advance(&engine, .inter, 17, 'H');
+    const i = advance(&engine, .inter, 17, 'i');
+    try testing.expectEqual(h + i, measure(&engine, .inter, 17, "Hi"));
 
     // Proportional, not monospace -- which is the other reason for the dependency. An 'i' is
     // narrower than an 'H'. If these are ever equal, we are drawing a monospace font by accident.
     try testing.expect(i < h);
 
     // A bigger size is a wider string. Obvious, and it catches a scale factor that is not applied.
-    try testing.expect(measure(&engine, .regular, 22, "Hi") > measure(&engine, .regular, 17, "Hi"));
+    try testing.expect(measure(&engine, .inter, 22, "Hi") > measure(&engine, .inter, 17, "Hi"));
 }
 
 test "a line has positive height and an ascent above the baseline" {
@@ -430,7 +451,7 @@ test "a line has positive height and an ascent above the baseline" {
     var engine = try init(gpa);
     defer deinit(&engine, gpa);
 
-    const line = lineOf(&engine, .regular, 17);
+    const line = lineOf(&engine, .inter, 17);
     try testing.expect(line.ascent > 0);
     try testing.expect(line.descent < 0); // below the baseline, y down
     try testing.expect(line.height > line.ascent);
