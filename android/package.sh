@@ -81,14 +81,23 @@ echo "==> d8"
 
 test -f "$OUT/classes.dex" || { echo "no classes.dex; aborting"; exit 1; }
 
-# ---- 2. the manifest, compiled into a binary APK. No resources: there is no UI to declare,
-#         because the UI is drawn by us, pixel by pixel, from ui.zig.
+# ---- 2. resources, then the manifest, into a binary APK.
+#
+# There is still no UI in here -- the game is drawn pixel by pixel from ui.zig. The only resources
+# are the two icons Android insists on referencing by name: the launcher icon (your logo) and the
+# notification icon (a clean stencil O, because the status bar renders a monochrome silhouette and
+# the full wordmark would be an illegible white smear at 24dp).
+echo "==> aapt2 compile resources"
+rm -rf "$OUT/res-compiled"; mkdir -p "$OUT/res-compiled"
+"$AAPT2" compile --dir "$ROOT/android/res" -o "$OUT/res-compiled/res.zip"
+
 echo "==> aapt2 link"
 "$AAPT2" link \
     -I "$PLATFORM" \
     --manifest "$ROOT/android/AndroidManifest.xml" \
     --min-sdk-version 24 \
     --target-sdk-version 34 \
+    "$OUT/res-compiled/res.zip" \
     -o "$OUT/unsigned.apk"
 
 # ---- 3. the library goes in at lib/<abi>/. `zip -j` would flatten the path and the loader

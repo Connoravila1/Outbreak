@@ -68,6 +68,7 @@
     -->
     <application
         android:label="Outbreak"
+        android:icon="@mipmap/ic_launcher"
         android:hasCode="true"
         android:allowBackup="false"
         android:extractNativeLibs="true">
