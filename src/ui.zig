@@ -180,6 +180,40 @@ pub const Touch = struct { x: i32, y: i32 };
 
 pub const Size = struct { w: i32, h: i32 };
 
+/// WHAT THE PHONE HAS TAKEN, around the outside of `Size`. In dp.
+///
+/// `Size` is the SAFE area -- the rectangle the layout is allowed to put a button in, because
+/// anything outside it renders under the clock or under the gesture bar.
+///
+/// But DECORATION IS NOT LAYOUT. Scanlines and a spore field that stop at the safe boundary leave
+/// a flat, texture-less band at the top and bottom of the phone, and that band reads as a black
+/// bar whether or not the colour behind it is right. The CRT has to reach the glass.
+///
+/// So the core is told how much was taken, and it may deliberately draw INTO it: coordinates from
+/// `-insets.top` to `size.h + insets.bottom` are legal, and only for things a player never has to
+/// touch or read.
+pub const Insets = struct {
+    top: i32 = 0,
+    bottom: i32 = 0,
+    left: i32 = 0,
+    right: i32 = 0,
+
+    /// The full surface, in the core's own coordinates -- origin at the top-left of the PHONE
+    /// rather than of the safe area.
+    fn bleedTop(in: Insets) i32 {
+        return -in.top;
+    }
+    fn bleedLeft(in: Insets) i32 {
+        return -in.left;
+    }
+    fn bleedWidth(in: Insets, size: Size) i32 {
+        return in.left + size.w + in.right;
+    }
+    fn bleedHeight(in: Insets, size: Size) i32 {
+        return in.top + size.h + in.bottom;
+    }
+};
+
 // ============================================================================ the words
 
 /// What the player is told about the size of what they have walked into.
@@ -278,10 +312,16 @@ pub fn touch(state: State, at: Touch, size: Size) State {
     var next = state;
 
     switch (state.screen) {
-        // A tap BEGINS THE END of the boot sequence, at any point in it -- a splash screen you
-        // cannot skip is being shown for someone else's benefit. It does not jump: the screen
-        // takes four hundred milliseconds to get out of the way, and `advance` finishes it.
-        .boot => if (state.leaving_ms == null) {
+        // THE TAP DOES NOT WORK UNTIL THE SEQUENCE HAS FINISHED.
+        //
+        // "Tap to enter" is an invitation, and it is not extended until the screen has actually
+        // said everything it has to say. A tap landing mid-terminal would cut the game off in the
+        // middle of introducing itself -- and the player has not been asked for anything yet, so
+        // there is nothing for them to be impatient about.
+        //
+        // Once it IS offered, the tap begins the ending rather than jumping: the screen takes four
+        // hundred milliseconds to get out of the way, and `advance` finishes the job.
+        .boot => if (state.boot_ms >= boot_glitch_end and state.leaving_ms == null) {
             next.leaving_ms = state.boot_ms;
         },
 
@@ -438,13 +478,21 @@ fn backButton(size: Size) Rect {
 /// CORE. Turn the state into a list of things to draw. Allocates into the caller's list (C1).
 ///
 /// The shell rasterises this and does nothing else. It never decides what to show.
-pub fn draw(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
+pub fn draw(state: State, size: Size, insets: Insets, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
     out.clearRetainingCapacity();
 
-    try out.append(gpa, .{ .rect = .{ .x = 0, .y = 0, .w = size.w, .h = size.h, .color = .void_black } });
+    // FULL BLEED. Not the safe area -- the whole phone. A background that stops at the inset is
+    // the letterbox we were trying to get rid of.
+    try out.append(gpa, .{ .rect = .{
+        .x = insets.bleedLeft(),
+        .y = insets.bleedTop(),
+        .w = insets.bleedWidth(size),
+        .h = insets.bleedHeight(size),
+        .color = .void_black,
+    } });
 
     switch (state.screen) {
-        .boot => try drawBoot(state, size, out, gpa),
+        .boot => try drawBoot(state, size, insets, out, gpa),
         .choose_side => try drawChooseSide(state, size, out, gpa),
         .quiet => try drawQuiet(state, size, out, gpa),
         .live => try drawLive(state, size, out, gpa),
@@ -657,16 +705,23 @@ fn pulse(ms: u32, period: u32, low: u32, high: u32) u8 {
     return @intCast(low + (high - low) * t / half);
 }
 
-fn drawBoot(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
+fn drawBoot(state: State, size: Size, insets: Insets, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
     const ms = state.boot_ms;
 
-    // Scorched char, not the game's usual near-black. The boot screen is a different room.
-    try out.append(gpa, .{ .rect = .{ .x = 0, .y = 0, .w = size.w, .h = size.h, .color = .char_deep } });
+    // Scorched char, not the game's usual near-black. The boot screen is a different room -- and
+    // it reaches the glass, edge to edge.
+    try out.append(gpa, .{ .rect = .{
+        .x = insets.bleedLeft(),
+        .y = insets.bleedTop(),
+        .w = insets.bleedWidth(size),
+        .h = insets.bleedHeight(size),
+        .color = .char_deep,
+    } });
 
     if (ms < boot_terminal_ms) {
         try drawBootTerminal(ms, size, out, gpa);
     } else {
-        try drawSpores(ms, size, out, gpa);
+        try drawSpores(ms, size, insets, out, gpa);
         try drawWordmark(ms, size, out, gpa);
 
         if (ms < boot_infection_end) {
@@ -676,7 +731,7 @@ fn drawBoot(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allocator)
         }
     }
 
-    try drawScanlines(size, out, gpa);
+    try drawScanlines(size, insets, out, gpa);
 
     // THE WAY OUT. The player tapped, and the infection finishes what it started: the dark closes
     // in from the edges, the wordmark flares, and the screen is taken. Four hundred milliseconds.
@@ -715,7 +770,13 @@ fn drawBoot(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allocator)
         // being revealed behind a half-faded splash.
         const close: u8 = @intCast(if (t > 60) (@as(u32, @intCast(t)) - 60) * 255 / 40 else 0);
         if (close > 0) {
-            try out.append(gpa, .{ .rect = .{ .x = 0, .y = 0, .w = size.w, .h = size.h, .color = dim(.void_black, close) } });
+            try out.append(gpa, .{ .rect = .{
+                .x = insets.bleedLeft(),
+                .y = insets.bleedTop(),
+                .w = insets.bleedWidth(size),
+                .h = insets.bleedHeight(size),
+                .color = dim(.void_black, close),
+            } });
         }
     }
 }
@@ -750,8 +811,15 @@ fn drawBootTerminal(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocat
 }
 
 /// The spore fields: a band at the top, and the same band mirrored at the bottom.
-fn drawSpores(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
-    const band = @divTrunc(size.h * 34, 100);
+fn drawSpores(ms: u32, size: Size, insets: Insets, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
+    // MEASURED AGAINST THE PHONE, NOT THE SAFE AREA. A spore field that stops short of the glass
+    // makes the top of the screen look cropped, whatever colour is behind it.
+    const full_top = insets.bleedTop();
+    const full_w = insets.bleedWidth(size);
+    const full_h = insets.bleedHeight(size);
+    const full_left = insets.bleedLeft();
+
+    const band = @divTrunc(full_h * 34, 100);
 
     for (spores, 0..) |s, i| {
         const n: u32 = @intCast(i);
@@ -761,30 +829,31 @@ fn drawSpores(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Al
         const drift_x = wander(ms, 7000 + n * 900, 10, n * 613);
         const drift_y = wander(ms, 9000 + n * 700, 7, n * 971);
 
-        const x = @divTrunc(size.w * s.fx, 1000) + drift_x;
-        const y = @divTrunc(band * s.fy, 1000) + drift_y;
+        const x = full_left + @divTrunc(full_w * s.fx, 1000) + drift_x;
+        const y = full_top + @divTrunc(band * s.fy, 1000) + drift_y;
         const colour: Color = if (s.hot) .blood_glow else .blood_deep;
 
-        // Top.
+        // Top band, starting at the top of the PHONE.
         try out.append(gpa, .{ .sprite = .{ .x = x - s.r, .y = y - s.r, .w = s.r * 2, .h = s.r * 2, .color = colour, .sprite = .disc } });
-        // And mirrored at the bottom, exactly as the mock flips the band -- but drifting the other
-        // way, so the two fields do not look like one field reflected.
-        try out.append(gpa, .{ .sprite = .{ .x = x - drift_x * 2 - s.r, .y = size.h - y - s.r, .w = s.r * 2, .h = s.r * 2, .color = colour, .sprite = .disc } });
+        // And mirrored at the bottom of the phone, drifting the other way so the two fields do not
+        // read as one field reflected.
+        const mirrored_y = full_top + full_h - (y - full_top);
+        try out.append(gpa, .{ .sprite = .{ .x = x - drift_x * 2 - s.r, .y = mirrored_y - s.r, .w = s.r * 2, .h = s.r * 2, .color = colour, .sprite = .disc } });
     }
 
     // The two soft blooms that make it a field rather than a scatter of dots.
-    const bloom = @divTrunc(size.w * 7, 10);
+    const bloom = @divTrunc(full_w * 7, 10);
     try out.append(gpa, .{ .sprite = .{
-        .x = @divTrunc(size.w * 3, 10) - @divTrunc(bloom, 2),
-        .y = @divTrunc(band * 3, 10) - @divTrunc(bloom, 2),
+        .x = full_left + @divTrunc(full_w * 3, 10) - @divTrunc(bloom, 2),
+        .y = full_top + @divTrunc(band * 3, 10) - @divTrunc(bloom, 2),
         .w = bloom,
         .h = bloom,
         .color = dim(.blood, 26),
         .sprite = .disc,
     } });
     try out.append(gpa, .{ .sprite = .{
-        .x = @divTrunc(size.w * 7, 10) - @divTrunc(bloom, 2),
-        .y = size.h - @divTrunc(band * 6, 10) - @divTrunc(bloom, 2),
+        .x = full_left + @divTrunc(full_w * 7, 10) - @divTrunc(bloom, 2),
+        .y = full_top + full_h - @divTrunc(band * 6, 10) - @divTrunc(bloom, 2),
         .w = bloom,
         .h = bloom,
         .color = dim(.blood, 20),
@@ -814,14 +883,16 @@ fn drawWordmark(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) 
     const glow = @divTrunc(size.w * 9, 10) + breath;
     try out.append(gpa, .{ .sprite = .{
         .x = mid_x - @divTrunc(glow, 2),
-        .y = mid_y - @divTrunc(glow, 2) - 10,
+        .y = mid_y - @divTrunc(glow, 2) - 96,
         .w = glow,
         .h = glow,
         .color = dim(.blood, beat),
         .sprite = .disc,
     } });
 
-    const top = mid_y - 40;
+    // HIGHER THAN CENTRE. Optically centred rather than mathematically: a heavy wordmark sitting on
+    // the exact middle line reads as low, and there is a tagline hanging beneath it.
+    const top = mid_y - 130;
 
     // THE GLITCH. Two off-register copies, red and cold blue, for the length of one flinch. The
     // channels tear apart and snap back -- exactly what the CSS does with `text-shadow` offsets.
@@ -896,7 +967,7 @@ fn drawBootTail(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) 
 
     try out.append(gpa, .{ .text = .{
         .x = mid_x,
-        .y = @divTrunc(size.h, 2) + 44,
+        .y = @divTrunc(size.h, 2) - 44,
         .text = "H U M A N I T Y ' S   L A S T   S T A N D",
         .color = dim(.faint, fade),
         .weight = .label,
@@ -918,10 +989,22 @@ fn drawBootTail(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) 
 
 /// The CRT. Six percent white, every third row. It costs a few hundred rectangles and it is what
 /// makes the whole thing feel like it is being displayed rather than drawn.
-fn drawScanlines(size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
-    var y: i32 = 0;
-    while (y < size.h) : (y += 3) {
-        try out.append(gpa, .{ .rect = .{ .x = 0, .y = y, .w = size.w, .h = 1, .color = dim(.bone, 15) } });
+fn drawScanlines(size: Size, insets: Insets, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
+    // THE CRT REACHES THE GLASS. Scanlines that stop at the safe area leave a flat band top and
+    // bottom, and a flat band is a black bar with extra steps -- it looks cropped even when the
+    // colour behind it is exactly right.
+    const top = insets.bleedTop();
+    const bottom = top + insets.bleedHeight(size);
+
+    var y: i32 = top;
+    while (y < bottom) : (y += 3) {
+        try out.append(gpa, .{ .rect = .{
+            .x = insets.bleedLeft(),
+            .y = y,
+            .w = insets.bleedWidth(size),
+            .h = 1,
+            .color = dim(.bone, 15),
+        } });
     }
 }
 
@@ -1070,7 +1153,7 @@ test "the draw list says nothing the state did not" {
     defer out.deinit(gpa);
 
     const state: State = .{ .screen = .quiet, .faction = .zombie };
-    try draw(state, size, &out, gpa);
+    try draw(state, size, .{}, &out, gpa);
 
     // Every string on the screen came from the state or from the copy above. There is no cell in
     // this list, no coordinate, no count, and no name -- because there is none in the state.
@@ -1128,7 +1211,7 @@ test "THE CREDIT IS REACHABLE, AND IT NAMES THE PEOPLE" {
     try testing.expect(!overlaps(link, confirm));
 
     // And the screen itself carries the credits the licences actually require.
-    try draw(.{ .screen = .credits, .faction = .human }, size, &out, gpa);
+    try draw(.{ .screen = .credits, .faction = .human }, size, .{}, &out, gpa);
 
     var has_creator = false;
     var has_site = false;
@@ -1182,10 +1265,15 @@ test "EVERY MILLISECOND OF THE BOOT SEQUENCE, NOT A SAMPLE OF THEM" {
     defer out.deinit(gpa);
 
     // Two sizes, because a division by a screen dimension is another way to reach zero.
+    // WITH REAL INSETS, not zero. The bleed arithmetic -- negative origins, mirrored bands, a
+    // scanline loop that starts above the top of the screen -- only exists when the phone has taken
+    // something, so testing at zero would test the one case that cannot go wrong.
+    const real: Insets = .{ .top = 57, .bottom = 32, .left = 0, .right = 0 };
+
     for ([_]Size{ .{ .w = 360, .h = 800 }, .{ .w = 1080, .h = 2400 } }) |size| {
         var ms: u32 = 0;
         while (ms < boot_glitch_end + 4000) : (ms += 1) {
-            try draw(.{ .screen = .boot, .boot_ms = ms }, size, &out, gpa);
+            try draw(.{ .screen = .boot, .boot_ms = ms }, size, real, &out, gpa);
             try testing.expect(out.items.len > 0);
         }
 
@@ -1196,7 +1284,7 @@ test "EVERY MILLISECOND OF THE BOOT SEQUENCE, NOT A SAMPLE OF THEM" {
             var t: u32 = 0;
             while (t < boot_exit_ms + 200) : (t += 1) {
                 const state: State = .{ .screen = .boot, .boot_ms = began + t, .leaving_ms = began };
-                try draw(state, size, &out, gpa);
+                try draw(state, size, real, &out, gpa);
                 _ = advance(state, began + t);
             }
         }
@@ -1207,10 +1295,17 @@ test "EVERY MILLISECOND OF THE BOOT SEQUENCE, NOT A SAMPLE OF THEM" {
     try testing.expectEqual(Screen.boot, advance(leaving, 5000 + boot_exit_ms - 1).screen);
     try testing.expectEqual(Screen.choose_side, advance(leaving, 5000 + boot_exit_ms).screen);
 
-    // And a tap begins the exit rather than jumping, so the animation has time to play.
-    const tapped = touch(.{ .screen = .boot, .boot_ms = 900 }, .{ .x = 10, .y = 10 }, .{ .w = 360, .h = 800 });
+    // A tap at 900ms is a tap DURING the terminal boot, and the invitation has not been extended
+    // yet. It does nothing -- the game is still introducing itself.
+    const too_early = touch(.{ .screen = .boot, .boot_ms = 900 }, .{ .x = 10, .y = 10 }, .{ .w = 360, .h = 800 });
+    try testing.expectEqual(Screen.boot, too_early.screen);
+    try testing.expectEqual(@as(?u32, null), too_early.leaving_ms);
+
+    // Once the sequence has finished, it begins the exit rather than jumping.
+    const offered = boot_glitch_end + 10;
+    const tapped = touch(.{ .screen = .boot, .boot_ms = offered }, .{ .x = 10, .y = 10 }, .{ .w = 360, .h = 800 });
     try testing.expectEqual(Screen.boot, tapped.screen);
-    try testing.expectEqual(@as(?u32, 900), tapped.leaving_ms);
+    try testing.expectEqual(@as(?u32, offered), tapped.leaving_ms);
 }
 
 test "THE BOOT SEQUENCE IS A PURE FUNCTION OF A MILLISECOND" {
@@ -1236,7 +1331,7 @@ test "THE BOOT SEQUENCE IS A PURE FUNCTION OF A MILLISECOND" {
     }.at;
 
     // EARLY: the terminal is up and the wordmark has not burned in.
-    try draw(.{ .screen = .boot, .boot_ms = 300 }, size, &out, gpa);
+    try draw(.{ .screen = .boot, .boot_ms = 300 }, size, .{}, &out, gpa);
     try testing.expect(!wordmarkAt(out.items));
 
     var saw_first_line = false;
@@ -1252,7 +1347,7 @@ test "THE BOOT SEQUENCE IS A PURE FUNCTION OF A MILLISECOND" {
     try testing.expect(!saw_last_line); // the terminal types; it does not paste
 
     // LATE IN THE TERMINAL: every line is up, including the one that is not OK.
-    try draw(.{ .screen = .boot, .boot_ms = boot_terminal_ms - 1 }, size, &out, gpa);
+    try draw(.{ .screen = .boot, .boot_ms = boot_terminal_ms - 1 }, size, .{}, &out, gpa);
     var saw_contamination = false;
     for (out.items) |item| switch (item) {
         .text => |t| if (std.mem.eql(u8, t.text, boot_lines[3].text)) {
@@ -1263,14 +1358,14 @@ test "THE BOOT SEQUENCE IS A PURE FUNCTION OF A MILLISECOND" {
     try testing.expect(saw_contamination);
 
     // THE WORDMARK burns in partway through the infection, not before it.
-    try draw(.{ .screen = .boot, .boot_ms = boot_terminal_ms + 100 }, size, &out, gpa);
+    try draw(.{ .screen = .boot, .boot_ms = boot_terminal_ms + 100 }, size, .{}, &out, gpa);
     try testing.expect(!wordmarkAt(out.items));
 
-    try draw(.{ .screen = .boot, .boot_ms = boot_infection_end - 1 }, size, &out, gpa);
+    try draw(.{ .screen = .boot, .boot_ms = boot_infection_end - 1 }, size, .{}, &out, gpa);
     try testing.expect(wordmarkAt(out.items));
 
     // AT REST: the wordmark is up, the invitation is pulsing, and nothing is still loading.
-    try draw(.{ .screen = .boot, .boot_ms = boot_glitch_end + 1200 }, size, &out, gpa);
+    try draw(.{ .screen = .boot, .boot_ms = boot_glitch_end + 1200 }, size, .{}, &out, gpa);
     try testing.expect(wordmarkAt(out.items));
 
     var saw_tap = false;
@@ -1288,8 +1383,8 @@ test "THE BOOT SEQUENCE IS A PURE FUNCTION OF A MILLISECOND" {
     // DETERMINISTIC. The same millisecond twice is the same frame twice, to the byte.
     var again: std.ArrayList(Draw) = .empty;
     defer again.deinit(gpa);
-    try draw(.{ .screen = .boot, .boot_ms = 2400 }, size, &out, gpa);
-    try draw(.{ .screen = .boot, .boot_ms = 2400 }, size, &again, gpa);
+    try draw(.{ .screen = .boot, .boot_ms = 2400 }, size, .{}, &out, gpa);
+    try draw(.{ .screen = .boot, .boot_ms = 2400 }, size, .{}, &again, gpa);
     try testing.expectEqual(out.items.len, again.items.len);
 
     // AND IT IS SKIPPABLE. A splash screen you cannot escape is being shown for someone else's
@@ -1298,16 +1393,28 @@ test "THE BOOT SEQUENCE IS A PURE FUNCTION OF A MILLISECOND" {
     // But a tap BEGINS the exit; it does not jump. The four hundred milliseconds after it are not
     // touches, so `advance` is what finishes the job -- and that is the whole reason `advance`
     // exists rather than the ending being done inside `touch`.
-    const tapped = touch(.{ .screen = .boot, .boot_ms = 200 }, .{ .x = 100, .y = 100 }, size);
+    // THE TAP DOES NOT WORK UNTIL THE SEQUENCE HAS FINISHED. "Tap to enter" is an invitation, and
+    // it is not extended until the screen has said everything it has to say.
+    const too_soon = touch(.{ .screen = .boot, .boot_ms = 200 }, .{ .x = 100, .y = 100 }, size);
+    try testing.expectEqual(@as(?u32, null), too_soon.leaving_ms);
+    try testing.expectEqual(Screen.boot, advance(too_soon, 900).screen);
+
+    const mid_infection = touch(.{ .screen = .boot, .boot_ms = boot_infection_end - 1 }, .{ .x = 100, .y = 100 }, size);
+    try testing.expectEqual(@as(?u32, null), mid_infection.leaving_ms);
+
+    // Once it IS offered, the tap begins the ending -- it does not jump. The four hundred
+    // milliseconds after it are not touches, which is why `advance` exists at all.
+    const ready = boot_glitch_end + 500;
+    const tapped = touch(.{ .screen = .boot, .boot_ms = ready }, .{ .x = 100, .y = 100 }, size);
     try testing.expectEqual(Screen.boot, tapped.screen);
-    try testing.expectEqual(@as(?u32, 200), tapped.leaving_ms);
-    try testing.expectEqual(Screen.choose_side, advance(tapped, 200 + boot_exit_ms).screen);
+    try testing.expectEqual(@as(?u32, ready), tapped.leaving_ms);
+    try testing.expectEqual(Screen.choose_side, advance(tapped, ready + boot_exit_ms).screen);
 
     // A returning player, who has already chosen, lands back in the quiet.
-    const returning = touch(.{ .screen = .boot, .boot_ms = 200, .faction = .human }, .{ .x = 100, .y = 100 }, size);
-    try testing.expectEqual(Screen.quiet, advance(returning, 200 + boot_exit_ms).screen);
+    const returning = touch(.{ .screen = .boot, .boot_ms = ready, .faction = .human }, .{ .x = 100, .y = 100 }, size);
+    try testing.expectEqual(Screen.quiet, advance(returning, ready + boot_exit_ms).screen);
 
     // Tapping twice does not restart the exit. The player is already leaving.
     const twice = touch(tapped, .{ .x = 50, .y = 50 }, size);
-    try testing.expectEqual(@as(?u32, 200), twice.leaving_ms);
+    try testing.expectEqual(@as(?u32, ready), twice.leaving_ms);
 }

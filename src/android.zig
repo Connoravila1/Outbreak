@@ -444,6 +444,22 @@ fn sizeInDp(surface: *const Surface) ui.Size {
     };
 }
 
+/// WHAT THE PHONE TOOK, so the core can deliberately draw back into it.
+///
+/// The layout stays inside the safe area -- it must, or a button ends up under the gesture bar.
+/// But DECORATION IS NOT LAYOUT: scanlines and a spore field that stop at the safe boundary leave a
+/// flat band top and bottom, and a flat band is a black bar with extra steps. The CRT has to reach
+/// the glass. So the core is told how much was taken and is trusted to bleed into it.
+fn insetsInDp(surface: *const Surface) ui.Insets {
+    const safe = safeArea(surface);
+    return .{
+        .top = toDp(safe.top),
+        .bottom = toDp(surface.height - safe.bottom),
+        .left = toDp(safe.left),
+        .right = toDp(surface.width - safe.right),
+    };
+}
+
 const Surface = struct {
     display: EGLDisplay = null,
     surface: EGLSurface = null,
@@ -658,7 +674,7 @@ fn render() void {
         };
 
         // IN DP. The interface has never heard of a phone and does not start now.
-        ui.draw(state, sizeInDp(&surface), &draws, gpa) catch continue;
+        ui.draw(state, sizeInDp(&surface), insetsInDp(&surface), &draws, gpa) catch continue;
 
         present(&surface, draws.items, state, &engine, &atlas, &verts, gpa);
 

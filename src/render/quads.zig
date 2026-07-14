@@ -367,7 +367,7 @@ const Rig = struct {
     }
 
     fn rasterise(rig: *Rig, gpa: Allocator, state: ui.State, size: ui.Size) !void {
-        try ui.draw(state, size, &rig.draws, gpa);
+        try ui.draw(state, size, .{}, &rig.draws, gpa);
         try build(rig.draws.items, &rig.engine, &rig.atlas, rig.scale, .{}, &rig.verts, gpa);
     }
 };
