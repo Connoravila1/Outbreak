@@ -155,24 +155,15 @@ test "THE PHASE 2 EXIT CRITERION, over a socket" {
     try testing.expectEqualSlices(u8, &alone_in_field, &zombie_in_cafe);
 }
 
-test "THE TIMING HALF: a tick costs the same whether the world is at war or asleep" {
-    // I3's nastiest edge, and the one I was most likely to get wrong.
-    //
-    // Quorum silence is only absolute if a quiet cell is indistinguishable from a live one
-    // THROUGH TIMING. If resolving a live cell takes measurably longer than resolving a dead
-    // one, an attacker with a stopwatch reads the count we refused to send.
-    //
-    // The architecture is supposed to make this free: the reply goes out ON THE TICK BOUNDARY,
-    // in one loop, with no branch on what happened. But "supposed to" is not a security
-    // property. So: MEASURE IT.
-    const gpa = testing.allocator;
-
-    var threaded: Io.Threaded = .init(gpa, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
-
+/// Resolve two worlds of `population` people -- one crammed into a single enormous fight, one
+/// where every soul is alone in their own room -- and return how many MORE allocation calls the
+/// war took than the silence.
+///
+/// The counter sits ON TOP of the arena, not underneath it. This is the whole trick: an arena
+/// serves a per-fight allocation out of a chunk it already holds, so a counter underneath the
+/// arena would see a per-fight allocation and report nothing at all. On top, it sees every call.
+fn extraAllocationsAtWar(io: Io, gpa: std.mem.Allocator, population: u32) !usize {
     const precision = spatial.default_precision;
-    const population = 600;
 
     // Two worlds, identical in every way except what is happening in them.
     var at_war = try transport.init(io, 1, precision, .{});
@@ -186,86 +177,111 @@ test "THE TIMING HALF: a tick costs the same whether the world is at war or asle
     var i: u32 = 0;
     while (i < population) : (i += 1) {
         const faction: @import("world.zig").Faction = if (i % 2 == 0) .human else .zombie;
+        const who: protocol.SessionId = @enumFromInt(1000 + i);
 
         // AT WAR: everyone crammed into one enormous fight.
-        const war_session: protocol.SessionId = @enumFromInt(1000 + i);
-        _ = try session_mod.join(&at_war.sessions, gpa, faction, war_session);
-        _ = session_mod.ingest(&at_war.sessions, .{ .session = war_session, .cell = battlefield });
+        _ = try session_mod.join(&at_war.sessions, gpa, faction, who);
+        _ = session_mod.ingest(&at_war.sessions, .{ .session = who, .cell = battlefield });
 
         // ASLEEP: every one of them alone in their own room. Not one live cell in the world.
-        const quiet_session: protocol.SessionId = @enumFromInt(1000 + i);
-        _ = try session_mod.join(&asleep.sessions, gpa, faction, quiet_session);
+        _ = try session_mod.join(&asleep.sessions, gpa, faction, who);
         _ = session_mod.ingest(&asleep.sessions, .{
-            .session = quiet_session,
+            .session = who,
             .cell = spatial.cellFromKey(0x100000 + i, precision),
         });
     }
 
-    // Time both, several times, and take the best of each -- the minimum is the cleanest signal
-    // through scheduler noise.
-    var war_ns: u64 = std.math.maxInt(u64);
-    var quiet_ns: u64 = std.math.maxInt(u64);
+    var war_arena: std.heap.ArenaAllocator = .init(gpa);
+    defer war_arena.deinit();
+    var war_gpa: std.testing.FailingAllocator = .init(gpa, .{});
+    var war_scratch: std.testing.FailingAllocator = .init(war_arena.allocator(), .{});
+    try transport.tick(&at_war, io, war_gpa.allocator(), war_scratch.allocator());
+    const war = war_gpa.allocations + war_scratch.allocations;
 
-    var round: usize = 0;
-    while (round < 20) : (round += 1) {
-        var arena: std.heap.ArenaAllocator = .init(gpa);
-        defer arena.deinit();
-
-        const w0 = Io.Timestamp.now(io, .awake);
-        try transport.tick(&at_war, io, gpa, arena.allocator());
-        const w1 = Io.Timestamp.now(io, .awake);
-        war_ns = @min(war_ns, @as(u64, @intCast(w1.nanoseconds - w0.nanoseconds)));
-
-        const q0 = Io.Timestamp.now(io, .awake);
-        try transport.tick(&asleep, io, gpa, arena.allocator());
-        const q1 = Io.Timestamp.now(io, .awake);
-        quiet_ns = @min(quiet_ns, @as(u64, @intCast(q1.nanoseconds - q0.nanoseconds)));
-    }
-
-    // There ARE no connections here, so this measures the resolution, not the writes -- which is
-    // the part an attacker's stopwatch would actually see through a network.
-    //
-    // The two are not required to be bit-for-bit identical -- 600 people in one fight really is
-    // more arithmetic than 600 people alone. What matters is that the difference is nowhere near
-    // measurable ACROSS A NETWORK, where jitter is milliseconds and this is microseconds.
-    //
-    // The real guarantee is not this number. It is that the reply is sent on the tick boundary,
-    // thirty seconds wide, so the client's observable latency is dominated by the clock and not
-    // by the world. This test exists to catch the day someone "optimises" that away.
-    const slower = @max(war_ns, quiet_ns);
-    const faster = @min(war_ns, quiet_ns);
-    const difference_us = (slower - faster) / 1000;
+    var quiet_arena: std.heap.ArenaAllocator = .init(gpa);
+    defer quiet_arena.deinit();
+    var quiet_gpa: std.testing.FailingAllocator = .init(gpa, .{});
+    var quiet_scratch: std.testing.FailingAllocator = .init(quiet_arena.allocator(), .{});
+    try transport.tick(&asleep, io, quiet_gpa.allocator(), quiet_scratch.allocator());
+    const quiet = quiet_gpa.allocations + quiet_scratch.allocations;
 
     std.debug.print(
-        "\n    tick at war: {d}us   tick asleep: {d}us   difference: {d}us\n" ++
-            "    (network jitter is milliseconds; the reply waits for the tick boundary regardless)\n",
-        .{ war_ns / 1000, quiet_ns / 1000, difference_us },
+        "\n    population {d:>4} -- allocation calls at war: {d:>3}   asleep: {d:>3}   extra: {d}\n",
+        .{ population, war, quiet, war -| quiet },
     );
 
+    return war -| quiet;
+}
+
+test "THE TIMING HALF: resolving a fight costs no allocation per person in it" {
+    // I3's nastiest edge, and the one I was most likely to get wrong.
+    //
+    // Quorum silence is only absolute if a quiet cell is indistinguishable from a live one
+    // THROUGH TIMING. If resolving a live cell takes measurably longer than resolving a dead one,
+    // an attacker with a stopwatch reads the count we refused to send.
+    //
     // ================================================================
-    // THE FINDING, STATED HONESTLY. THE DIFFERENCE IS NOT ZERO.
+    // WHY THIS TEST NO LONGER HOLDS A STOPWATCH.
     //
-    // A busy world really does take longer to resolve than a sleeping one -- about 750us at six
-    // hundred players. So: is that a leak?
+    // It used to. It timed a warring world against a sleeping one and asserted the difference was
+    // under a millisecond. That assertion was deleted, and it is worth being precise about why,
+    // because deleting an assertion is exactly the move that should make a reader suspicious:
     //
-    // NO, AND THE REASON IS STRUCTURAL RATHER THAN LUCKY.
+    //   1. IT COULD NOT CATCH THE REGRESSION IT NAMED. Its own comment said the danger was
+    //      "replying to each player as their cell finishes resolving." That danger lives in the
+    //      WRITE LOOP -- and the test attached no connections, so it never ran the write loop at
+    //      all. It timed resolution and nothing else. Someone could have moved the socket write
+    //      inside the cell-resolution loop, leaked an exact headcount to anyone with a stopwatch,
+    //      and this test would have gone right on passing.
+    //
+    //   2. IT ASSERTED A MACHINE, NOT A PROPERTY. A busy world really does take longer to resolve
+    //      than a sleeping one -- 600 people in one fight genuinely is more arithmetic. The old
+    //      comment said so itself and correctly judged it benign. So the test put an absolute
+    //      microsecond bound on a quantity it had already agreed was allowed to be nonzero, and
+    //      the bound was one the hardware could cross on a bad afternoon. It flaked. A guard that
+    //      cries wolf is a guard people learn to silence.
+    //
+    // WHAT ACTUALLY PROTECTS I3 HERE IS STRUCTURAL, NOT MEASURED.
     //
     // The replies go out AFTER the whole world has resolved, in one loop over connections, in
-    // connection order, with no branch on what happened to any individual. So the timing an
-    // attacker can observe is a function of GLOBAL LOAD ACROSS THE ENTIRE CITY -- not of their
-    // own cell.
+    // connection order, with no branch on what happened to any individual -- and the replies are
+    // one-per-session, sorted by SessionId, which is CSPRNG-drawn. So there is no path by which a
+    // player's own cell can influence when their own bytes are written. The timing an attacker
+    // can observe is a function of GLOBAL LOAD ACROSS THE ENTIRE CITY. Timing your own reply tells
+    // you "the world was busy this tick." It does not tell you whether YOUR room reached quorum,
+    // which is the thing I3 protects.
     //
-    // Timing your own reply tells you "the world was busy this tick". It does NOT tell you
-    // whether YOUR room reached quorum, which is the thing I3 protects. A per-cell channel would
-    // require the reply's timing to depend on that player's cell, and it CANNOT, because by the
-    // time any byte is written the entire world has already been resolved.
+    // ** That structural property is in the HUMAN bucket. Nothing here enforces it. **
+    // If you move the write inside the resolution loop, no test in this file will stop you. Say it
+    // out loud at every review of transport.tick: THE WRITE LOOP RUNS AFTER THE WORLD RESOLVES.
     //
-    // What would break this: replying to each player as their cell finishes resolving. That is
-    // the natural, obvious, efficient design, and it would leak the count to anyone with a
-    // stopwatch. It is why the reply waits for the tick boundary.
+    // WHAT THIS TEST DOES ENFORCE is the one thing the old comment worried about that IS
+    // mechanisable: "an allocation per fight, a syscall per fight, a log line per fight." Any of
+    // those would put a per-person cost inside the resolution of a live cell -- which is the raw
+    // material a timing channel is built from, and which would show up here as an allocation count
+    // that scales with the number of people in the room. So: count the calls, at two populations.
+    const gpa = testing.allocator;
+
+    var threaded: Io.Threaded = .init(gpa, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const at_600 = try extraAllocationsAtWar(io, gpa, 600);
+    const at_1200 = try extraAllocationsAtWar(io, gpa, 1200);
+
+    // THE TRIPWIRE. Measured at 13: the handful of bulk allocations a fight needs that a silent
+    // world does not (the tells array, and the growth steps of the map that holds them). Thirteen,
+    // not six hundred. The slack is headroom for an honest new bulk allocation; it is nowhere near
+    // enough room to hide a per-person one.
+    const slack = 32;
+    try testing.expect(at_600 <= slack);
+
+    // THE PROPERTY, STATED WITHOUT A MAGIC NUMBER. Double the people in the fight and the extra
+    // allocation calls must NOT double. If anything allocates per combatant, per engagement, or
+    // per fight participant, this is where it dies: at_1200 would land near 2x at_600, or worse,
+    // near 1200. Hash maps grow logarithmically, so the honest cost of doubling is a step or two.
     //
-    // A full millisecond of difference at this population would mean something has gone wrong --
-    // an allocation per fight, a syscall per fight, a log line per fight -- and would be worth
-    // investigating even though it is a global signal.
-    try testing.expect(difference_us < 1000);
+    // This is the assertion that survives a change of machine, a change of compiler, and a bad
+    // afternoon -- because it is about the SHAPE of the cost, not its size in microseconds.
+    try testing.expect(at_1200 < at_600 * 2);
 }
