@@ -169,3 +169,87 @@ test "fuzz: a hostile journal cannot make retention lose its mind" {
         } else |_| {}
     }
 }
+
+test "fuzz: the handshake frame is the first thing an attacker touches" {
+    // `decodeHello` is now the very first code a hostile connection reaches. Before this test it
+    // had never been fed a hostile byte, which is how the enum-cast crash got in.
+    var seed: u64 = 0;
+    while (seed < 6000) : (seed += 1) {
+        var buffer: [protocol.hello_size + 16]u8 = undefined;
+        garbage(seed, &buffer);
+
+        const len = seed % buffer.len;
+
+        if (protocol.decodeHello(buffer[0..len])) |hello| {
+            // It decoded. The faction and intent bytes were VALIDATED, not cast -- so whatever
+            // came out is a real value of a real enum, and nothing downstream can be surprised.
+            try testing.expect(hello.faction == .human or hello.faction == .zombie);
+            try testing.expect(hello.intent == .register or hello.intent == .login);
+
+            // And the padded fields are read safely, whatever garbage is in them. A field with no
+            // zero byte at all must not read past its own end.
+            const contact = protocol.unpad(&hello.contact);
+            const password = protocol.unpad(&hello.password);
+            try testing.expect(contact.len <= hello.contact.len);
+            try testing.expect(password.len <= hello.password.len);
+        } else |err| {
+            try testing.expect(
+                err == protocol.Error.Truncated or
+                    err == protocol.Error.BadVersion or
+                    err == protocol.Error.BadValue,
+            );
+        }
+    }
+}
+
+test "fuzz: a hello whose version is right and whose body is poison" {
+    // Nastier: the frame passes the version check, so the parser COMMITS to it, and only then
+    // does it meet the garbage. This is what a real attacker sends -- not noise, but a
+    // well-formed envelope around a hostile payload.
+    var seed: u64 = 1;
+    while (seed < 4000) : (seed += 1) {
+        var hello: protocol.Hello = .{
+            .contact = undefined,
+            .password = undefined,
+            .faction = .human,
+            .intent = .register,
+        };
+        garbage(seed, &hello.contact);
+        garbage(seed ^ 0xFACE, &hello.password);
+
+        var bytes = protocol.encodeHello(hello);
+
+        // Poison the faction and intent bytes with whatever an attacker likes.
+        bytes[130] = @truncate(rand.mix(seed));
+        bytes[131] = @truncate(rand.mix(seed ^ 1));
+
+        if (protocol.decodeHello(&bytes)) |decoded| {
+            try testing.expect(decoded.faction == .human or decoded.faction == .zombie);
+            try testing.expect(decoded.intent == .register or decoded.intent == .login);
+        } else |err| {
+            // The only way a version-correct frame fails is a value we do not have. Which is
+            // exactly right, and exactly what was missing when the fuzzer found the crash.
+            try testing.expectEqual(protocol.Error.BadValue, err);
+        }
+    }
+}
+
+test "fuzz: unpad never reads past the end of its field" {
+    // A padded field with NO zero byte in it is the edge case: the naive implementation walks off
+    // the end looking for a terminator that is not there.
+    var seed: u64 = 0;
+    while (seed < 2000) : (seed += 1) {
+        var field: [64]u8 = undefined;
+        garbage(seed, &field);
+
+        // Guarantee some have no zero byte at all.
+        if (seed % 3 == 0) {
+            for (&field) |*byte| {
+                if (byte.* == 0) byte.* = 0xFF;
+            }
+        }
+
+        const out = protocol.unpad(&field);
+        try testing.expect(out.len <= field.len);
+    }
+}

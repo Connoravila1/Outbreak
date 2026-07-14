@@ -150,6 +150,12 @@ const core = [_]Source{
 /// permitted to hold a coordinate, and only for the duration of one expression (B6).
 const shell = [_]Source{
     .{ .name = "spatial/geohash.zig", .text = @embedFile("spatial/geohash.zig") },
+    // SHELL because it holds coordinates: the published geohash test vectors are real latitudes
+    // and longitudes, and they are the only external check that exists on the one function in
+    // the system that touches one. It was UNREGISTERED until the audit found it -- which meant
+    // the coordinate wall, the purity check, and the geometry ban had never been applied to the
+    // one test file that holds a latitude.
+    .{ .name = "spatial/geohash_vectors_test.zig", .text = @embedFile("spatial/geohash_vectors_test.zig") },
     .{ .name = "sim.zig", .text = @embedFile("sim.zig") },
     .{ .name = "store.zig", .text = @embedFile("store.zig") },
     .{ .name = "entropy.zig", .text = @embedFile("entropy.zig") },

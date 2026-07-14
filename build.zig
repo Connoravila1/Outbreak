@@ -1,19 +1,67 @@
 const std = @import("std");
 
-// Phase 0: the game is a test suite. There is no executable, no server, and no
-// network. `zig build test` is the whole product.
-//
-// Two things this script must guarantee:
-//   1. Tests run under a leak-detecting allocator. A leak fails the build (C6).
-//      std.testing.allocator is a DebugAllocator; the default test runner fails
-//      the test when it reports a leak. Nothing else is needed, and nothing else
-//      may replace it.
-//   2. `zig build` fails on a size-guard regression (A7) or a forbidden construct.
-//      Both are comptime assertions, so the default step only has to *compile* the
-//      module for them to fire.
+/// Fails the build if a source file exists that `src/guard.zig` has never heard of.
+fn checkEveryFileIsClassified(b: *std.Build) void {
+    const io = b.graph.io;
+    const root = b.build_root.handle;
+
+    const guard = root.readFileAlloc(io, "src/guard.zig", b.allocator, .limited(1 << 20)) catch |err| {
+        std.debug.panic("B1: cannot read src/guard.zig to verify classification: {s}", .{@errorName(err)});
+    };
+
+    var src = root.openDir(io, "src", .{ .iterate = true }) catch |err| {
+        std.debug.panic("B1: cannot open src/ to verify classification: {s}", .{@errorName(err)});
+    };
+    defer src.close(io);
+
+    var walker = src.walk(b.allocator) catch @panic("B1: out of memory");
+    defer walker.deinit();
+
+    while (walker.next(io) catch @panic("B1: walk failed")) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.mem.endsWith(u8, entry.basename, ".zig")) continue;
+        if (std.mem.eql(u8, entry.path, "guard.zig")) continue; // the guard does not guard itself
+
+        const needle = b.fmt("@embedFile(\"{s}\")", .{entry.path});
+
+        if (std.mem.indexOf(u8, guard, needle) == null) {
+            std.debug.panic(
+                \\
+                \\B1 VIOLATION: src/{s} is not classified.
+                \\
+                \\Every unit of logic is core or shell. There is no third category and no
+                \\unclassified code. A file missing from src/guard.zig is a file the coordinate
+                \\wall, the purity check, and the geometry ban DO NOT APPLY TO.
+                \\
+                \\Add it to `core` or to `shell` in src/guard.zig. If you cannot decide, it is shell.
+                \\
+            , .{entry.path});
+        }
+    }
+}
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+
+    // ============================================================================
+    // B1, ENFORCED: EVERY UNIT IS CLASSIFIED. NO THIRD CATEGORY. NOTHING UNCLASSIFIED.
+    //
+    // The comptime guard in src/guard.zig can only check the files it has been TOLD about. It
+    // cannot notice a file nobody registered -- and an unregistered file is an unguarded file:
+    // the coordinate wall, the purity check, and the geometry ban simply do not apply to it.
+    //
+    // The ruleset audit found exactly that: `spatial/geohash_vectors_test.zig` -- the one test
+    // file that holds real latitudes and longitudes -- had never been registered, so the wall
+    // built to keep coordinates out had never been pointed at it.
+    //
+    // B1 was itself sitting in the "human" bucket, enforced by nobody. It is not any more:
+    // build.zig runs with filesystem access, so it walks src/ and fails the build if any source
+    // file is missing from the guard's registry.
+    //
+    // A rule enforced by memory is a rule already broken. See POSTMORTEM_2026-07-13.md.
+    // ============================================================================
+    checkEveryFileIsClassified(b);
 
     const mod = b.addModule("outbreak", .{
         .root_source_file = b.path("src/root.zig"),
