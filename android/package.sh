@@ -42,6 +42,34 @@ echo "==> linking liboutbreak.so"
 
 test -f "$OUT/lib/arm64-v8a/liboutbreak.so" || { echo "no .so; aborting"; exit 1; }
 
+# ---- 1b. THE ONE JAVA CLASS.
+#
+# Android has no native location API -- there is no LocationManager in the NDK and there never has
+# been. Every route to a live fix runs through a Java callback object, which needs a class, which
+# needs a dex. So there is exactly one, it has no fields, and it forwards two doubles to Zig.
+#
+# javac -> .class -> d8 -> classes.dex. Two commands. This is the entire Java toolchain in this
+# project, and it is why there is no Gradle.
+echo "==> compiling the one Java class"
+rm -rf "$OUT/classes"
+mkdir -p "$OUT/classes"
+"$JAVA_HOME/bin/javac" \
+    -source 8 -target 8 \
+    -bootclasspath "$PLATFORM" \
+    -classpath "$PLATFORM" \
+    -d "$OUT/classes" \
+    "$ROOT/android/java/com/outbreak/game/Fix.java" 2>&1 | grep -v "bootstrap class path\|source value 8\|target value 8\|deprecat" || true
+
+test -f "$OUT/classes/com/outbreak/game/Fix.class" || { echo "no Fix.class; aborting"; exit 1; }
+
+echo "==> d8"
+"$BUILD_TOOLS/d8" \
+    --lib "$PLATFORM" \
+    --output "$OUT" \
+    "$OUT/classes/com/outbreak/game/Fix.class"
+
+test -f "$OUT/classes.dex" || { echo "no classes.dex; aborting"; exit 1; }
+
 # ---- 2. the manifest, compiled into a binary APK. No resources: there is no UI to declare,
 #         because the UI is drawn by us, pixel by pixel, from ui.zig.
 echo "==> aapt2 link"
@@ -54,8 +82,8 @@ echo "==> aapt2 link"
 
 # ---- 3. the library goes in at lib/<abi>/. `zip -j` would flatten the path and the loader
 #         would never find it.
-echo "==> adding lib/arm64-v8a/liboutbreak.so"
-( cd "$OUT" && zip -q -u unsigned.apk lib/arm64-v8a/liboutbreak.so )
+echo "==> adding lib/arm64-v8a/liboutbreak.so and classes.dex"
+( cd "$OUT" && zip -q -u unsigned.apk lib/arm64-v8a/liboutbreak.so classes.dex )
 
 # ---- 4. align, then sign. In that order: zipalign rewrites offsets, so signing first and
 #         aligning second invalidates the signature.

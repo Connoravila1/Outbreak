@@ -260,6 +260,38 @@ const shell = [_]Source{
     .{ .name = "render/text.zig", .text = @embedFile("render/text.zig") },
     // SHELL: the glyph atlas. Pure, and tested without a GPU -- it makes a byte array, not pixels.
     .{ .name = "render/atlas.zig", .text = @embedFile("render/atlas.zig") },
+    // SHELL, AND THE HIGHEST-STAKES FILE IN THE CLIENT. The coordinate dies here, in one function,
+    // in one expression. The phone is the only place in the system where a latitude ever exists,
+    // and this is that place in its entirety.
+    .{ .name = "location.zig", .text = @embedFile("location.zig") },
+};
+
+/// ============================================================================
+/// WHERE A COORDINATE IS ALLOWED TO EXIST. FIVE FILES. NOT SIX.
+///
+/// B6 already bans a float from any file classified CORE, and that is what makes the server
+/// structurally incapable of leaking a location: it was never given one.
+///
+/// But the SHELL is allowed floats -- the renderer is full of them -- and "screen pixel" and
+/// "latitude" are both f64-shaped. Nothing stopped a coordinate from being carried into a fifth
+/// shell file, or a sixth, and each one would be a new place it could leak from.
+///
+/// So the coordinate is pinned. An `f64` may appear in exactly these files and nowhere else:
+///
+///   spatial/geohash.zig   the quantizer. The one function that turns a place into a room.
+///   spatial/geohash_vectors_test.zig   the published test vectors. Real latitudes, checked.
+///   ffi.zig               `outbreak_quantize`, the C ABI's one coordinate-shaped door.
+///   location.zig          the Android callback. Where the coordinate dies.
+///   sim.zig               the synthetic city, which invents coordinates to feed the quantizer.
+///
+/// Add a sixth and the build stops. If a new file genuinely needs one, that is a decision worth
+/// making out loud -- which is the entire point of making the compiler ask.
+const coordinate_bearers = [_][]const u8{
+    "spatial/geohash.zig",
+    "spatial/geohash_vectors_test.zig",
+    "ffi.zig",
+    "location.zig",
+    "sim.zig",
 };
 
 /// Does `haystack` begin with `needle`? Byte-wise, so that comptime does the least work
@@ -382,6 +414,31 @@ comptime {
                             "for this phase is a real number on real hardware. Sleep with " ++
                             "`idle()`, which sleeps in the kernel and stops counting while the " ++
                             "phone is suspended.");
+                    }
+                }
+            }
+        }
+
+        // THE COORDINATE IS PINNED (B6). Which files are allowed to hold one?
+        {
+            var bearer = false;
+            for (coordinate_bearers) |name| {
+                if (std.mem.eql(u8, src.name, name)) bearer = true;
+            }
+
+            if (!bearer) {
+                var j: usize = 0;
+                while (j < src.text.len) : (j += 1) {
+                    if (src.text[j] != 'f') continue;
+                    if (startsWith(src.text[j..], "f64")) {
+                        @compileError("THE COORDINATE WALL (B6): an f64 appears in " ++ src.name ++
+                            ", which is not one of the five files permitted to hold a coordinate. " ++
+                            "A latitude and a screen pixel are both f64-shaped, and the difference " ++
+                            "between them is the entire privacy guarantee. The quantizer, the test " ++
+                            "vectors, the C ABI, the Android callback and the synthetic city may " ++
+                            "hold one. Nothing else may. If this file genuinely needs a coordinate, " ++
+                            "that is a decision to make out loud -- which is why the compiler is " ++
+                            "asking.");
                     }
                 }
             }

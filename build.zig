@@ -276,6 +276,17 @@ pub fn build(b: *std.Build) void {
             .file = b.path("vendor/stb_impl.c"),
             .flags = &.{"-fno-sanitize=undefined"},
         });
+
+        // THE JNI SHIM. Same reason, same shape: `jni.h` only exists in the NDK, so the JNI
+        // function table stays on the C side of the wall and Zig declares flat `extern fn`s.
+        //
+        // Note what is NOT compiled here: the location callback. `Java_com_outbreak_game_Fix_
+        // onLocation` is exported from `src/location.zig`, and the JVM resolves it by symbol out
+        // of this library. The coordinate's first stop in our code is Zig, not C.
+        so_mod.addCSourceFile(.{
+            .file = b.path("android/jni_shim.c"),
+            .flags = &.{},
+        });
         so_mod.link_libc = true;
         so_mod.addSystemIncludePath(.{ .cwd_relative = b.fmt("{s}/usr/include", .{sysroot}) });
         so_mod.addSystemIncludePath(.{ .cwd_relative = b.fmt("{s}/usr/include/{s}", .{ sysroot, abi }) });

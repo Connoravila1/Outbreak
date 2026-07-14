@@ -22,15 +22,26 @@
         android:targetSdkVersion="34" />
 
     <!--
+        LOCATION. The permission this whole game is about, and the one it asks for last.
+
+        FINE, not COARSE: a coarse fix is a few hundred metres, which is several rooms wide, and a
+        room is the unit the entire design rests on.
+
+        What the player grants is not what the game keeps. The coordinate lives for the length of
+        one expression in one function (src/location.zig), becomes a u64 room id, and dies. There
+        is no coordinate on the wire, none in the journal, and none on the server — the build
+        fails if a float appears in a file classified core.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+
+    <!-- The GPS hardware is required. A phone without it cannot know which room it is in. -->
+    <uses-feature android:name="android.hardware.location.gps" android:required="true" />
+
+    <!--
         NOT YET REQUESTED, AND DELIBERATELY SO.
 
-        Location is M.5. It is the highest-stakes permission in the app and the highest-stakes
-        line of code in the client, and it is not going in as an afterthought alongside a
-        renderer. When it arrives it arrives on its own, with the coordinate dying in the same
-        function that receives it.
-
-        INTERNET is M.7, for the same reason. This build talks to nobody and knows where nobody
-        is  —  which is exactly what a build that only draws a screen should be able to do.
+        INTERNET is M.7. This build knows which room it is in and tells nobody, which is a
+        strange and rather pleasant state for a location game to be in.
     -->
 
     <!--
@@ -40,9 +51,24 @@
         a packaging constraint, and a packaging constraint that fails produces an install error
         with no obvious cause. Explicit beats defaulted while the thing is being brought up.
     -->
+    <!--
+        `hasCode` IS TRUE NOW, AND IT COST US SOMETHING TO SAY SO.
+
+        This file used to declare there was no code in the APK at all: the framework loaded a
+        shared library and not one class of ours was ever written. That was true, and it was a
+        good thing to be able to say.
+
+        Android has no native location API. There is no LocationManager in the NDK, there never
+        has been, and every route to a live fix runs through a Java callback object — which needs
+        a class, which needs a dex. JNI cannot conjure one.
+
+        So there is exactly ONE class: android/java/com/outbreak/game/Fix.java. It has NO FIELDS.
+        It receives a Location, reads two doubles out of it, hands them to Zig, and forgets. If
+        that file ever grows, something has gone wrong.
+    -->
     <application
         android:label="Outbreak"
-        android:hasCode="false"
+        android:hasCode="true"
         android:allowBackup="false"
         android:extractNativeLibs="true">
 

@@ -46,6 +46,7 @@ const quads = @import("render/quads.zig");
 const gles = @import("render/gles.zig");
 const text = @import("render/text.zig");
 const atlas_mod = @import("render/atlas.zig");
+const location = @import("location.zig");
 
 const Io = std.Io;
 
@@ -219,6 +220,15 @@ const Host = struct {
 var host: Host = .{};
 var render_thread: ?std.Thread = null;
 
+/// THE RADIO. Holds the JVM handles the location callback needs, and nothing else.
+///
+/// It does NOT hold a location. It cannot: `location.zig` is the only file in the client permitted
+/// to name a double-precision float at all, and the guard fails the build if a sixth file tries.
+///
+/// (Spelling that type out here would itself trip the guard, which scans raw text and does not read
+/// prose. It has now caught three of my own comments ABOUT it. The bluntness is the feature.)
+var radio: location.Radio = .{ .vm = null, .activity = null };
+
 /// The entry point. The framework calls this and nothing else.
 export fn ANativeActivity_onCreate(
     activity: *ANativeActivity,
@@ -250,6 +260,10 @@ export fn ANativeActivity_onCreate(
     // BEFORE the render thread starts, so it is never read while being written. The UI is laid out
     // in dp; without this the game renders correctly at about a millimetre and a half tall.
     density_scale = scaleOf(activity);
+
+    // The JVM, and the activity object the location calls hang off. `clazz` in the NDK's own
+    // header; `class` here because `clazz` is not a word.
+    radio = .{ .vm = activity.vm, .activity = activity.class };
 
     host.running.store(true, .release);
     render_thread = std.Thread.spawn(.{}, render, .{}) catch null;
@@ -334,6 +348,23 @@ fn onContentRectChanged(_: *ANativeActivity, rect: *const ARect) callconv(.c) vo
     host.content = rect.*;
 }
 
+/// ASKING, AND THEN LOOKING.
+///
+/// The result of `requestPermissions` arrives as a Java callback we have no class for -- and we are
+/// not adding a SECOND Java class to learn a boolean. So we ask once, and the render thread checks
+/// until the answer changes. Polling a flag is nothing next to the radio it is gating.
+fn armLocation() void {
+    if (location.permitted(&radio)) {
+        // The OS's own throttle, and the first line of the battery budget: the hardware does not
+        // wake for a fix we told it we did not want (G5). `gps.zig` owns the real policy; these
+        // are its floor.
+        location.start(&radio, 30, 20.0);
+        return;
+    }
+
+    location.requestPermission(&radio);
+}
+
 fn onPause(_: *ANativeActivity) callconv(.c) void {
     // Not visible. We stop drawing entirely -- a game that renders to a screen nobody is looking
     // at is a game that drains a battery for nothing (G5).
@@ -342,9 +373,23 @@ fn onPause(_: *ANativeActivity) callconv(.c) void {
 
 fn onResume(_: *ANativeActivity) callconv(.c) void {
     host.awake.store(true, .release);
+
+    // AND THIS IS WHY WE DO NOT NEED A SECOND JAVA CLASS.
+    //
+    // The permission dialog pauses us and its dismissal resumes us. So the answer to "did they say
+    // yes?" arrives here, for free, on the callback Android was going to send anyway -- no
+    // listener, no onRequestPermissionsResult, no polling loop.
+    //
+    // It also covers the case that matters more: a player who granted permission in Settings after
+    // refusing it once. They come back to the app, we resume, and the radio arms itself.
+    armLocation();
 }
 
 fn onDestroy(_: *ANativeActivity) callconv(.c) void {
+    // THE RADIO GOES OFF FIRST. A location callback firing into a torn-down process is a crash,
+    // and a radio left on after the app is gone is the battery bug that gets you uninstalled.
+    location.stop(&radio);
+
     host.running.store(false, .release);
     if (render_thread) |thread| {
         thread.join();
