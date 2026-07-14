@@ -337,7 +337,7 @@ pub fn touch(state: State, at: Touch, size: Size) State {
         //
         // Once it IS offered, the tap begins the ending rather than jumping: the screen takes four
         // hundred milliseconds to get out of the way, and `advance` finishes the job.
-        .boot => if (state.boot_ms >= boot_glitch_end and state.leaving_ms == null) {
+        .boot => if (state.boot_ms >= boot_settle_end and state.leaving_ms == null) {
             next.leaving_ms = state.boot_ms;
         },
 
@@ -659,10 +659,22 @@ fn drawLive(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allocator)
 /// the frame that belongs at millisecond 2,400, forever, on any machine.
 const boot_terminal_ms: u32 = 1900;
 const boot_infection_ms: u32 = 1300;
-const boot_glitch_ms: u32 = 420;
+/// THE SETTLE. The window between containment failing and the title screen existing.
+///
+/// It used to hold the glitch. When the glitch went, nothing replaced it -- so the bar vanished,
+/// the tagline appeared, and the screen sat frozen for four hundred milliseconds in between. It
+/// blipped, because there was nothing there.
+///
+/// This is that nothing, given a job: the bar fades out, the wordmark flares as it completes, and
+/// the tagline rises. One state becomes the other instead of being swapped for it.
+const boot_settle_ms: u32 = 700;
+
+/// How long the terminal takes to give way to the field. Short: it is a cut softened, not a
+/// dissolve.
+const boot_blend_ms: u32 = 320;
 
 const boot_infection_end = boot_terminal_ms + boot_infection_ms;
-const boot_glitch_end = boot_infection_end + boot_glitch_ms;
+const boot_settle_end = boot_infection_end + boot_settle_ms;
 
 /// The line the terminal is on, and how far into that line we are.
 const boot_line_ms: u32 = boot_terminal_ms / boot_lines.len;
@@ -759,17 +771,33 @@ fn drawBoot(state: State, size: Size, insets: Insets, out: *std.ArrayList(Draw),
         .color = .char_deep,
     } });
 
-    if (ms < boot_terminal_ms) {
-        try drawBootTerminal(ms, size, out, gpa);
-    } else {
-        try drawSpores(ms, size, insets, out, gpa);
-        try drawWordmark(ms, size, out, gpa);
+    // ============================================================================
+    // NOTHING IN HERE CUTS. Every phase overlaps the next and fades into it.
+    //
+    // The terminal does not vanish the instant the field arrives -- it lingers for a third of a
+    // second, dimming, while the spores come up underneath it. And containment does not simply stop
+    // failing: the bar fades out across the settle while the tagline rises through it.
+    //
+    // Each of these was a hard cut, and each read as the app blinking rather than the screen
+    // changing. A transition is not decoration; without one, two good frames next to each other
+    // still look broken.
 
-        if (ms < boot_infection_end) {
-            try drawInfection(ms, size, out, gpa);
-        } else {
-            try drawBootTail(ms, size, out, gpa);
-        }
+    // The terminal, fading out into the field.
+    if (ms < boot_terminal_ms + boot_blend_ms) {
+        const leaving = ms -| boot_terminal_ms;
+        const fade: u8 = @intCast(255 - @min(@as(u32, 255), leaving * 255 / boot_blend_ms));
+        try drawBootTerminal(ms, size, fade, out, gpa);
+    }
+
+    // The field, rising through it.
+    if (ms >= boot_terminal_ms) {
+        const arrived = ms - boot_terminal_ms;
+        const rise: u8 = @intCast(@min(@as(u32, 255), arrived * 255 / boot_blend_ms));
+
+        try drawSpores(ms, size, insets, rise, out, gpa);
+        try drawWordmark(ms, size, out, gpa);
+        try drawInfection(ms, size, out, gpa);
+        try drawBootTail(ms, size, out, gpa);
     }
 
     try drawScanlines(size, insets, out, gpa);
@@ -813,7 +841,7 @@ fn drawBoot(state: State, size: Size, insets: Insets, out: *std.ArrayList(Draw),
 /// How long one character takes to appear. A terminal TYPES; it does not paste.
 const type_ms: u32 = 13;
 
-fn drawBootTerminal(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
+fn drawBootTerminal(ms: u32, size: Size, alpha: u8, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
     var typing: usize = boot_lines.len; // which line is still being typed, if any
 
     for (boot_lines, 0..) |l, i| {
@@ -833,7 +861,7 @@ fn drawBootTerminal(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocat
         const y: i32 = 90 + @as(i32, @intCast(i)) * 30;
 
         if (upto > 0) {
-            try out.append(gpa, .{ .text = .{ .x = 26, .y = y, .text = l.text[0..upto], .color = .terminal, .weight = .label } });
+            try out.append(gpa, .{ .text = .{ .x = 26, .y = y, .text = l.text[0..upto], .color = dim(.terminal, alpha), .weight = .label } });
         }
 
         // The verdict lands only once the line has finished saying what it is verdicting.
@@ -842,7 +870,7 @@ fn drawBootTerminal(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocat
                 .x = size.w - 26,
                 .y = y,
                 .text = l.status,
-                .color = if (l.bad) .amber else .blood,
+                .color = if (l.bad) dim(.amber, alpha) else dim(.blood, alpha),
                 .weight = .label,
                 .alignment = .right,
             } });
@@ -858,14 +886,14 @@ fn drawBootTerminal(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocat
         const y: i32 = 90 + @as(i32, @intCast(row)) * 30;
 
         if (row >= boot_lines.len) {
-            try out.append(gpa, .{ .text = .{ .x = 26, .y = y, .text = ">", .color = .terminal, .weight = .label } });
-            try out.append(gpa, .{ .rect = .{ .x = 44, .y = y + 3, .w = 8, .h = 14, .color = .blood } });
+            try out.append(gpa, .{ .text = .{ .x = 26, .y = y, .text = ">", .color = dim(.terminal, alpha), .weight = .label } });
+            try out.append(gpa, .{ .rect = .{ .x = 44, .y = y + 3, .w = 8, .h = 14, .color = dim(.blood, alpha) } });
         }
     }
 }
 
 /// The spore fields: a band at the top, and the same band mirrored at the bottom.
-fn drawSpores(ms: u32, size: Size, insets: Insets, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
+fn drawSpores(ms: u32, size: Size, insets: Insets, alpha: u8, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
     // MEASURED AGAINST THE PHONE, NOT THE SAFE AREA. A spore field that stops short of the glass
     // makes the top of the screen look cropped, whatever colour is behind it.
     const full_top = insets.bleedTop();
@@ -885,7 +913,7 @@ fn drawSpores(ms: u32, size: Size, insets: Insets, out: *std.ArrayList(Draw), gp
 
         const x = full_left + @divTrunc(full_w * s.fx, 1000) + drift_x;
         const y = full_top + @divTrunc(band * s.fy, 1000) + drift_y;
-        const colour: Color = if (s.hot) .blood_glow else .blood_deep;
+        const colour: Color = if (s.hot) dim(.blood_glow, alpha) else dim(.blood_deep, alpha);
 
         // Top band, starting at the top of the PHONE.
         try out.append(gpa, .{ .sprite = .{ .x = x - s.r, .y = y - s.r, .w = s.r * 2, .h = s.r * 2, .color = colour, .sprite = .disc } });
@@ -902,7 +930,7 @@ fn drawSpores(ms: u32, size: Size, insets: Insets, out: *std.ArrayList(Draw), gp
         .y = full_top + @divTrunc(band * 3, 10) - @divTrunc(bloom, 2),
         .w = bloom,
         .h = bloom,
-        .color = dim(.blood, 26),
+        .color = dim(.blood, @intCast(@as(u32, 26) * alpha / 255)),
         .sprite = .disc,
     } });
     try out.append(gpa, .{ .sprite = .{
@@ -910,7 +938,7 @@ fn drawSpores(ms: u32, size: Size, insets: Insets, out: *std.ArrayList(Draw), gp
         .y = full_top + full_h - @divTrunc(band * 6, 10) - @divTrunc(bloom, 2),
         .w = bloom,
         .h = bloom,
-        .color = dim(.blood, 20),
+        .color = dim(.blood, @intCast(@as(u32, 20) * alpha / 255)),
         .sprite = .disc,
     } });
 }
@@ -976,11 +1004,22 @@ fn drawWordmark(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) 
     // A HEARTBEAT, not a shimmer. The first version breathed so gently you had to be told it was
     // moving. It swells hard and falls back -- the light behind the word going in and out, on the
     // slow rhythm of something large and unwell.
-    const idle = ms >= boot_glitch_end;
-    const breath: i32 = if (idle) wander(ms - boot_glitch_end, 2400, 130, 0) else 0;
-    const beat: u8 = if (idle) pulse(ms - boot_glitch_end, 2400, 26, 165) else 60;
+    // THE FLARE. Containment fails, the last letter lands, and the light behind the word SURGES --
+    // once, hard -- then falls back into its heartbeat. This is the moment the two halves of the
+    // sequence are stitched together at: the bar dying, the tagline rising, and the word igniting
+    // fully are all the same event, and it needed to look like one.
+    const settling = ms >= boot_infection_end and ms < boot_settle_end;
+    const flare: u32 = if (settling)
+        130 - @min(@as(u32, 130), (ms - boot_infection_end) * 130 / boot_settle_ms)
+    else
+        0;
 
-    const glow = @divTrunc(size.w * 9, 10) + breath;
+    const idle = ms >= boot_settle_end;
+    const breath: i32 = if (idle) wander(ms - boot_settle_end, 2400, 130, 0) else 0;
+    const beat: u8 = @intCast(@min(@as(u32, 255), flare +
+        @as(u32, if (idle) pulse(ms - boot_settle_end, 2400, 26, 165) else 60)));
+
+    const glow = @divTrunc(size.w * 9, 10) + breath + @as(i32, @intCast(flare));
     try out.append(gpa, .{ .sprite = .{
         .x = mid_x - @divTrunc(glow, 2),
         .y = mid_y - @divTrunc(glow, 2) - 96,
@@ -993,9 +1032,17 @@ fn drawWordmark(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) 
 
 /// The infection: the bar fills, and the dark closes in around the wordmark.
 fn drawInfection(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
+    // IT DOES NOT VANISH THE INSTANT IT FILLS. Containment does not simply stop failing -- the bar
+    // sits full for a moment and then fades, while the tagline rises through it. Cutting it dead at
+    // a hundred percent was the blip.
+    if (ms >= boot_settle_end) return;
+
     const into = ms - boot_terminal_ms;
     const elapsed: i32 = @intCast(@min(@as(u32, 100), into * 100 / boot_infection_ms));
     const percent = loading(elapsed);
+
+    const leaving = ms -| boot_infection_end;
+    const alpha: u8 = @intCast(255 - @min(@as(u32, 255), leaving * 255 / boot_settle_ms));
 
     // THERE IS NO VIGNETTE HERE ANY MORE, AND ITS ABSENCE IS THE POINT.
     //
@@ -1010,15 +1057,21 @@ fn drawInfection(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocator)
     // Well clear of the bottom. It sat 74dp up, which on a phone is jammed against the gesture bar.
     const bar_y = size.h - 210;
 
-    try out.append(gpa, .{ .text = .{ .x = left, .y = bar_y - 18, .text = "C O N T A I N M E N T   F A I L I N G", .color = .faint, .weight = .label } });
+    try out.append(gpa, .{ .text = .{
+        .x = left,
+        .y = bar_y - 18,
+        .text = "C O N T A I N M E N T   F A I L I N G",
+        .color = dim(.faint, alpha),
+        .weight = .label,
+    } });
 
-    try out.append(gpa, .{ .rect = .{ .x = left, .y = bar_y, .w = right - left, .h = 3, .color = .char } });
+    try out.append(gpa, .{ .rect = .{ .x = left, .y = bar_y, .w = right - left, .h = 3, .color = dim(.char, alpha) } });
     try out.append(gpa, .{ .rect = .{
         .x = left,
         .y = bar_y,
         .w = @divTrunc((right - left) * percent, 100),
         .h = 3,
-        .color = .blood_glow,
+        .color = dim(.blood_glow, alpha),
     } });
 }
 
@@ -1027,15 +1080,20 @@ fn drawBootTail(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) 
     const mid_x = @divTrunc(size.w, 2);
 
     // SATURATING. This function runs from `boot_infection_end`, but the tagline is timed from
-    // `boot_glitch_end` -- which is 420ms LATER. A plain subtraction underflows a u32 for every one
+    // `boot_settle_end` -- which is 420ms LATER. A plain subtraction underflows a u32 for every one
     // of those 420 milliseconds, and this library ships ReleaseSafe, so it does not wrap quietly:
     // it panics, on the phone, four seconds into the first thing a player ever sees.
     //
     // It shipped. The tests sampled instants either side of the window and stepped clean over it.
     // The test below now walks every millisecond, because a boot sequence that is a pure function
     // of one integer has no excuse for being sampled.
-    const since = ms -| boot_glitch_end;
-    const fade: u8 = @intCast(@min(@as(u32, 255), since * 255 / 400));
+    // IT RISES THROUGH THE SETTLE, not after it. The tagline comes up while the bar is still going
+    // down, so the two are one movement rather than two events with a gap between them.
+    const rising = ms -| boot_infection_end;
+    const fade: u8 = @intCast(@min(@as(u32, 255), rising * 255 / boot_settle_ms));
+
+    // And the invitation waits until the screen has finished becoming itself.
+    const since = ms -| boot_settle_end;
 
     try out.append(gpa, .{ .text = .{
         .x = mid_x,
@@ -1344,7 +1402,7 @@ test "EVERY MILLISECOND OF THE BOOT SEQUENCE, NOT A SAMPLE OF THEM" {
 
     for ([_]Size{ .{ .w = 360, .h = 800 }, .{ .w = 1080, .h = 2400 } }) |size| {
         var ms: u32 = 0;
-        while (ms < boot_glitch_end + 4000) : (ms += 1) {
+        while (ms < boot_settle_end + 4000) : (ms += 1) {
             try draw(.{ .screen = .boot, .boot_ms = ms }, size, real, &out, gpa);
             try testing.expect(out.items.len > 0);
         }
@@ -1352,7 +1410,7 @@ test "EVERY MILLISECOND OF THE BOOT SEQUENCE, NOT A SAMPLE OF THEM" {
         // AND EVERY MILLISECOND OF THE EXIT, from every instant it could have been started at.
         // The last crash was an underflow in a phase boundary, and the exit adds four more.
         var began: u32 = 0;
-        while (began < boot_glitch_end + 2000) : (began += 37) {
+        while (began < boot_settle_end + 2000) : (began += 37) {
             var t: u32 = 0;
             while (t < boot_exit_ms + 200) : (t += 1) {
                 const state: State = .{ .screen = .boot, .boot_ms = began + t, .leaving_ms = began };
@@ -1374,7 +1432,7 @@ test "EVERY MILLISECOND OF THE BOOT SEQUENCE, NOT A SAMPLE OF THEM" {
     try testing.expectEqual(@as(?u32, null), too_early.leaving_ms);
 
     // Once the sequence has finished, it begins the exit rather than jumping.
-    const offered = boot_glitch_end + 10;
+    const offered = boot_settle_end + 10;
     const tapped = touch(.{ .screen = .boot, .boot_ms = offered }, .{ .x = 10, .y = 10 }, .{ .w = 360, .h = 800 });
     try testing.expectEqual(Screen.boot, tapped.screen);
     try testing.expectEqual(@as(?u32, offered), tapped.leaving_ms);
@@ -1478,7 +1536,7 @@ test "THE BOOT SEQUENCE IS A PURE FUNCTION OF A MILLISECOND" {
     try testing.expectEqual(@as(u8, 255), burnAt(out.items));
 
     // AT REST: the wordmark is up, the invitation is pulsing, and nothing is still loading.
-    try draw(.{ .screen = .boot, .boot_ms = boot_glitch_end + 1200 }, size, .{}, &out, gpa);
+    try draw(.{ .screen = .boot, .boot_ms = boot_settle_end + 1200 }, size, .{}, &out, gpa);
     try testing.expect(wordmarkAt(out.items));
 
     var saw_tap = false;
@@ -1517,7 +1575,7 @@ test "THE BOOT SEQUENCE IS A PURE FUNCTION OF A MILLISECOND" {
 
     // Once it IS offered, the tap begins the ending -- it does not jump. The four hundred
     // milliseconds after it are not touches, which is why `advance` exists at all.
-    const ready = boot_glitch_end + 500;
+    const ready = boot_settle_end + 500;
     const tapped = touch(.{ .screen = .boot, .boot_ms = ready }, .{ .x = 100, .y = 100 }, size);
     try testing.expectEqual(Screen.boot, tapped.screen);
     try testing.expectEqual(@as(?u32, ready), tapped.leaving_ms);
@@ -1613,4 +1671,64 @@ test "THE LOADING BAR DOES NOT MOVE AT A CONSTANT SPEED" {
     // Out of range is clamped rather than exploding. The shell is not always careful.
     try testing.expectEqual(@as(i32, 0), loading(-50));
     try testing.expectEqual(@as(i32, 100), loading(500));
+}
+
+test "NOTHING IN THE BOOT SEQUENCE CUTS" {
+    // THE BUG THIS EXISTS TO PREVENT IS NOT A CRASH. It is the screen BLIPPING.
+    //
+    // Every phase used to end by vanishing. The terminal disappeared the instant the field arrived.
+    // The bar disappeared the instant it filled. Two perfectly good frames, next to each other,
+    // still look broken if nothing carries you from one to the other.
+    //
+    // So each phase must OVERLAP the next. This test asserts the overlaps exist -- which is the
+    // closest a test can get to "it does not look like the app blinked".
+    const gpa = testing.allocator;
+    const size: Size = .{ .w = 360, .h = 800 };
+
+    var out: std.ArrayList(Draw) = .empty;
+    defer out.deinit(gpa);
+
+    const has = struct {
+        fn text(list: []const Draw, needle: []const u8) bool {
+            for (list) |item| switch (item) {
+                .text => |t| if (std.mem.indexOf(u8, t.text, needle) != null) return true,
+                else => {},
+            };
+            return false;
+        }
+        fn sprite(list: []const Draw) bool {
+            for (list) |item| switch (item) {
+                .sprite => return true,
+                else => {},
+            };
+            return false;
+        }
+    };
+
+    // THE TERMINAL OVERLAPS THE FIELD. Just after the infection starts, the last terminal line is
+    // still on screen, dimming, while the spores come up underneath it.
+    try draw(.{ .screen = .boot, .boot_ms = boot_terminal_ms + 40 }, size, .{}, &out, gpa);
+    try testing.expect(has.text(out.items, "PERIMETER")); // still there
+    try testing.expect(has.sprite(out.items)); // and the field is already rising
+
+    // ...and it is gone once the blend is over. A lingering terminal is its own bug.
+    try draw(.{ .screen = .boot, .boot_ms = boot_terminal_ms + boot_blend_ms + 50 }, size, .{}, &out, gpa);
+    try testing.expect(!has.text(out.items, "PERIMETER"));
+
+    // THE BAR OVERLAPS THE TAGLINE. Containment does not simply stop failing: the bar is still on
+    // screen, fading, while the tagline rises through it. This is the transition that was missing
+    // entirely -- the screen used to sit frozen here and then blip to the title.
+    try draw(.{ .screen = .boot, .boot_ms = boot_infection_end + 60 }, size, .{}, &out, gpa);
+    try testing.expect(has.text(out.items, "C O N T A I N M E N T"));
+    try testing.expect(has.text(out.items, "L A S T   S T A N D"));
+
+    // And by the end of the settle the bar has gone and the title is all that is left.
+    try draw(.{ .screen = .boot, .boot_ms = boot_settle_end + 10 }, size, .{}, &out, gpa);
+    try testing.expect(!has.text(out.items, "C O N T A I N M E N T"));
+    try testing.expect(has.text(out.items, "L A S T   S T A N D"));
+
+    // The invitation waits for the screen to finish becoming itself, and only then arrives.
+    try testing.expect(!has.text(out.items, "T A P"));
+    try draw(.{ .screen = .boot, .boot_ms = boot_settle_end + 900 }, size, .{}, &out, gpa);
+    try testing.expect(has.text(out.items, "T A P"));
 }
