@@ -281,11 +281,11 @@ test "a city populates and moves without allocating per tick" {
     defer world_mod.deinit(&world, gpa);
 
     try populate(&world, gpa, params, 1);
-    try testing.expectEqual(@as(usize, 500), world.presences.len);
+    try testing.expectEqual(@as(usize, 500), world_mod.population(&world));
 
-    const capacity = world.presences.capacity;
+    const capacity = world_mod.capacityOf(&world);
     advance(&world, params, 1, 5000);
-    try testing.expectEqual(capacity, world.presences.capacity);
+    try testing.expectEqual(capacity, world_mod.capacityOf(&world));
 }
 
 test "faction is independent of where a person lives" {
@@ -340,7 +340,7 @@ test "a mass event produces a crowd worth being awed by" {
     var counts: std.AutoHashMapUnmanaged(CellId, u32) = .empty;
     defer counts.deinit(gpa);
 
-    for (world.presences.items(.cell)) |c| {
+    for (world_mod.cellsOf(&world)) |c| {
         const entry = try counts.getOrPut(gpa, c);
         entry.value_ptr.* = if (entry.found_existing) entry.value_ptr.* + 1 else 1;
     }

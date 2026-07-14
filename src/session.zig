@@ -175,8 +175,8 @@ pub fn tick(server: *Server, gpa: Allocator, scratch: Allocator) Allocator.Error
     defer told.deinit(scratch);
     for (result.tells) |tell| try told.put(scratch, tell.player, tell);
 
-    const hp_by_player = server.world.presences.items(.hp);
-    const player_col = server.world.presences.items(.player);
+    const hp_by_player = world_mod.hitPoints(&server.world);
+    const player_col = world_mod.playerIds(&server.world);
 
     var hp: std.AutoHashMapUnmanaged(PlayerId, u16) = .empty;
     defer hp.deinit(scratch);

@@ -41,13 +41,13 @@ const Stats = struct {
     total_xp: u64 = 0,
 
     live_cells_total: u64 = 0,
-    live_presences_total: u64 = 0,
+    live_players_total: u64 = 0,
     max_live_cells: u32 = 0,
 
     /// Player-ticks spent in a live cell, by hour of day. The question the whole phase
     /// exists to answer: does a real person's day ever go live, and when?
     live_by_hour: [24]u64 = @splat(0),
-    presences_by_hour: [24]u64 = @splat(0),
+    players_by_hour: [24]u64 = @splat(0),
 
     /// Player-ticks actually IN A FIGHT -- an engagement, in a live cell, with hostiles.
     fighting_total: u64 = 0,
@@ -110,10 +110,10 @@ fn run(gpa: std.mem.Allocator, io: std.Io, params: city.Params, ticks: u64, meas
 
         stats.ticks += 1;
         stats.live_cells_total += result.live_cells;
-        stats.live_presences_total += result.live_presences;
+        stats.live_players_total += result.live_presences;
         stats.max_live_cells = @max(stats.max_live_cells, result.live_cells);
         stats.live_by_hour[hour] += result.live_presences;
-        stats.presences_by_hour[hour] += params.population;
+        stats.players_by_hour[hour] += params.population;
         stats.engaged_cells_total += result.engaged_cells;
         stats.engagements_started += result.engagements_started;
 
@@ -185,7 +185,7 @@ pub fn main() !void {
     const deterministic = first.checksum == second.checksum;
 
     const player_ticks = first.ticks * params.population;
-    const live_pct = percent(first.live_presences_total, player_ticks);
+    const live_pct = percent(first.live_players_total, player_ticks);
     const mean_us = @as(f64, @floatFromInt(first.tick_ns_total)) /
         @as(f64, @floatFromInt(first.ticks)) / 1000.0;
     const max_us = @as(f64, @floatFromInt(first.tick_ns_max)) / 1000.0;
@@ -219,7 +219,7 @@ pub fn main() !void {
         @as(f64, @floatFromInt(first.live_cells_total)) / @as(f64, @floatFromInt(first.ticks)),
         first.max_live_cells,
         player_ticks,
-        first.live_presences_total,
+        first.live_players_total,
         live_pct,
         first.total_damage,
         first.total_xp,
@@ -234,7 +234,7 @@ pub fn main() !void {
     var peak: u64 = 1;
     for (first.live_by_hour) |v| peak = @max(peak, v);
 
-    for (first.live_by_hour, first.presences_by_hour, 0..) |live, total, hour| {
+    for (first.live_by_hour, first.players_by_hour, 0..) |live, total, hour| {
         const pct = percent(live, total);
         const bar_len: usize = @intFromFloat(@round(pct / 100.0 * 50.0 * (100.0 / @max(1.0, peakPct(first)))));
 
@@ -245,7 +245,7 @@ pub fn main() !void {
     std.debug.print("\n", .{});
 
     std.debug.print("\n  IN A FIGHT -- % of players with a hostile in their cell, by hour\n\n", .{});
-    for (first.fighting_by_hour, first.presences_by_hour, 0..) |fighting, total, hour| {
+    for (first.fighting_by_hour, first.players_by_hour, 0..) |fighting, total, hour| {
         const pct = percent(fighting, total);
         const bar_len: usize = @intFromFloat(@round(pct / 100.0 * 60.0));
         var bar: [64]u8 = @splat('#');
@@ -299,7 +299,7 @@ pub fn main() !void {
         std.debug.print("    {d:>12}  {d:>12.2}  {d:>9.1}%  {d:>9.1}%\n", .{
             homes,
             @as(f64, @floatFromInt(swept.population)) / @as(f64, @floatFromInt(homes)),
-            percent(day.live_presences_total, day_player_ticks),
+            percent(day.live_players_total, day_player_ticks),
             percent(day.fighting_total, day_player_ticks),
         });
     }
@@ -369,7 +369,7 @@ fn phaseOne(gpa: std.mem.Allocator, io: std.Io, params: city.Params) !void {
         }
 
         const before = log.items.len;
-        try journal.writeTick(&log, gpa, i, lived.presences.items(.player), lived.presences.items(.cell));
+        try journal.writeTick(&log, gpa, i, world_mod.playerIds(&lived), world_mod.cellsOf(&lived));
         written_bytes += log.items.len - before;
 
         // C3: the tick's working memory is an arena, reset wholesale at the end of the unit
@@ -391,7 +391,7 @@ fn phaseOne(gpa: std.mem.Allocator, io: std.Io, params: city.Params) !void {
     var restored = try replay_mod.replay(gpa, from_disk, .default);
     defer world_mod.deinit(&restored.world, gpa);
 
-    const identical = std.mem.eql(u16, lived.presences.items(.hp), restored.world.presences.items(.hp));
+    const identical = std.mem.eql(u16, world_mod.hitPoints(&lived), world_mod.hitPoints(&restored.world));
 
     const actually = log.items.len;
 
@@ -430,9 +430,9 @@ fn writeSnapshot(log: *std.ArrayList(u8), gpa: std.mem.Allocator, w: *const Worl
         log,
         gpa,
         index,
-        w.presences.items(.player),
-        w.presences.items(.faction),
-        w.presences.items(.hp),
+        world_mod.playerIds(&w),
+        world_mod.factions(&w),
+        world_mod.hitPoints(&w),
         fights.cells,
         fights.engagements,
     );
@@ -445,7 +445,7 @@ fn percent(part: u64, whole: u64) f64 {
 
 fn peakPct(stats: Stats) f64 {
     var best: f64 = 0;
-    for (stats.live_by_hour, stats.presences_by_hour) |live, total| {
+    for (stats.live_by_hour, stats.players_by_hour) |live, total| {
         best = @max(best, percent(live, total));
     }
     return best;

@@ -109,6 +109,20 @@ const forbidden_in_core = [_][]const u8{
     "randomSecure",
 };
 
+/// LAYOUT IS A MODULE'S OWN BUSINESS (C4, D3).
+///
+/// `presences` is the world module's MultiArrayList. Reaching into it from another module
+/// means depending on how the world is STORED, and being able to WRITE to memory you do not
+/// own. Three modules did exactly that -- the synthetic city, the session layer, and replay --
+/// and every one of them worked, which is why nobody noticed.
+///
+/// Only the world module (world.zig + tick.zig, one module in two files) may name it. Everyone
+/// else uses the read-only accessors, or `relocate` to say who is where.
+const layout_owner = [_][]const u8{ "world.zig", "tick.zig" };
+/// Matched with the leading dot: this is the ACCESS (`world.presences`), not the English word,
+/// which appears in comments all over the codebase and is not a violation of anything.
+const owned_layout = ".presences";
+
 const Source = struct { name: []const u8, text: []const u8 };
 
 /// CORE (B1, B2). Pure functions over plain data. A coordinate may not appear here in
@@ -197,6 +211,29 @@ comptime {
                 @compileError("THE COORDINATE WALL (B6): a float appears in " ++ src.name ++
                     ", which is CORE. The raw coordinate dies at the shell boundary. The core " ++
                     "cannot leak a location because it is never given one.");
+            }
+        }
+
+        // LAYOUT (C4, D3). Does this file reach into the world's storage?
+        {
+            var owns = false;
+            for (layout_owner) |owner| {
+                if (std.mem.eql(u8, src.name, owner)) owns = true;
+            }
+
+            if (!owns) {
+                var j: usize = 0;
+                while (j < src.text.len) : (j += 1) {
+                    if (src.text[j] != owned_layout[0]) continue;
+                    if (startsWith(src.text[j..], owned_layout)) {
+                        @compileError("LAYOUT VIOLATION (C4, D3): '" ++ owned_layout ++ "' appears in " ++
+                            src.name ++ ", which does not own it. Reaching into the world's " ++
+                            "storage means depending on how the world is stored, and being able " ++
+                            "to write to memory you do not own. Use the read-only accessors " ++
+                            "(world.cellsOf, playerIds, factions, hitPoints), or relocate() to " ++
+                            "say who is where and let the world do its own writing.");
+                    }
+                }
             }
         }
 

@@ -174,9 +174,9 @@ fn recordCityWithSnapshots(gpa: Allocator, ticks: u64, seed: u64, snapshot_every
         &out,
         gpa,
         0,
-        live.presences.items(.player),
-        live.presences.items(.faction),
-        live.presences.items(.hp),
+        world_mod.playerIds(&live),
+        world_mod.factions(&live),
+        world_mod.hitPoints(&live),
     );
 
     var i: u64 = 0;
@@ -194,9 +194,9 @@ fn recordCityWithSnapshots(gpa: Allocator, ticks: u64, seed: u64, snapshot_every
                 &out,
                 gpa,
                 i,
-                live.presences.items(.player),
-                live.presences.items(.faction),
-                live.presences.items(.hp),
+                world_mod.playerIds(&live),
+                world_mod.factions(&live),
+                world_mod.hitPoints(&live),
                 fights.cells,
                 fights.engagements,
             );
@@ -208,8 +208,8 @@ fn recordCityWithSnapshots(gpa: Allocator, ticks: u64, seed: u64, snapshot_every
             &out,
             gpa,
             i,
-            live.presences.items(.player),
-            live.presences.items(.cell),
+            world_mod.playerIds(&live),
+            world_mod.cellsOf(&live),
         );
 
         const result = try tick_mod.tick(&live, gpa, gpa, seed, i, .default);
@@ -239,11 +239,11 @@ test "a world replays from its journal, byte for byte" {
     try testing.expect(first.summary.tells > 0); // the city actually did something
 
     // And the worlds themselves are identical, column for column.
-    try testing.expectEqualSlices(u16, first.world.presences.items(.hp), second.world.presences.items(.hp));
+    try testing.expectEqualSlices(u16, world_mod.hitPoints(&first.world), world_mod.hitPoints(&second.world));
     try testing.expectEqualSlices(
         world_mod.PlayerId,
-        first.world.presences.items(.player),
-        second.world.presences.items(.player),
+        world_mod.playerIds(&first.world),
+        world_mod.playerIds(&second.world),
     );
 }
 
@@ -277,15 +277,15 @@ test "a replayed world matches the world that was lived" {
         &log,
         gpa,
         0,
-        lived.presences.items(.player),
-        lived.presences.items(.faction),
-        lived.presences.items(.hp),
+        world_mod.playerIds(&lived),
+        world_mod.factions(&lived),
+        world_mod.hitPoints(&lived),
     );
 
     var i: u64 = 0;
     while (i < ticks) : (i += 1) {
         city.advance(&lived, params, seed, i);
-        try journal.writeTick(&log, gpa, i, lived.presences.items(.player), lived.presences.items(.cell));
+        try journal.writeTick(&log, gpa, i, world_mod.playerIds(&lived), world_mod.cellsOf(&lived));
         const result = try tick_mod.tick(&lived, gpa, gpa, seed, i, .default);
         gpa.free(result.tells);
     }
@@ -296,11 +296,11 @@ test "a replayed world matches the world that was lived" {
 
     // Both worlds are sorted by (cell, player) after their last tick, so they compare
     // directly. Every hit point of every player, identical.
-    try testing.expectEqualSlices(u16, lived.presences.items(.hp), restored.world.presences.items(.hp));
+    try testing.expectEqualSlices(u16, world_mod.hitPoints(&lived), world_mod.hitPoints(&restored.world));
     try testing.expectEqualSlices(
         world_mod.PlayerId,
-        lived.presences.items(.player),
-        restored.world.presences.items(.player),
+        world_mod.playerIds(&lived),
+        world_mod.playerIds(&restored.world),
     );
 }
 
@@ -345,8 +345,8 @@ test "a pruned journal reconstructs the same world the full journal does" {
 
     try testing.expectEqualSlices(
         u16,
-        full.world.presences.items(.hp),
-        partial.world.presences.items(.hp),
+        world_mod.hitPoints(&full.world),
+        world_mod.hitPoints(&partial.world),
     );
 }
 
@@ -382,8 +382,8 @@ test "a snapshot taken mid-fight replays the fight, not a new one" {
     // The world that resumed mid-fight is the world that never stopped.
     try testing.expectEqualSlices(
         u16,
-        full.world.presences.items(.hp),
-        resumed.world.presences.items(.hp),
+        world_mod.hitPoints(&full.world),
+        world_mod.hitPoints(&resumed.world),
     );
     try testing.expect(resumed.world.engagements.count() > 0); // there really were fights
 }

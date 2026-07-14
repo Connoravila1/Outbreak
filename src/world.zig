@@ -132,6 +132,41 @@ pub fn ensureCapacity(world: *World, gpa: Allocator, n: usize) Allocator.Error!v
     return world.presences.ensureTotalCapacity(gpa, n);
 }
 
+/// CORE. Read-only views of the columns. THE ONLY WAY TO SEE THEM.
+///
+/// Arrays of plain values may cross a module boundary (B5). The MultiArrayList that holds them
+/// may not: it is this module's layout decision, and a caller that reaches into
+/// `world.presences.items(...)` has taken a dependency on how the world is stored (D3) and can
+/// write to memory it does not own (C4). Three modules did exactly that before the audit.
+///
+/// The guard now fails the build if `presences` appears outside this module. These accessors
+/// are what callers use instead, and they hand back `const` slices -- readable, not writable.
+pub fn cellsOf(world: *const World) []const CellId {
+    return world.presences.items(.cell);
+}
+
+pub fn playerIds(world: *const World) []const PlayerId {
+    return world.presences.items(.player);
+}
+
+pub fn factions(world: *const World) []const Faction {
+    return world.presences.items(.faction);
+}
+
+pub fn hitPoints(world: *const World) []const u16 {
+    return world.presences.items(.hp);
+}
+
+pub fn population(world: *const World) usize {
+    return world.presences.len;
+}
+
+/// How many presences the world has room for without reallocating. For tests that assert the
+/// tick does not allocate per tick.
+pub fn capacityOf(world: *const World) usize {
+    return world.presences.capacity;
+}
+
 /// CORE. Move people. THE ONLY WAY TO MOVE THEM.
 ///
 /// The caller supplies a function from (player, where they are now) to (where they are now).
