@@ -196,6 +196,9 @@ const shell = [_]Source{
     // SHELL: it holds a coordinate. `outbreak_quantize` is the only function on EITHER side of
     // the network that accepts a latitude, and the float dies before it returns (B6).
     .{ .name = "ffi.zig", .text = @embedFile("ffi.zig") },
+    // SHELL: the Android host. It holds the NDK, EGL, threads, and the OS lifecycle -- every
+    // impure thing on the phone, in one file, so that nothing else on the phone is impure.
+    .{ .name = "android.zig", .text = @embedFile("android.zig") },
 };
 
 /// Does `haystack` begin with `needle`? Byte-wise, so that comptime does the least work
