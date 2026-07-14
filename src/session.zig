@@ -96,6 +96,33 @@ pub fn join(
     const player: PlayerId = @enumFromInt(server.next_player);
     server.next_player += 1;
 
+    return joinAuthenticated(server, gpa, player, faction, session);
+}
+
+/// CORE. Open a session for a player who ALREADY EXISTS -- an account that registered or logged
+/// in (accounts.zig). This is the real path; `join` is the test/simulation shortcut.
+///
+/// The session id is supplied by the shell, from the OS CSPRNG. The core does not mint it and
+/// structurally cannot (B3). See POSTMORTEM_2026-07-13.
+pub fn joinAuthenticated(
+    server: *Server,
+    gpa: Allocator,
+    player: PlayerId,
+    faction: Faction,
+    session: SessionId,
+) Allocator.Error!protocol.Welcome {
+    // A reconnecting player must not be duplicated in the world.
+    for (world_mod.playerIds(&server.world)) |existing| {
+        if (existing == player) {
+            try server.sessions.put(gpa, session, .{ .player = player });
+            return .{
+                .session = session,
+                .precision = server.precision,
+                .tick_seconds = 30,
+            };
+        }
+    }
+
     try server.sessions.put(gpa, session, .{ .player = player });
 
     try world_mod.add(&server.world, gpa, .{

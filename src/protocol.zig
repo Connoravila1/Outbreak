@@ -43,6 +43,7 @@ const std = @import("std");
 const combat = @import("combat.zig");
 const spatial = @import("spatial.zig");
 const tick_mod = @import("tick.zig");
+const world = @import("world.zig");
 
 const assert = std.debug.assert;
 
@@ -262,6 +263,79 @@ pub fn respond(tick: u64, hp: u16, told: ?tick_mod.Tell) Response {
         .momentum = tell.momentum,
         .crowd = tell.crowd,
     };
+}
+
+// ============================================================================ hello
+
+/// The client's first and only other sentence: prove who you are.
+///
+/// FIXED SIZE, LIKE EVERYTHING ELSE ON THIS WIRE. There is no length field anywhere in this
+/// protocol, which means there is no length field to lie about -- the entire class of
+/// "attacker claims this array has four billion elements" simply does not exist here. Every
+/// frame is exactly as long as it is, or it is not a frame.
+///
+/// The contact point and password travel in the clear INSIDE TLS, which is where they are meant
+/// to travel. The server hashes the contact with its pepper and derives the verifier; neither
+/// the address nor the password is ever stored (credential.zig).
+///
+/// A7.2: cold struct, size guard waived -- one per session, at the very start of it.
+pub const Hello = struct {
+    /// Zero-padded. Not a length-prefixed string: see above.
+    contact: [64]u8,
+    password: [64]u8,
+    /// Chosen once, permanently, and only honoured on registration.
+    faction: world.Faction,
+    /// Registering, or logging in.
+    intent: Intent,
+
+    pub const Intent = enum(u8) { register, login };
+};
+
+pub const hello_size = 2 + 64 + 64 + 1 + 1; // version + contact + password + faction + intent
+
+pub fn encodeHello(hello: Hello) [hello_size]u8 {
+    var out: [hello_size]u8 = undefined;
+    std.mem.writeInt(u16, out[0..2], version, .little);
+    @memcpy(out[2..66], &hello.contact);
+    @memcpy(out[66..130], &hello.password);
+    out[130] = @intFromEnum(hello.faction);
+    out[131] = @intFromEnum(hello.intent);
+    return out;
+}
+
+pub fn decodeHello(bytes: []const u8) Error!Hello {
+    if (bytes.len != hello_size) return Error.Truncated;
+    if (std.mem.readInt(u16, bytes[0..2], .little) != version) return Error.BadVersion;
+
+    // An attacker-controlled byte is never cast into an enum (see Error.BadValue). This is the
+    // crash the fuzzer found, and it is a class, not an instance.
+    const faction: world.Faction = switch (bytes[130]) {
+        0 => .human,
+        1 => .zombie,
+        else => return Error.BadValue,
+    };
+
+    const intent: Hello.Intent = switch (bytes[131]) {
+        0 => .register,
+        1 => .login,
+        else => return Error.BadValue,
+    };
+
+    var hello: Hello = .{
+        .contact = undefined,
+        .password = undefined,
+        .faction = faction,
+        .intent = intent,
+    };
+    @memcpy(&hello.contact, bytes[2..66]);
+    @memcpy(&hello.password, bytes[66..130]);
+    return hello;
+}
+
+/// The bytes of a zero-padded field, without the padding.
+pub fn unpad(field: []const u8) []const u8 {
+    const end = std.mem.indexOfScalar(u8, field, 0) orelse field.len;
+    return field[0..end];
 }
 
 // ============================================================================ handshake

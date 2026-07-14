@@ -51,6 +51,9 @@ pub const accounts = @import("accounts.zig");
 /// SHELL. Passwords and contact fingerprints. The only file that touches crypto.
 pub const credential = @import("credential.zig");
 
+/// SHELL. The socket. Loopback only; TLS terminates in front (2.3).
+pub const transport = @import("transport.zig");
+
 comptime {
     // The forbidden-construct guard runs at compile time, so a distance function or a
     // coordinate in the core fails the build rather than the review. Referencing it here
@@ -79,4 +82,6 @@ test {
     _ = @import("fuzz_test.zig");
     _ = @import("accounts.zig");
     _ = @import("credential.zig");
+    _ = @import("transport.zig");
+    _ = @import("transport_test.zig");
 }
