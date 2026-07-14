@@ -603,6 +603,11 @@ fn drawQuiet(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allocator
     try drawDiagnostic(state, size, out, gpa);
 }
 
+/// The diagnostic readout's text, formatted into these each frame. See the long note in
+/// `drawDiagnostic` for why they cannot be local buffers. Diagnostic builds only.
+var diag_left: [64]u8 = undefined;
+var diag_right: [64]u8 = undefined;
+
 /// THE CAFE READOUT. Present only in a diagnostic build (`-Ddiagnostic=true`).
 ///
 /// Sit still. Watch `drift`. If it climbs while you are not moving, the room is smaller than the
@@ -637,15 +642,24 @@ fn drawDiagnostic(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allo
         return;
     }
 
-    var left_text: [64]u8 = undefined;
-
-    // The room. Hex, because it is an opaque key and should look like one -- a decimal number
-    // invites arithmetic, and there is no arithmetic to do on a room.
-    const room = std.fmt.bufPrint(&left_text, "room {x}", .{d.room}) catch return;
+    // ============================================================================
+    // THE BUFFERS ARE MODULE-LEVEL, AND THAT IS THE FIX FOR A REAL BUG.
+    //
+    // A `Draw.text` holds a SLICE -- a pointer -- into the string it names. The draw list is not
+    // rendered here; it is rendered later, in present(), after this function has returned and its
+    // stack is gone. So a string formatted into a LOCAL buffer is a dangling pointer by the time
+    // anything reads it, and the renderer walks freed stack: mostly missing glyphs, the occasional
+    // stray `?`. That is exactly the garbage that showed up on the phone.
+    //
+    // Every other string in the game is a static literal, so this rule was invisible until the
+    // diagnostic became the first code to format one. These buffers outlive the frame -- they are
+    // overwritten next frame and read within this one -- so the slices into them stay valid until
+    // present() has consumed them. Single render thread, so no lock; diagnostic-only, so this
+    // mutable state does not exist in a shipping build at all.
+    const room = std.fmt.bufPrint(&diag_left, "room {x}", .{d.room}) catch return;
     try out.append(gpa, .{ .text = .{ .x = pad, .y = y, .text = room, .color = .amber, .weight = .label } });
 
-    var right_text: [64]u8 = undefined;
-    const stats = std.fmt.bufPrint(&right_text, "acc {d}m  fix {d}  drift {d}", .{
+    const stats = std.fmt.bufPrint(&diag_right, "acc {d}m  fix {d}  drift {d}", .{
         d.accuracy_metres,
         d.fixes,
         d.room_changes,
