@@ -42,6 +42,8 @@
 
 const std = @import("std");
 const ui = @import("ui.zig");
+const quads = @import("quads.zig");
+const gles = @import("gles.zig");
 
 const Io = std.Io;
 
@@ -301,6 +303,11 @@ const Surface = struct {
     context: EGLContext = null,
     width: i32 = 0,
     height: i32 = 0,
+
+    /// The GLES program, once the context is current. Null if the GPU refused to compile a
+    /// fifteen-line shader -- in which case we run the game and draw nothing, rather than crash on
+    /// a phone. A missing renderer is an absent renderer, not an error to unwind (E2, E4).
+    renderer: ?gles.Renderer = null,
 };
 
 fn render() void {
@@ -312,6 +319,12 @@ fn render() void {
 
     var draws: std.ArrayList(ui.Draw) = .empty;
     defer draws.deinit(gpa);
+
+    // The vertex buffer, reused for the life of the thread. `quads.build` clears it and refills it
+    // every frame, so after a few frames it never allocates again -- and a renderer that stops
+    // allocating is a renderer that stops waking the allocator sixty times a second (G5, C3).
+    var verts: std.ArrayList(quads.Vertex) = .empty;
+    defer verts.deinit(gpa);
 
     var surface: Surface = .{};
     defer tearDown(&surface);
@@ -374,39 +387,45 @@ fn render() void {
 
         ui.draw(state, .{ .w = surface.width, .h = surface.height }, &draws, gpa) catch continue;
 
-        present(&surface, draws.items);
+        present(&surface, draws.items, &verts, gpa);
     }
 }
 
-/// M.1: the loop, the surface, and a black screen.
+/// M.2: the quad pass. The draw list, on the screen.
 ///
-/// M.2 replaces this with a real renderer -- a batched quad pass for the rects, then a glyph pass
-/// for the text. The `Draw` list it consumes is ALREADY what the core emits, and it is already
-/// tested. This function is the only thing standing between that list and a screen.
-fn present(surface: *Surface, draws: []const ui.Draw) void {
+/// The host decides NOTHING here. `ui.zig` said what to draw, `quads.zig` turned it into
+/// triangles, and this function hands them to the GPU. There is no layout, no colour, and no
+/// game logic in this file -- and if that ever stops being true, the interface has leaked into
+/// the shell and the phone has started computing things it is not permitted to compute (H1).
+///
+/// M.3 adds the glyph pass. Until then the rectangles are on screen and the text is not: the
+/// faction cards, the condition bar, the tell ticks, the background. The words arrive next.
+fn present(surface: *Surface, draws: []const ui.Draw, verts: *std.ArrayList(quads.Vertex), gpa: std.mem.Allocator) void {
     glViewport(0, 0, surface.width, surface.height);
 
-    // The first draw command is always the background (ui.draw emits it first). Until the quad
-    // renderer lands, we honour that one and no more -- which puts the right black on the screen
-    // and proves the whole chain: OS -> host -> core -> pixels.
-    var r: f32 = 0;
-    var g: f32 = 0;
-    var b: f32 = 0;
-
-    if (draws.len > 0) {
-        switch (draws[0]) {
-            .rect => |rect| {
-                const rgba = @intFromEnum(rect.color);
-                r = @as(f32, @floatFromInt((rgba >> 24) & 0xFF)) / 255.0;
-                g = @as(f32, @floatFromInt((rgba >> 16) & 0xFF)) / 255.0;
-                b = @as(f32, @floatFromInt((rgba >> 8) & 0xFF)) / 255.0;
-            },
-            .text => {},
-        }
-    }
-
-    glClearColor(r, g, b, 1.0);
+    // Black, always, and underneath everything. `ui.draw` emits a full-bleed background rect as
+    // its first command, so this is belt and braces -- but the one frame where it is not, the
+    // alternative is showing whatever the compositor last left in this buffer, which could be the
+    // previous app. Costs nothing. Do it.
+    glClearColor(0, 0, 0, 1.0);
     glClear(GL_COLOR_BUFFER_BIT);
+
+    const renderer = if (surface.renderer) |*r| r else {
+        // No program. Draw nothing, swap a black frame, keep running. A phone that cannot compile
+        // the shader still ticks, still reports its cell, and still plays the game -- it just
+        // cannot show it. That is a degradation, not a crash (E2).
+        _ = eglSwapBuffers(surface.display, surface.surface);
+        return;
+    };
+
+    // A failed allocation is a dropped frame, not a dead process. The next frame tries again with
+    // the capacity this one already reserved.
+    quads.build(draws, verts, gpa) catch {
+        _ = eglSwapBuffers(surface.display, surface.surface);
+        return;
+    };
+
+    gles.draw(renderer, verts.items, surface.width, surface.height);
 
     _ = eglSwapBuffers(surface.display, surface.surface);
 }
@@ -451,11 +470,21 @@ fn standUp(window: *ANativeWindow) ?Surface {
         .context = context,
         .width = ANativeWindow_getWidth(window),
         .height = ANativeWindow_getHeight(window),
+
+        // AFTER `eglMakeCurrent`, and not one line before it. Every GL call needs a current
+        // context; compiling a shader without one silently produces nothing and the screen stays
+        // black. Android destroys and recreates surfaces freely, so this runs on every re-attach
+        // and the old program dies with the old context (C5).
+        .renderer = gles.init(),
     };
 }
 
 fn tearDown(surface: *Surface) void {
     if (surface.display == null) return;
+
+    // The program and the buffer belong to the context. Free them while it is still current --
+    // after `eglDestroyContext` there is nothing left to free them from.
+    if (surface.renderer) |*renderer| gles.deinit(renderer);
 
     _ = eglMakeCurrent(surface.display, egl_no_surface, egl_no_surface, egl_no_context);
     if (surface.context != null) _ = eglDestroyContext(surface.display, surface.context);

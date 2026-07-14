@@ -63,6 +63,14 @@ pub const ui = @import("ui.zig");
 /// When to turn the GPS on. Battery is a hard constraint, not an optimization (3.3, G5).
 pub const gps = @import("gps.zig");
 
+/// SHELL, and pure anyway: the draw list, turned into triangles. Tested with no phone (M.2).
+///
+/// `gles.zig` -- the GL calls themselves -- is deliberately NOT here. It is reachable only from
+/// `android.zig`, because its `extern fn`s are resolved by the APK's linker and there is no
+/// libGLESv2 on a laptop. Everything about the renderer that can be tested without a GPU was put
+/// in `quads.zig` precisely so that this line could exist.
+pub const quads = @import("quads.zig");
+
 comptime {
     // The forbidden-construct guard runs at compile time, so a distance function or a
     // coordinate in the core fails the build rather than the review. Referencing it here
@@ -96,4 +104,6 @@ test {
     _ = @import("ffi.zig");
     _ = @import("ui.zig");
     _ = @import("gps.zig");
+    _ = @import("quads.zig");
+    _ = @import("gles.zig");
 }

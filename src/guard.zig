@@ -199,6 +199,20 @@ const shell = [_]Source{
     // SHELL: the Android host. It holds the NDK, EGL, threads, and the OS lifecycle -- every
     // impure thing on the phone, in one file, so that nothing else on the phone is impure.
     .{ .name = "android.zig", .text = @embedFile("android.zig") },
+    // SHELL, and PURE ANYWAY -- the one classification in this list that needs a sentence.
+    //
+    // `quads.zig` turns a draw list into triangles. It has no I/O and no clock, so by B2 it could
+    // be core. It is shell because it speaks the GPU's vocabulary, and that vocabulary is floats:
+    // the coordinate wall forbids a float in a core file, bluntly and textually, and it is not to
+    // be weakened because THESE floats happen to be screen pixels rather than latitudes. The
+    // guard does not read intent. Obey the stricter reading.
+    //
+    // Being pure regardless is the point, not a loophole: the whole transform is tested on a
+    // laptop, and only `gles.zig` needs a GPU.
+    .{ .name = "quads.zig", .text = @embedFile("quads.zig") },
+    // SHELL: the GLES2 backend. Shaders, a vertex buffer, and one draw call. This is the whole of
+    // what needs a GPU to run, which is why it is the whole of what cannot be tested without one.
+    .{ .name = "gles.zig", .text = @embedFile("gles.zig") },
 };
 
 /// Does `haystack` begin with `needle`? Byte-wise, so that comptime does the least work
