@@ -218,6 +218,9 @@ Each of these is *currently* implemented one way and could go another. The colum
 | O2 | How often *should* a fight happen? | ~5/day, 5 min each — an accident of two constants, not a target | Phase 1 (cheap to retune forever, but the target should exist) |
 | O3 | Cell size (39 bits, ~38 m) | Chosen for squareness, not from data | **Phase 2 — but see O6, which removes the deadline** |
 | **O6** | Make cell precision **server-directed** | Planned for Phase 2's handshake | Phase 2 |
+| **O8** | **Accessibility overlay** — a custom-rendered surface is invisible to TalkBack/VoiceOver | Owed. An ambient *text* game a blind player could otherwise play perfectly. | Before launch |
+| **O9** | **iOS graphics backend** — the existing one is EGL/GLES, which does not exist on iOS | A Metal backend is required. | Phase 5 |
+| **O10** | Interaction polish: fling, momentum, long-press, selection, haptics | The long tail a native toolkit gives free and a custom renderer must earn — **once, not twice** | Phase 3+ |
 | **O7** | **Rooms that bind to places** — the café is the room, the concert expands to the venue | Not built. A safe version exists; the obvious version does not | Post-Phase 3 |
 | O4 | Do mass events (concerts, stadiums) behave? | **Answered, and they revealed O5.** The city now has concerts; they produce `hundreds`-scale crowds | done |
 | ~~O5~~ | ~~Should a big room fight differently from a small one?~~ | **DONE.** A café is a skirmish, a stadium is a siege: engagement length scales with the crowd | closed |
