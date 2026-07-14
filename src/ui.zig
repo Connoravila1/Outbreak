@@ -94,7 +94,21 @@ pub const State = struct {
     pub const max_tells = 8;
 };
 
-pub const Screen = enum { choose_side, quiet, live };
+pub const Screen = enum {
+    choose_side,
+    quiet,
+    live,
+
+    /// CREDITS. Not a nicety, and not optional.
+    ///
+    /// The music is CC BY 4.0 and the fonts are OFL. Both licences REQUIRE the credit to reach the
+    /// person using the work -- a line in a repository file is where we keep our own books, it is
+    /// not attribution. The obligation is discharged on a screen or it is not discharged.
+    ///
+    /// So this screen exists before the music does. If we cannot put a credit in front of a player,
+    /// we do not get to use the track.
+    credits,
+};
 
 /// A touch, in pixels.
 pub const Touch = struct { x: i32, y: i32 };
@@ -173,9 +187,21 @@ pub fn touch(state: State, at: Touch, size: Size) State {
                     next.screen = .quiet;
                 }
             }
+
+            if (within(at, creditsLink(size))) next.screen = .credits;
         },
 
-        .quiet => {},
+        .quiet => {
+            if (within(at, creditsLink(size))) next.screen = .credits;
+        },
+
+        .credits => {
+            // Back to wherever they were. A player who has not chosen a side has not chosen one;
+            // reading the credits is not a way to skip that.
+            if (within(at, backButton(size))) {
+                next.screen = if (state.faction == null) .choose_side else .quiet;
+            }
+        },
 
         .live => {
             if (within(at, leaveButton(size))) {
@@ -242,6 +268,11 @@ fn push(state: State, sentence: []const u8) State {
 
 const Rect = struct { x: i32, y: i32, w: i32, h: i32 };
 
+fn overlaps(a: Rect, b: Rect) bool {
+    return a.x < b.x + b.w and b.x < a.x + a.w and
+        a.y < b.y + b.h and b.y < a.y + a.h;
+}
+
 fn within(at: Touch, rect: Rect) bool {
     return at.x >= rect.x and at.x < rect.x + rect.w and
         at.y >= rect.y and at.y < rect.y + rect.h;
@@ -264,6 +295,31 @@ fn leaveButton(size: Size) Rect {
     return .{ .x = pad, .y = size.h - 60, .w = size.w - pad * 2, .h = 40 };
 }
 
+/// The credit, bottom right. Small, quiet, and always reachable.
+///
+/// It is on `choose_side` and on `quiet` -- the two screens a player is looking at when nothing is
+/// happening -- and NOT on `live`. A fight is not the moment to advertise the soundtrack, and a
+/// licence obligation does not entitle us to interrupt the one thing the game is for.
+fn creditsLink(size: Size) Rect {
+    // TOP RIGHT, and it took two tries to get here.
+    //
+    // The bottom of the screen is crowded: `confirmButton` holds size.h-120..-68, `leaveButton`
+    // holds -60..-20, and the tagline sits at -50. There is no honest 24px band left down there,
+    // and both of my first two attempts LANDED ON A BUTTON -- invisible, because the link is not
+    // drawn on the screen whose button it covered, and therefore a tap that would quietly have
+    // done the wrong thing on the day someone moved either rectangle.
+    //
+    // The top-right corner is empty on every screen: the faction label and the game's name are
+    // left-aligned. The test below asserts this collides with nothing, and it earned its keep.
+    const w: i32 = 150;
+    const h: i32 = 26;
+    return .{ .x = size.w - pad - w, .y = 34, .w = w, .h = h };
+}
+
+fn backButton(size: Size) Rect {
+    return .{ .x = pad, .y = size.h - 60, .w = 120, .h = 40 };
+}
+
 // ============================================================================ draw
 
 /// CORE. Turn the state into a list of things to draw. Allocates into the caller's list (C1).
@@ -278,6 +334,7 @@ pub fn draw(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allocator)
         .choose_side => try drawChooseSide(state, size, out, gpa),
         .quiet => try drawQuiet(state, size, out, gpa),
         .live => try drawLive(state, size, out, gpa),
+        .credits => try drawCredits(size, out, gpa),
     }
 }
 
@@ -300,6 +357,8 @@ fn drawChooseSide(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allo
     try out.append(gpa, .{ .text = .{ .x = confirm.x + 16, .y = confirm.y + 18, .text = "Confirm", .color = if (ready) .bone else .grave, .weight = .body } });
 
     try out.append(gpa, .{ .text = .{ .x = pad, .y = size.h - 50, .text = "No faction is stronger. Only different.", .color = .grave, .weight = .body } });
+
+    try drawCreditsLink(size, out, gpa);
 }
 
 fn drawFaction(
@@ -331,6 +390,57 @@ fn drawQuiet(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allocator
     try out.append(gpa, .{ .text = .{ .x = size.w - pad - 80, .y = size.h - 140, .text = conditionWord(state.hp), .color = .smoke, .weight = .body } });
 
     try out.append(gpa, .{ .text = .{ .x = pad, .y = size.h - 110, .text = "LEVEL", .color = .grave, .weight = .label } });
+
+    try drawCreditsLink(size, out, gpa);
+}
+
+fn drawCreditsLink(size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
+    const link = creditsLink(size);
+    try out.append(gpa, .{ .text = .{ .x = link.x, .y = link.y, .text = "Music: Tim Beek", .color = .grave, .weight = .label } });
+}
+
+/// THE CREDITS. The licences require this, and the requirement is the point.
+///
+/// CC BY 4.0 obliges us to name the creator, link the licence, and say whether we changed the work.
+/// The SIL Open Font License obliges the same for the typefaces. None of those obligations are
+/// discharged by a file in a repository -- they are discharged in front of a person, or not at all.
+///
+/// So this screen exists BEFORE the music does. If we cannot put a credit on a screen, we do not
+/// get to use the track.
+fn drawCredits(size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
+    try out.append(gpa, .{ .text = .{ .x = pad, .y = 40, .text = "CREDITS", .color = .dust, .weight = .label } });
+
+    var y: i32 = 100;
+
+    try out.append(gpa, .{ .text = .{ .x = pad, .y = y, .text = "Music", .color = .bone, .weight = .heading } });
+    y += 40;
+    try out.append(gpa, .{ .text = .{ .x = pad, .y = y, .text = "Piano Zombie", .color = .smoke, .weight = .body } });
+    y += line;
+    try out.append(gpa, .{ .text = .{ .x = pad, .y = y, .text = "Tim Beek", .color = .bone, .weight = .body } });
+    y += line;
+    try out.append(gpa, .{ .text = .{ .x = pad, .y = y, .text = "timbeek.com", .color = .dust, .weight = .body } });
+    y += line;
+    try out.append(gpa, .{ .text = .{ .x = pad, .y = y, .text = "Licensed CC BY 4.0. Not modified.", .color = .dust, .weight = .body } });
+
+    y += 60;
+    try out.append(gpa, .{ .text = .{ .x = pad, .y = y, .text = "Type", .color = .bone, .weight = .heading } });
+    y += 40;
+    try out.append(gpa, .{ .text = .{ .x = pad, .y = y, .text = "Oxanium by Severin Meyer", .color = .smoke, .weight = .body } });
+    y += line;
+    try out.append(gpa, .{ .text = .{ .x = pad, .y = y, .text = "Inter by Rasmus Andersson", .color = .smoke, .weight = .body } });
+    y += line;
+    try out.append(gpa, .{ .text = .{ .x = pad, .y = y, .text = "Both under the SIL Open Font License.", .color = .dust, .weight = .body } });
+
+    y += 60;
+    try out.append(gpa, .{ .text = .{ .x = pad, .y = y, .text = "Code", .color = .bone, .weight = .heading } });
+    y += 40;
+    try out.append(gpa, .{ .text = .{ .x = pad, .y = y, .text = "stb_truetype by Sean Barrett", .color = .smoke, .weight = .body } });
+    y += line;
+    try out.append(gpa, .{ .text = .{ .x = pad, .y = y, .text = "Public domain.", .color = .dust, .weight = .body } });
+
+    const back = backButton(size);
+    try out.append(gpa, .{ .rect = .{ .x = back.x, .y = back.y, .w = back.w, .h = back.h, .color = .carrion } });
+    try out.append(gpa, .{ .text = .{ .x = back.x + 16, .y = back.y + 10, .text = "Back", .color = .bone, .weight = .body } });
 }
 
 fn drawLive(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
@@ -519,4 +629,82 @@ test "the draw list says nothing the state did not" {
     };
 
     try testing.expect(found_nothing_here);
+}
+
+test "THE CREDIT IS REACHABLE, AND IT NAMES THE PEOPLE" {
+    // THIS IS A LICENCE OBLIGATION, BOUND TO A MECHANISM.
+    //
+    // CC BY 4.0 and the SIL Open Font License both require the credit to reach the PERSON USING THE
+    // WORK. A row in a repository file is where we keep our own books; it is not attribution.
+    //
+    // Left to a comment, this is the kind of thing that silently stops being true -- someone
+    // reworks a screen, the line goes, and we are shipping someone else's music with no credit on
+    // it. So it is a test, and it fails if the names leave the app.
+    const gpa = testing.allocator;
+    const size: Size = .{ .w = 360, .h = 800 };
+
+    var out: std.ArrayList(Draw) = .empty;
+    defer out.deinit(gpa);
+
+    // Reachable from the two screens a player looks at when nothing is happening.
+    for ([_]State{
+        .{},
+        .{ .screen = .quiet, .faction = .human },
+    }) |start| {
+        const link = creditsLink(size);
+        const opened = touch(start, .{ .x = link.x + 4, .y = link.y + 4 }, size);
+        try testing.expectEqual(Screen.credits, opened.screen);
+    }
+
+    // NOT reachable from a live cell. A fight is not the moment to advertise the soundtrack, and a
+    // licence obligation does not entitle us to interrupt the one thing the game is for.
+    const fighting: State = .{ .screen = .live, .faction = .human };
+    const link = creditsLink(size);
+    try testing.expectEqual(Screen.live, touch(fighting, .{ .x = link.x + 4, .y = link.y + 4 }, size).screen);
+
+    // AND THE LINK MUST NOT SIT ON TOP OF A CONTROL THAT DOES EXIST THERE.
+    //
+    // The first version of it did: it overlapped "Walk away" on the live screen. It was invisible,
+    // because the link is not drawn during a fight -- so the only symptom would have been a tap
+    // that quietly did the wrong thing on the day someone moved either rectangle.
+    const leave = leaveButton(size);
+    const confirm = confirmButton(size);
+    try testing.expect(!overlaps(link, leave));
+    try testing.expect(!overlaps(link, confirm));
+
+    // And the screen itself carries the credits the licences actually require.
+    try draw(.{ .screen = .credits, .faction = .human }, size, &out, gpa);
+
+    var has_creator = false;
+    var has_site = false;
+    var has_licence = false;
+    var has_fonts = false;
+    var has_stb = false;
+
+    for (out.items) |item| switch (item) {
+        .text => |t| {
+            if (std.mem.eql(u8, t.text, "Tim Beek")) has_creator = true;
+            if (std.mem.eql(u8, t.text, "timbeek.com")) has_site = true;
+            if (std.mem.indexOf(u8, t.text, "CC BY 4.0") != null) has_licence = true;
+            if (std.mem.indexOf(u8, t.text, "Open Font License") != null) has_fonts = true;
+            if (std.mem.indexOf(u8, t.text, "stb_truetype") != null) has_stb = true;
+        },
+        .rect => {},
+    };
+
+    try testing.expect(has_creator);
+    try testing.expect(has_site);
+    try testing.expect(has_licence); // CC BY also requires us to say whether we changed the work
+    try testing.expect(has_fonts);
+    try testing.expect(has_stb);
+
+    // And there is a way out. A screen you cannot leave is a screen nobody opens twice.
+    const back = backButton(size);
+    const left = touch(.{ .screen = .credits, .faction = .human }, .{ .x = back.x + 4, .y = back.y + 4 }, size);
+    try testing.expectEqual(Screen.quiet, left.screen);
+
+    // Reading the credits is not a way to skip choosing a side.
+    const undecided = touch(.{ .screen = .credits }, .{ .x = back.x + 4, .y = back.y + 4 }, size);
+    try testing.expectEqual(Screen.choose_side, undecided.screen);
+    try testing.expectEqual(@as(?Faction, null), undecided.faction);
 }
