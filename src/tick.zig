@@ -191,6 +191,12 @@ pub fn tick(
         for (out, factions[start..end], hps[start..end], tells[written..][0..run.len]) |outcome, faction, *hp, *tell| {
             hp.* = outcome.hp_after;
 
+            // THE ONLY XP IN THE GAME (H3). One call site, and it pays for one thing: a tick in
+            // a live cell with a hostile present. Before this, the game awarded XP every tick
+            // and then THREW IT AWAY -- the tell carried a delta out on the wire and nobody
+            // kept a total. Everybody was level one forever.
+            world_mod.award(world, outcome.player, outcome.xp);
+
             // Your hostiles are the other side's headcount. A Human is told how many Zombies
             // are here, in bands; a Zombie is told the reverse.
             const hostiles: u32 = switch (faction) {

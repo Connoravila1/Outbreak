@@ -73,6 +73,17 @@ pub fn replay(gpa: Allocator, bytes: []const u8, rules: combat.Rules) Error!stru
             have_roster = true;
         },
 
+        .progress => |pr| {
+            // What everyone earned. Without this, replay silently returns every player to level
+            // one and the world looks perfectly correct while being wrong about the only thing
+            // players actually keep.
+            var i: usize = 0;
+            while (i < pr.count) : (i += 1) {
+                const entry = journal.progressEntry(pr.payload, i);
+                try world.progress.put(gpa, entry.player, entry.progress);
+            }
+        },
+
         .engagements => |e| {
             // The fights that were in progress when the world was written down. Without
             // these, replaying from a snapshot would restart every fight that was running --
@@ -190,6 +201,10 @@ fn recordCityWithSnapshots(gpa: Allocator, ticks: u64, seed: u64, snapshot_every
             defer gpa.free(fights.cells);
             defer gpa.free(fights.engagements);
 
+            const earned = try world_mod.progressSorted(&live, gpa);
+            defer gpa.free(earned.players);
+            defer gpa.free(earned.progress);
+
             try journal.writeSnapshot(
                 &out,
                 gpa,
@@ -199,6 +214,8 @@ fn recordCityWithSnapshots(gpa: Allocator, ticks: u64, seed: u64, snapshot_every
                 world_mod.hitPoints(&live),
                 fights.cells,
                 fights.engagements,
+                earned.players,
+                earned.progress,
             );
         }
 
@@ -386,4 +403,52 @@ test "a snapshot taken mid-fight replays the fight, not a new one" {
         world_mod.hitPoints(&resumed.world),
     );
     try testing.expect(resumed.world.engagements.count() > 0); // there really were fights
+}
+
+test "a restart does not wipe what people earned" {
+    // THE BUG THIS RECORD EXISTS TO PREVENT.
+    //
+    // Retention deletes the ROOMS people were in -- that is I7, and it is the point of the whole
+    // design. It must never delete WHAT THEY EARNED BY BEING THERE.
+    //
+    // A snapshot that records where everyone is and how hurt they are, but not their XP, comes
+    // back from disk looking perfectly correct -- with every player silently returned to level
+    // one. The world would be consistent, replayable, byte-identical, and wrong about the only
+    // thing players actually keep.
+    const gpa = testing.allocator;
+
+    var log = try recordCityWithSnapshots(gpa, 120, 0xEA12, 40);
+    defer log.deinit(gpa);
+
+    var full = try replay(gpa, log.items, .default);
+    defer world_mod.deinit(&full.world, gpa);
+
+    // The city actually earned something -- otherwise this test proves nothing.
+    var total_xp: u64 = 0;
+    var it = full.world.progress.iterator();
+    while (it.next()) |entry| total_xp += entry.value_ptr.xp;
+    try testing.expect(total_xp > 0);
+
+    // Now prune away the distant past, as retention does, and come back from disk.
+    var pruned = try journal.prune(gpa, log.items, 110);
+    defer pruned.deinit(gpa);
+
+    var restarted = try replay(gpa, pruned.items, .default);
+    defer world_mod.deinit(&restarted.world, gpa);
+
+    // Every player's earnings survived the deletion of the rooms they earned them in.
+    var restarted_xp: u64 = 0;
+    var it2 = restarted.world.progress.iterator();
+    while (it2.next()) |entry| restarted_xp += entry.value_ptr.xp;
+
+    try testing.expectEqual(total_xp, restarted_xp);
+
+    // And levels came back with them.
+    var it3 = full.world.progress.iterator();
+    while (it3.next()) |entry| {
+        const before = entry.value_ptr.*;
+        const after = world_mod.progressOf(&restarted.world, entry.key_ptr.*);
+        try testing.expectEqual(before.xp, after.xp);
+        try testing.expectEqual(before.level, after.level);
+    }
 }

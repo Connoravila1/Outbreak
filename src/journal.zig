@@ -68,6 +68,12 @@ pub const Header = struct {
 const Kind = enum(u8) {
     roster = 1,
     tick = 2,
+    /// What every player has earned.
+    ///
+    /// A snapshot without it loses everyone's XP and level on restart -- the world comes back
+    /// looking correct, with every player silently returned to level one. Retention deletes the
+    /// ROOMS people were in (I7); it must never delete what they earned by being there.
+    progress = 4,
     /// The fights that were in progress when the snapshot was taken.
     ///
     /// A snapshot that records where everyone is and how hurt they are, but NOT the fights
@@ -102,6 +108,8 @@ pub const Record = union(enum) {
     tick: struct { index: u64, count: u32, payload: []const u8 },
     /// The fights in progress at a snapshot.
     engagements: struct { index: u64, count: u32, payload: []const u8 },
+    /// What everyone has earned, at a snapshot.
+    progress: struct { index: u64, count: u32, payload: []const u8 },
 };
 
 // ---------------------------------------------------------------------------- writing
@@ -176,6 +184,30 @@ pub fn writeEngagements(
     }
 }
 
+/// CORE. Write what everyone has earned, as of the start of tick `index`.
+///
+/// Sorted by player, because a hash map's iteration order is not something we rely on (B8).
+pub fn writeProgress(
+    out: *std.ArrayList(u8),
+    gpa: Allocator,
+    index: u64,
+    players: []const PlayerId,
+    progress: []const world_mod.Progress,
+) Allocator.Error!void {
+    assert(players.len == progress.len);
+
+    const count: u32 = @intCast(players.len);
+    try appendInt(out, gpa, u8, @intFromEnum(Kind.progress));
+    try appendInt(out, gpa, u64, index);
+    try appendInt(out, gpa, u32, count);
+
+    for (players, progress) |player, p| {
+        try appendInt(out, gpa, u32, @intFromEnum(player));
+        try appendInt(out, gpa, u32, p.xp);
+        try appendInt(out, gpa, u16, p.level);
+    }
+}
+
 /// CORE. Write one tick's reports: who was in which room.
 ///
 /// This is the entire input to the tick. Given the roster, the seed, and these, the world
@@ -219,9 +251,12 @@ pub fn writeSnapshot(
     hps: []const u16,
     cells: []const CellId,
     engagements: []const world_mod.Engagement,
+    earners: []const PlayerId,
+    progress: []const world_mod.Progress,
 ) Allocator.Error!void {
     try writeRoster(out, gpa, index, players, factions, hps);
     try writeEngagements(out, gpa, index, cells, engagements);
+    try writeProgress(out, gpa, index, earners, progress);
 }
 
 // ---------------------------------------------------------------------------- reading
@@ -258,6 +293,7 @@ pub fn next(cursor: *Cursor) Error!?Record {
         1 => .roster,
         2 => .tick,
         3 => .engagements,
+        4 => .progress,
         else => return Error.UnknownRecord, // a record we do not understand is not a record
     };
     cursor.pos += 1;
@@ -284,12 +320,20 @@ pub fn next(cursor: *Cursor) Error!?Record {
             const payload = try takeSlice(cursor, bytes_needed);
             return .{ .engagements = .{ .index = index, .count = count, .payload = payload } };
         },
+        .progress => {
+            const index = try take(cursor, u64);
+            const count = try take(cursor, u32);
+            const bytes_needed = @as(usize, count) * progress_size;
+            const payload = try takeSlice(cursor, bytes_needed);
+            return .{ .progress = .{ .index = index, .count = count, .payload = payload } };
+        },
     }
 }
 
 const roster_entry_size = 4 + 1 + 2;
 const report_size = 4 + 8;
 const engagement_size = 8 + 8 + 2 + 2;
+const progress_size = 4 + 4 + 2;
 
 /// CORE. The i-th entry of a roster payload.
 ///
@@ -319,6 +363,18 @@ pub fn engagementEntry(payload: []const u8, i: usize) struct { cell: CellId, eng
             .started = readInt(payload, at + 8, u64),
             .humans = readInt(payload, at + 16, u16),
             .zombies = readInt(payload, at + 18, u16),
+        },
+    };
+}
+
+/// CORE. The i-th player's earnings.
+pub fn progressEntry(payload: []const u8, i: usize) struct { player: PlayerId, progress: world_mod.Progress } {
+    const at = i * progress_size;
+    return .{
+        .player = @enumFromInt(readInt(payload, at, u32)),
+        .progress = .{
+            .xp = readInt(payload, at + 4, u32),
+            .level = readInt(payload, at + 8, u16),
         },
     };
 }
@@ -361,7 +417,7 @@ pub fn prune(gpa: Allocator, bytes: []const u8, keep_from: u64) !std.ArrayList(u
                     if (anchor == null or roster.index > anchor.?) anchor = roster.index;
                 }
             },
-            .tick, .engagements => {},
+            .tick, .engagements, .progress => {},
         };
     }
 
@@ -387,6 +443,16 @@ pub fn prune(gpa: Allocator, bytes: []const u8, keep_from: u64) !std.ArrayList(u
                 try appendInt(&out, gpa, u64, roster.index);
                 try appendInt(&out, gpa, u32, roster.count);
                 try out.appendSlice(gpa, roster.payload);
+            },
+            .progress => |pr| {
+                // What people EARNED is never deleted. Retention deletes the rooms they were in
+                // (I7), not the game they played. Only stale snapshots' copies are dropped.
+                if (pr.index < (anchor orelse 0)) continue;
+
+                try appendInt(&out, gpa, u8, @intFromEnum(Kind.progress));
+                try appendInt(&out, gpa, u64, pr.index);
+                try appendInt(&out, gpa, u32, pr.count);
+                try out.appendSlice(gpa, pr.payload);
             },
             .engagements => |e| {
                 // The fights in progress belong to their snapshot, and travel with it.
@@ -549,7 +615,7 @@ test "retention deletes the cell history and keeps nothing else back" {
 
     while (try next(&cursor)) |record| switch (record) {
         .roster => rosters += 1,
-        .engagements => {},
+        .engagements, .progress => {},
         .tick => |t| {
             ticks += 1;
             oldest = @min(oldest, t.index);

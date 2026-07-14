@@ -317,7 +317,7 @@ pub fn tick(server: *Server, io: Io, gpa: Allocator, scratch: Allocator) !void {
 
     // And now: sixteen bytes to everyone. The same sixteen bytes' worth of work for everyone.
     for (server.connections.items) |connection| {
-        const response = find(replies, connection.session) orelse protocol.quiet(now, 0);
+        const response = find(replies, connection.session) orelse protocol.quiet(now, 0, .{ .xp = 0, .level = 1 });
         const bytes = protocol.encodeResponse(response);
 
         var write_buffer: [64]u8 = undefined;

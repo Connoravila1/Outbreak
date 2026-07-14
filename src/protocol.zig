@@ -171,17 +171,38 @@ pub fn validate(report: Report, wanted: u6) ?CellId {
 /// those apart, and neither can anyone reading their traffic (I3).
 pub const Response = struct {
     tick: u64,
+    /// What the player has earned in total, and the level it buys. AUTHORITATIVE, from the
+    /// server, every tick.
+    ///
+    /// The client could add up the deltas itself and save six bytes. It will not: state on the
+    /// client is state in two places, and state in two places is the oldest source of complexity
+    /// in the field. The phone renders what it is told and computes nothing (H1).
+    total_xp: u32,
     hp: u16,
     damage: u16,
     xp: u16,
+    level: u16,
     momentum: Momentum, // u8
     crowd: Crowd, // u8
+    _pad: u16 = 0,
 
     comptime {
         // THE SIZE GUARD (A7). One per player per tick.
-        assert(@sizeOf(Response) == 16);
+        //
+        // A7.1 -- BUDGET RAISED FROM 16 TO 24, DELIBERATELY.
+        //
+        // The total and the level. Before this, the game sent a per-tick XP delta and kept no
+        // total anywhere -- so the client had nothing to display and the server had nothing to
+        // remember. Everyone was level one, forever.
+        //
+        // Eight more bytes per player per tick. At ten thousand players that is 2.6 kB/s across
+        // the whole world, against a thirty-second tick budget. It is not a number worth
+        // discussing (G3).
+        //
+        // IT IS STILL CONSTANT, which is the property that actually matters: every reply is the
+        // same size, whatever happened, so silence is still exactly as large as a war (I3).
+        assert(@sizeOf(Response) == 24);
     }
-
 };
 
 /// CORE. Nothing happened to you.
@@ -191,18 +212,20 @@ pub const Response = struct {
 ///
 /// A free function, not a method: a record contains fields and nothing else (A1). It was a
 /// method until the ruleset audit, and it had no business being one.
-pub fn quiet(tick: u64, hp: u16) Response {
+pub fn quiet(tick: u64, hp: u16, progress: world.Progress) Response {
     return .{
         .tick = tick,
+        .total_xp = progress.xp,
         .hp = hp,
         .damage = 0,
         .xp = 0,
+        .level = progress.level,
         .momentum = .even,
         .crowd = .a_few,
     };
 }
 
-pub const response_size = 16; // tick(8) + hp(2) + damage(2) + xp(2) + momentum(1) + crowd(1)
+pub const response_size = 22; // tick + total_xp + hp + damage + xp + level + momentum + crowd
 
 /// CORE. Encode a response.
 ///
@@ -212,18 +235,20 @@ pub const response_size = 16; // tick(8) + hp(2) + damage(2) + xp(2) + momentum(
 pub fn encodeResponse(response: Response) [response_size]u8 {
     var out: [response_size]u8 = undefined;
     std.mem.writeInt(u64, out[0..8], response.tick, .little);
-    std.mem.writeInt(u16, out[8..10], response.hp, .little);
-    std.mem.writeInt(u16, out[10..12], response.damage, .little);
-    std.mem.writeInt(u16, out[12..14], response.xp, .little);
-    out[14] = @intFromEnum(response.momentum);
-    out[15] = @intFromEnum(response.crowd);
+    std.mem.writeInt(u32, out[8..12], response.total_xp, .little);
+    std.mem.writeInt(u16, out[12..14], response.hp, .little);
+    std.mem.writeInt(u16, out[14..16], response.damage, .little);
+    std.mem.writeInt(u16, out[16..18], response.xp, .little);
+    std.mem.writeInt(u16, out[18..20], response.level, .little);
+    out[20] = @intFromEnum(response.momentum);
+    out[21] = @intFromEnum(response.crowd);
     return out;
 }
 
 pub fn decodeResponse(bytes: []const u8) Error!Response {
     if (bytes.len != response_size) return Error.Truncated;
 
-    const momentum: Momentum = switch (bytes[14]) {
+    const momentum: Momentum = switch (bytes[20]) {
         0 => .even,
         1 => .humans_edge,
         2 => .zombies_edge,
@@ -232,7 +257,7 @@ pub fn decodeResponse(bytes: []const u8) Error!Response {
         else => return Error.BadValue,
     };
 
-    const crowd: Crowd = switch (bytes[15]) {
+    const crowd: Crowd = switch (bytes[21]) {
         0 => .a_few,
         1 => .dozens,
         2 => .scores,
@@ -243,23 +268,27 @@ pub fn decodeResponse(bytes: []const u8) Error!Response {
 
     return .{
         .tick = std.mem.readInt(u64, bytes[0..8], .little),
-        .hp = std.mem.readInt(u16, bytes[8..10], .little),
-        .damage = std.mem.readInt(u16, bytes[10..12], .little),
-        .xp = std.mem.readInt(u16, bytes[12..14], .little),
+        .total_xp = std.mem.readInt(u32, bytes[8..12], .little),
+        .hp = std.mem.readInt(u16, bytes[12..14], .little),
+        .damage = std.mem.readInt(u16, bytes[14..16], .little),
+        .xp = std.mem.readInt(u16, bytes[16..18], .little),
+        .level = std.mem.readInt(u16, bytes[18..20], .little),
         .momentum = momentum,
         .crowd = crowd,
     };
 }
 
 /// CORE. What the server says to a player, given what the tick did to them -- or did not.
-pub fn respond(tick: u64, hp: u16, told: ?tick_mod.Tell) Response {
-    const tell = told orelse return quiet(tick, hp);
+pub fn respond(tick: u64, hp: u16, progress: world.Progress, told: ?tick_mod.Tell) Response {
+    const tell = told orelse return quiet(tick, hp, progress);
 
     return .{
         .tick = tick,
+        .total_xp = progress.xp,
         .hp = tell.hp,
         .damage = tell.damage,
         .xp = tell.xp,
+        .level = progress.level,
         .momentum = tell.momentum,
         .crowd = tell.crowd,
     };
@@ -416,14 +445,16 @@ test "SILENCE IS THE SAME SIZE AS A WAR" {
     // game refuses to say.
     const fighting = encodeResponse(.{
         .tick = 900,
+        .total_xp = 4200,
         .hp = 62,
         .damage = 18,
         .xp = 10,
+        .level = 7,
         .momentum = .zombies_winning,
         .crowd = .hundreds,
     });
 
-    const nothing = encodeResponse(quiet(900, 100));
+    const nothing = encodeResponse(quiet(900, 100, .{ .xp = 4200, .level = 7 }));
 
     try testing.expectEqual(fighting.len, nothing.len);
     try testing.expectEqual(@as(usize, response_size), fighting.len);
@@ -438,23 +469,27 @@ test "AN EMPTY FIELD AND A CELL BELOW QUORUM SAY EXACTLY THE SAME THING" {
     const tick: u64 = 4242;
     const hp: u16 = 87;
 
-    const alone_in_a_field = encodeResponse(respond(tick, hp, null));
-    const below_quorum = encodeResponse(respond(tick, hp, null));
-    const room_already_fought = encodeResponse(respond(tick, hp, null));
+    const earned: world.Progress = .{ .xp = 1234, .level = 4 };
+
+    const alone_in_a_field = encodeResponse(respond(tick, hp, earned, null));
+    const below_quorum = encodeResponse(respond(tick, hp, earned, null));
+    const room_already_fought = encodeResponse(respond(tick, hp, earned, null));
 
     try testing.expectEqualSlices(u8, &alone_in_a_field, &below_quorum);
     try testing.expectEqualSlices(u8, &alone_in_a_field, &room_already_fought);
 
     // And it is indistinguishable from the response of a player who is simply not playing.
-    try testing.expectEqualSlices(u8, &alone_in_a_field, &encodeResponse(quiet(tick, hp)));
+    try testing.expectEqualSlices(u8, &alone_in_a_field, &encodeResponse(quiet(tick, hp, earned)));
 }
 
 test "a response round-trips, fighting or quiet" {
     const fighting: Response = .{
         .tick = 7,
+        .total_xp = 900,
         .hp = 40,
         .damage = 24,
         .xp = 10,
+        .level = 3,
         .momentum = .humans_edge,
         .crowd = .dozens,
     };
@@ -464,7 +499,7 @@ test "a response round-trips, fighting or quiet" {
     try testing.expectEqual(fighting.momentum, back.momentum);
     try testing.expectEqual(fighting.crowd, back.crowd);
 
-    const nothing = try decodeResponse(&encodeResponse(quiet(7, 100)));
+    const nothing = try decodeResponse(&encodeResponse(quiet(7, 100, .{ .xp = 0, .level = 1 })));
     try testing.expectEqual(@as(u16, 0), nothing.damage);
     try testing.expectEqual(@as(u16, 0), nothing.xp);
 }
@@ -542,16 +577,16 @@ test "an attacker-controlled byte is never cast into an enum" {
     // client that parsed its reply, with a single byte.
     //
     // A network- or disk-derived integer is never turned into an enum without a check.
-    var bytes = encodeResponse(quiet(1, 100));
+    var bytes = encodeResponse(quiet(1, 100, .{ .xp = 0, .level = 1 }));
 
-    bytes[14] = 200; // not a momentum
+    bytes[20] = 200; // not a momentum
     try testing.expectError(Error.BadValue, decodeResponse(&bytes));
 
-    bytes[14] = 0;
-    bytes[15] = 77; // not a crowd
+    bytes[20] = 0;
+    bytes[21] = 77; // not a crowd
     try testing.expectError(Error.BadValue, decodeResponse(&bytes));
 
     // And every legal value still decodes.
-    bytes[15] = 4;
+    bytes[21] = 4;
     _ = try decodeResponse(&bytes);
 }

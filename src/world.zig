@@ -89,7 +89,41 @@ pub const World = struct {
     /// coordinate. Entries are dropped the moment they expire.
     engagements: std.AutoHashMapUnmanaged(CellId, Engagement),
 
-    pub const empty: World = .{ .presences = .empty, .engagements = .empty };
+    /// What each player has earned. Cold: written at the end of a tick, read when asked.
+    progress: std.AutoHashMapUnmanaged(PlayerId, Progress),
+
+    pub const empty: World = .{
+        .presences = .empty,
+        .engagements = .empty,
+        .progress = .empty,
+    };
+};
+
+/// What a player has earned. Their whole history, in eight bytes.
+///
+/// WHY THIS IS NOT ON THE PRESENCE.
+///
+/// The obvious thing is to put `xp` on `Presence` -- it is a fact about a player, and the
+/// presence is where the player is. It would also raise the hottest struct in the system from
+/// 16 bytes to 24 (a u32 plus the padding it drags in), a 50% increase, paid on every presence,
+/// every tick, forever.
+///
+/// And for nothing. XP is COLD DATA: it is never read during combat resolution, never sorted
+/// on, never grouped by, never compared. It is written once at the end of a tick and read once
+/// when a player asks how they are doing. Putting it in the hot struct would drag it through
+/// every cache line of every group-by for the entire life of the program, to be touched by
+/// nothing.
+///
+/// Hot and cold data live apart. That is the whole of A3, and this is what it is for.
+pub const Progress = struct {
+    xp: u32,
+    level: u16,
+    _pad: u16 = 0,
+
+    comptime {
+        // THE SIZE GUARD (A7). One per player, for as long as they exist.
+        assert(@sizeOf(Progress) == 8);
+    }
 };
 
 /// One fight, in one room.
@@ -116,11 +150,67 @@ pub const Engagement = struct {
 pub fn deinit(world: *World, gpa: Allocator) void {
     world.presences.deinit(gpa);
     world.engagements.deinit(gpa);
+    world.progress.deinit(gpa);
     world.* = .empty;
 }
 
+/// CORE. Award XP. THE ONLY FUNCTION IN THIS CODEBASE THAT ADDS ANY (H3).
+///
+/// There is one call site, in the tick, and it pays for exactly one thing: a tick spent in a
+/// live cell with a hostile present. Not distance travelled. Not cells visited. Not items
+/// picked up. Those are not weighted low -- there is no code that could award them.
+/// Allocates nothing: the row was created when the player joined the world. A player we have
+/// never heard of earns nothing, which is correct -- they are not here.
+pub fn award(world: *World, player: PlayerId, xp: u16) void {
+    if (xp == 0) return;
+
+    const earned = world.progress.getPtr(player) orelse return;
+    earned.xp +|= xp;
+    earned.level = levelFor(earned.xp);
+}
+
+/// CORE. What a player has earned.
+pub fn progressOf(world: *const World, player: PlayerId) Progress {
+    return world.progress.get(player) orelse .{ .xp = 0, .level = 1 };
+}
+
+/// CORE. The level curve.
+///
+/// PROVISIONAL, and provisional in a way that matters: nobody has played, so this is a shape,
+/// not a balance. It is quadratic -- level n costs n^2 * 100 XP -- which means levelling slows
+/// down without ever stopping.
+///
+/// At 10 XP per tick in a fight, and a fight being a handful of minutes: level 2 costs about
+/// seven minutes of being in fights, level 10 about three hours, level 50 about three days of
+/// accumulated combat. That is a shape you can look at and argue with, which is the point of
+/// writing it down rather than tuning it in the dark.
+pub fn levelFor(xp: u32) u16 {
+    var level: u16 = 1;
+    while (level < 1000) : (level += 1) {
+        const next: u64 = @as(u64, level) * @as(u64, level) * 100;
+        if (xp < next) return level;
+    }
+    return level;
+}
+
 /// CORE. Add a presence. Allocates, and says so (C1, C2).
+///
+/// The player's progress row is created HERE, when they join -- not later, when they first earn
+/// something. Two reasons, and the second is the one that matters:
+///
+///   1. No allocation in the tick. `award` becomes a lookup into a row that already exists, so
+///      the hot path allocates nothing (C2).
+///
+///   2. NO TIMING DIFFERENCE BETWEEN A WORLD AT WAR AND A WORLD ASLEEP. Creating the row lazily
+///      meant a tick with six hundred people fighting did six hundred allocating hash-map
+///      inserts, and a tick with six hundred people asleep did none. The timing test caught it
+///      immediately: the difference blew past a millisecond.
+///
+///      It was a GLOBAL signal, not a per-cell one, so it did not leak what I3 protects -- but
+///      it was a channel that did not need to exist, opened by a feature that had nothing to do
+///      with it. That is exactly how side channels arrive: not designed, but accumulated.
 pub fn add(world: *World, gpa: Allocator, presence: Presence) Allocator.Error!void {
+    try world.progress.put(gpa, presence.player, progressOf(world, presence.player));
     return world.presences.append(gpa, presence);
 }
 
@@ -230,6 +320,47 @@ pub fn engagementsSorted(world: *const World, gpa: Allocator) Allocator.Error!st
     }
 
     return .{ .cells = cells, .engagements = values };
+}
+
+/// CORE. The progress table, flattened and sorted by player, for writing down.
+///
+/// Sorted, because a hash map's iteration order is not a thing we rely on (B8). The caller owns
+/// both slices (C1, C5).
+pub fn progressSorted(world: *const World, gpa: Allocator) Allocator.Error!struct {
+    players: []PlayerId,
+    progress: []Progress,
+} {
+    const n = world.progress.count();
+
+    const players = try gpa.alloc(PlayerId, n);
+    errdefer gpa.free(players);
+    const values = try gpa.alloc(Progress, n);
+    errdefer gpa.free(values);
+
+    const Pair = struct { player: PlayerId, progress: Progress };
+
+    var pairs: std.ArrayList(Pair) = .empty;
+    defer pairs.deinit(gpa);
+    try pairs.ensureTotalCapacity(gpa, n);
+
+    var it = world.progress.iterator();
+    while (it.next()) |entry| {
+        pairs.appendAssumeCapacity(.{ .player = entry.key_ptr.*, .progress = entry.value_ptr.* });
+    }
+
+    const Sort = struct {
+        fn lessThan(_: void, a: Pair, b: Pair) bool {
+            return @intFromEnum(a.player) < @intFromEnum(b.player);
+        }
+    };
+    std.mem.sort(Pair, pairs.items, {}, Sort.lessThan);
+
+    for (pairs.items, players, values) |pair, *player, *value| {
+        player.* = pair.player;
+        value.* = pair.progress;
+    }
+
+    return .{ .players = players, .progress = values };
 }
 
 /// CORE. Sort presences by cell, then by player.
@@ -595,4 +726,106 @@ test "nowhere does not stop the rest of the world" {
     // The café is live. Nowhere is not.
     try std.testing.expectEqual(@as(usize, 1), runs.len);
     try std.testing.expectEqual(@as(u32, 3), runs[0].len);
+}
+
+test "XP accumulates, and it is the only thing that does" {
+    // Before this existed, the game awarded XP every tick and threw it away: the tell carried a
+    // delta out on the wire and nobody kept a total. Everyone was level one, forever.
+    const gpa = std.testing.allocator;
+
+    var world: World = .empty;
+    defer deinit(&world, gpa);
+
+    const player: PlayerId = @enumFromInt(1);
+
+    try std.testing.expectEqual(@as(u32, 0), progressOf(&world, player).xp);
+    try std.testing.expectEqual(@as(u16, 1), progressOf(&world, player).level);
+
+    try add(&world, gpa, .{
+        .cell = spatial.nowhere,
+        .player = player,
+        .hp = 100,
+        .faction = .human,
+    });
+
+    var i: u32 = 0;
+    while (i < 30) : (i += 1) {
+        award(&world, player, 10);
+    }
+
+    try std.testing.expectEqual(@as(u32, 300), progressOf(&world, player).xp);
+    try std.testing.expect(progressOf(&world, player).level > 1);
+}
+
+test "the award allocates nothing, because the row already exists" {
+    // The tick must not allocate per fighting player. It used to: the progress row was created
+    // lazily on first award, so a world at war did hundreds of allocating hash-map inserts per
+    // tick and a sleeping world did none -- a timing difference that the constant-time test
+    // caught immediately.
+    const gpa = std.testing.allocator;
+
+    var world: World = .empty;
+    defer deinit(&world, gpa);
+
+    try add(&world, gpa, .{
+        .cell = spatial.nowhere,
+        .player = @enumFromInt(7),
+        .hp = 100,
+        .faction = .human,
+    });
+
+    // The row exists from the moment the player does.
+    try std.testing.expectEqual(@as(usize, 1), world.progress.count());
+
+    const rows = world.progress.count();
+    award(&world, @enumFromInt(7), 10);
+    award(&world, @enumFromInt(7), 10);
+
+    // And it never grows during a tick.
+    try std.testing.expectEqual(rows, world.progress.count());
+    try std.testing.expectEqual(@as(u32, 20), progressOf(&world, @enumFromInt(7)).xp);
+
+    // A player we have never heard of earns nothing. They are not here.
+    award(&world, @enumFromInt(999), 50);
+    try std.testing.expectEqual(rows, world.progress.count());
+}
+
+test "the level curve slows down without ever stopping" {
+    // A shape you can look at and argue with, rather than a number tuned in the dark.
+    try std.testing.expectEqual(@as(u16, 1), levelFor(0));
+    try std.testing.expectEqual(@as(u16, 1), levelFor(99));
+    try std.testing.expectEqual(@as(u16, 2), levelFor(100));
+
+    // Each level costs more than the last, forever.
+    var level: u16 = 2;
+    var previous_cost: u64 = 100;
+    while (level < 50) : (level += 1) {
+        const cost: u64 = @as(u64, level) * @as(u64, level) * 100;
+        try std.testing.expect(cost > previous_cost);
+        previous_cost = cost;
+    }
+}
+
+test "XP saturates rather than wrapping" {
+    // A u32 of XP is 4 billion. It will not happen. But if it did, wrapping to zero would delete
+    // a player's entire history, and a saturating add costs nothing.
+    const gpa = std.testing.allocator;
+
+    var world: World = .empty;
+    defer deinit(&world, gpa);
+
+    const player: PlayerId = @enumFromInt(1);
+    try add(&world, gpa, .{
+        .cell = spatial.nowhere,
+        .player = player,
+        .hp = 100,
+        .faction = .human,
+    });
+    award(&world, player, 10);
+
+    // Force the counter to the ceiling and keep paying.
+    world.progress.getPtr(player).?.xp = std.math.maxInt(u32) - 5;
+    award(&world, player, 100);
+
+    try std.testing.expectEqual(std.math.maxInt(u32), progressOf(&world, player).xp);
 }

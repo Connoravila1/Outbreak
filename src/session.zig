@@ -222,6 +222,7 @@ pub fn tick(server: *Server, gpa: Allocator, scratch: Allocator) Allocator.Error
             .response = protocol.respond(
                 server.tick_index,
                 hp.get(player) orelse 0,
+                world_mod.progressOf(&server.world, player),
                 told.get(player),
             ),
         });

@@ -47,6 +47,7 @@ All provisional. Phase 1's named trap is tuning these before anyone has played.
 | `recovery_per_tick` | **1** | You heal when you are **not** in a live cell. Full recovery from zero takes 100 ticks (50 minutes). There is no death and no permanence — nothing may be at stake worth stalking someone over. |
 | `max_hp` | **100** | Placeholder. |
 | `xp_per_tick` | **10** | Earned for **one thing**: a tick in a live cell with ≥1 hostile present (H3). |
+| Level curve | `level n costs n² × 100 XP` | Quadratic: levelling slows without ever stopping. At 10 XP/tick in a fight — level 2 is ~7 minutes of fighting, level 10 ~3 hours, level 50 ~3 days of accumulated combat. **A shape you can argue with**, rather than a number tuned in the dark. |
 | `engagement_ticks` | **10** (5 min) | The **floor**: shortest a fight can be, however small the room. |
 | `engagement_dozens_ticks` | **60** (30 min) | A busy bar. |
 | `engagement_scores_ticks` | **180** (90 min) | |
@@ -313,3 +314,5 @@ So the crowd band as implemented is the shipping design, and the threshold idea 
 | 2026-07-13 | **O1 decided: generic, never a number** (author's call) | The tell says "surrounded", never "four" |
 | 2026-07-13 | `GAME_DESIGN.md` §3.4 amended (J3) | It said "combat continues while both sides remain present" — a climate, not an event |
 | 2026-07-13 | **Fight duration derived from the crowd BAND, not the headcount** | `10 + 2 × occupants` is **invertible**: timing your own fight recovered an exact headcount of the room, through the clock, with no count ever transmitted. Found in the ruleset audit. |
+| 2026-07-14 | **XP is now actually kept** | The game awarded XP every tick and **threw it away** — the tell carried a delta out on the wire and nobody kept a total. Everyone was level one, forever. |
+| 2026-07-14 | Progress rows preallocated at join | Creating them lazily meant a world at war did hundreds of allocating hash-map inserts per tick and a sleeping world did none — **a timing difference opened by a feature that had nothing to do with timing.** |
