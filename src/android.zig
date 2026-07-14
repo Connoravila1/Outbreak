@@ -44,6 +44,8 @@ const std = @import("std");
 const ui = @import("ui.zig");
 const quads = @import("quads.zig");
 const gles = @import("gles.zig");
+const text = @import("text.zig");
+const atlas_mod = @import("atlas.zig");
 
 const Io = std.Io;
 
@@ -365,6 +367,24 @@ fn render() void {
     var verts: std.ArrayList(quads.Vertex) = .empty;
     defer verts.deinit(gpa);
 
+    // THE FONT AND THE ATLAS OUTLIVE THE SURFACE, DELIBERATELY.
+    //
+    // Android destroys and recreates the EGL surface freely -- a rotation, a lock screen, a task
+    // switch. The GL program and the texture die with it, but the RASTERIZED GLYPHS do not: they
+    // are plain bytes in our own memory, and re-parsing two TTFs and re-rasterizing every letter of
+    // the alphabet on every rotation would be work done purely to throw away (G5).
+    //
+    // On re-attach, `atlas.dirty` is set and the bitmap is simply uploaded to the new texture.
+    var engine = text.init(gpa) catch {
+        // The font did not parse. There is nothing to do about it and nothing to draw. The game
+        // still ticks and still reports its cell -- it just cannot speak (E2).
+        return;
+    };
+    defer text.deinit(&engine, gpa);
+
+    var atlas = atlas_mod.init(gpa) catch return;
+    defer atlas_mod.deinit(&atlas, gpa);
+
     var surface: Surface = .{};
     defer tearDown(&surface);
 
@@ -411,6 +431,12 @@ fn render() void {
 
             // A new surface is a new framebuffer, with nothing in it.
             dirty = true;
+
+            // AND A NEW TEXTURE, WITH NOTHING IN IT EITHER. The glyphs survive a re-attach --
+            // they are our own bytes -- but the GL texture holding them died with the old context.
+            // Without this line the atlas is never re-uploaded, every glyph samples an empty
+            // texture, and the game comes back from a rotation with every word invisible.
+            atlas.dirty = true;
         }
 
         drainInput(queue, io);
@@ -464,25 +490,30 @@ fn render() void {
 
         ui.draw(state, .{ .w = surface.width, .h = surface.height }, &draws, gpa) catch continue;
 
-        present(&surface, draws.items, &verts, gpa);
+        present(&surface, draws.items, &engine, &atlas, &verts, gpa);
         dirty = false;
     }
 }
 
-/// M.2: the quad pass. The draw list, on the screen.
+/// M.3: the screen. Rectangles and words, in one pass.
 ///
-/// The host decides NOTHING here. `ui.zig` said what to draw, `quads.zig` turned it into
-/// triangles, and this function hands them to the GPU. There is no layout, no colour, and no
-/// game logic in this file -- and if that ever stops being true, the interface has leaked into
-/// the shell and the phone has started computing things it is not permitted to compute (H1).
-///
-/// M.3 adds the glyph pass. Until then the rectangles are on screen and the text is not: the
-/// faction cards, the condition bar, the tell ticks, the background. The words arrive next.
-fn present(surface: *Surface, draws: []const ui.Draw, verts: *std.ArrayList(quads.Vertex), gpa: std.mem.Allocator) void {
+/// The host decides NOTHING here. `ui.zig` said what to draw, `text.zig` rasterized the letters,
+/// `atlas.zig` packed them, `quads.zig` turned all of it into triangles, and this function hands
+/// them to the GPU. There is no layout, no colour, and no game logic in this file -- and if that
+/// ever stops being true, the interface has leaked into the shell and the phone has begun
+/// computing things it is not permitted to compute (H1).
+fn present(
+    surface: *Surface,
+    draws: []const ui.Draw,
+    engine: *text.Engine,
+    atlas: *atlas_mod.Atlas,
+    verts: *std.ArrayList(quads.Vertex),
+    gpa: std.mem.Allocator,
+) void {
     glViewport(0, 0, surface.width, surface.height);
 
     // Black, always, and underneath everything. `ui.draw` emits a full-bleed background rect as
-    // its first command, so this is belt and braces -- but the one frame where it is not, the
+    // its first command, so this is belt and braces -- but on the one frame where it is not, the
     // alternative is showing whatever the compositor last left in this buffer, which could be the
     // previous app. Costs nothing. Do it.
     glClearColor(0, 0, 0, 1.0);
@@ -496,12 +527,21 @@ fn present(surface: *Surface, draws: []const ui.Draw, verts: *std.ArrayList(quad
         return;
     };
 
-    // A failed allocation is a dropped frame, not a dead process. The next frame tries again with
-    // the capacity this one already reserved.
-    quads.build(draws, verts, gpa) catch {
+    // A failed allocation, or a full atlas, is a DROPPED FRAME -- not a dead process. The next
+    // frame tries again with the capacity this one already reserved (E2, E5 in spirit: nothing a
+    // renderer does may take the game down).
+    quads.build(draws, engine, atlas, verts, gpa) catch {
         _ = eglSwapBuffers(surface.display, surface.surface);
         return;
     };
+
+    // `quads.build` rasterizes any glyph the game has not drawn before, so the atlas may have
+    // changed in the line above. Upload it BEFORE the draw that samples it -- and only when it
+    // actually changed, which after the first few frames of a screen is never.
+    if (atlas.dirty) {
+        gles.upload(renderer, atlas.coverage, atlas.dim);
+        atlas.dirty = false;
+    }
 
     gles.draw(renderer, verts.items, surface.width, surface.height);
 

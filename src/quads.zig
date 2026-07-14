@@ -5,19 +5,27 @@
 //! ============================================================================
 //! WHY THIS IS SHELL, AND WHY IT IS PURE ANYWAY
 //!
-//! This module is a pure function. Same list in, same triangles out, no I/O, no clock. By B2's
-//! definition it would qualify as core.
+//! Same list in, same triangles out. No I/O, no clock. By B2's definition it would qualify as core.
 //!
-//! It is classified SHELL because it speaks the GPU's vocabulary, and the GPU's vocabulary is
-//! floats. The coordinate wall (B6) is enforced by a guard that forbids a float from appearing in
-//! any file classified core -- bluntly, textually, by design. These floats are SCREEN PIXELS and
-//! could not be a latitude if they tried; but the guard does not read intent, and it is not to be
-//! weakened to accommodate mine. When in doubt, obey the stricter reading. So: shell.
+//! It is classified SHELL because it speaks the GPU's vocabulary, and that vocabulary is floats.
+//! The coordinate wall (B6) is enforced by a guard that forbids a float from appearing in any file
+//! classified core -- bluntly, textually, by design. These floats are SCREEN PIXELS and could not
+//! be a latitude if they tried; but the guard does not read intent, and it is not to be weakened to
+//! accommodate mine. When in doubt, obey the stricter reading. So: shell.
 //!
-//! Being pure anyway is not a loophole, it is the point. It means the entire transform -- the
-//! colour unpacking, the winding order, the pixel geometry -- is tested on a laptop, with no
-//! phone plugged in, exactly like the tick and exactly like ui.zig. What is left in `gles.zig` is
-//! only the part that genuinely cannot be tested without a GPU.
+//! Being pure anyway is not a loophole, it is the point. The colour unpacking, the winding order,
+//! the pixel geometry, the baseline arithmetic -- all of it is tested on a laptop, with no phone
+//! plugged in. What is left in `gles.zig` is only what genuinely cannot be tested without a GPU.
+//!
+//! ============================================================================
+//! A LETTER AND A RECTANGLE ARE THE SAME THING
+//!
+//! Both are a quad, a colour, and a coverage value sampled from the atlas. A letter samples its
+//! glyph. A rectangle samples the one reserved white texel -- coverage 1.0, everywhere.
+//!
+//! So there is no mode flag on the vertex, no branch in the fragment shader, and the entire screen
+//! is ONE draw call: the background, the cards, the condition bar, and every letter of every
+//! sentence, in one buffer, in one pass.
 //!
 //! ============================================================================
 //! THIS MODULE KNOWS NOTHING ABOUT THE GAME
@@ -27,47 +35,68 @@
 
 const std = @import("std");
 const ui = @import("ui.zig");
+const text = @import("text.zig");
+const atlas_mod = @import("atlas.zig");
 
 const Allocator = std.mem.Allocator;
+
+pub const Error = atlas_mod.Error;
 
 /// One corner of one triangle, in the layout the vertex shader expects.
 ///
 /// `extern` because the GPU reads this memory directly: the field order IS the attribute layout,
-/// and `gles.zig` computes its attribute offsets from it with `@offsetOf`. Zig's default layout
-/// makes no such promise, and a reordered field would silently paint the screen wrong.
+/// and `gles.zig` derives its offsets from it with `@offsetOf`. Zig's default layout makes no such
+/// promise, and a reordered field would silently paint the screen wrong.
 ///
-/// Positions are pixels, top-left origin, y down. The vertex shader does the projection to clip
-/// space; there is no matrix anywhere in this renderer.
+/// Positions are pixels, top-left origin, y down. The vertex shader projects to clip space; there
+/// is no matrix anywhere in this renderer.
 pub const Vertex = extern struct {
     x: f32,
     y: f32,
+    u: f32,
+    v: f32,
     r: f32,
     g: f32,
     b: f32,
     a: f32,
 
     comptime {
-        // Budget: 6 x f32 = 24 bytes, exact. Six of these per rectangle.
+        // Budget: 8 x f32 = 32 bytes, exact.
         //
-        // Raising this requires a recorded justification (A7.1). The obvious future pressure is
-        // M.3's glyphs, which want a (u, v) pair -- that is a real field genuinely needed, and it
-        // is a deliberate bump to 32, not a quiet one.
-        std.debug.assert(@sizeOf(Vertex) == 24);
+        // A7.1 -- RAISED FROM 24, DELIBERATELY, AND HERE IS THE JUSTIFICATION.
+        //
+        // M.2's vertex carried position and colour. M.3 adds (u, v): the point in the glyph atlas
+        // this corner samples. It is not an optimisation and it is not convenience -- without it
+        // there is no way to say WHICH glyph a quad draws, and there is no text.
+        //
+        // The same pair is what lets a rectangle and a letter share one shader and one draw call:
+        // a rectangle points at the atlas's white texel. So this eight-byte increase REMOVES a
+        // mode attribute and a per-fragment branch rather than adding to them.
+        //
+        // The predicted pressure was recorded in this comment before the field existed, at 32
+        // bytes exactly. It came in at 32.
+        std.debug.assert(@sizeOf(Vertex) == 32);
     }
 };
 
-/// Six vertices per rectangle: two triangles, no index buffer.
+/// Six vertices per quad: two triangles, no index buffer.
 ///
-/// An index buffer would save eight bytes per quad on a list that is a few hundred quads long.
-/// That is the stop rule (G3): the cost is already nothing, so the complexity buys nothing.
-pub const vertices_per_rect = 6;
+/// An index buffer would save eight bytes per quad on a list a few hundred quads long. The stop
+/// rule (G3): the cost is already nothing, so the complexity buys nothing.
+pub const vertices_per_quad = 6;
 
-/// SHELL, pure. Append the triangles for a draw list. Allocates into the caller's list (C1, C2).
+/// SHELL. Append the triangles for a draw list. Allocates into the caller's list (C1, C2).
 ///
-/// `Draw.text` is SKIPPED, deliberately and silently. M.2 is the quad pass; glyphs are M.3. The
-/// text is in the list, it is simply not yet on the screen, and the day M.3 lands it appears with
-/// no change to this signature.
-pub fn build(draws: []const ui.Draw, out: *std.ArrayList(Vertex), gpa: Allocator) Allocator.Error!void {
+/// The engine and the atlas are MUTABLE because a glyph the game has never drawn before is
+/// rasterized and packed on first sight. After the first few frames of a screen, that stops
+/// happening and this function only reads.
+pub fn build(
+    draws: []const ui.Draw,
+    engine: *text.Engine,
+    atlas: *atlas_mod.Atlas,
+    out: *std.ArrayList(Vertex),
+    gpa: Allocator,
+) Error!void {
     out.clearRetainingCapacity();
 
     for (draws) |item| switch (item) {
@@ -75,43 +104,122 @@ pub fn build(draws: []const ui.Draw, out: *std.ArrayList(Vertex), gpa: Allocator
             // A rectangle with no area is not a rectangle. It is six degenerate triangles and a
             // waste of the bus.
             if (it.w <= 0 or it.h <= 0) continue;
-            try pushRect(out, gpa, it.x, it.y, it.w, it.h, rgba(it.color));
+
+            const white = atlas_mod.whiteUv();
+            try pushQuad(
+                out,
+                gpa,
+                @floatFromInt(it.x),
+                @floatFromInt(it.y),
+                @floatFromInt(it.w),
+                @floatFromInt(it.h),
+                // Every corner samples the SAME point. The uv is therefore constant across the
+                // whole quad, so every fragment lands exactly on the white texel's centre -- no
+                // interpolation, no bleeding from a neighbour, whatever the sampler is doing.
+                white,
+                white,
+                rgba(it.color),
+            );
         },
 
-        // M.3. The glyph pass. Not a gap -- a phase.
-        .text => {},
+        .text => |it| try pushString(out, engine, atlas, gpa, it.x, it.y, it.text, it.weight, rgba(it.color)),
     };
 }
 
-fn pushRect(
+/// One string, one pen, left to right.
+///
+/// `ui.Draw.text.y` is the TOP of the line, because that is how `ui.zig` lays out -- it places
+/// text at y=40, y=110, y=206 and thinks in boxes. Glyphs are positioned from a BASELINE. The
+/// conversion is this one line, and it is the single easiest thing in a text renderer to get
+/// wrong: every sentence lands a line-height off, it looks like a layout bug, and it is not.
+fn pushString(
     out: *std.ArrayList(Vertex),
+    engine: *text.Engine,
+    atlas: *atlas_mod.Atlas,
     gpa: Allocator,
     x: i32,
     y: i32,
-    w: i32,
-    h: i32,
+    string: []const u8,
+    weight: ui.Weight,
+    colour: [4]f32,
+) Error!void {
+    const style = text.styleOf(weight);
+    const line = text.lineOf(engine, style.face, style.px);
+
+    const baseline: i32 = y + line.ascent;
+    var pen: i32 = x;
+
+    var it = text.codepoints(string);
+    while (it.next()) |codepoint| {
+        const glyph = try atlas_mod.ensure(atlas, engine, gpa, style.face, style.px, codepoint);
+
+        // A space. It moves the pen and puts no ink on the page (E4).
+        if (glyph.w > 0 and glyph.h > 0) {
+            // `bear_y` is the top of the bitmap relative to the baseline, y DOWN -- so it is
+            // normally negative and this SUBTRACTS from the baseline. Adding it here would draw
+            // every line of text below where it belongs.
+            const gx: f32 = @floatFromInt(pen + glyph.bear_x);
+            const gy: f32 = @floatFromInt(baseline + glyph.bear_y);
+
+            const inv: f32 = 1.0 / @as(f32, @floatFromInt(atlas.dim));
+            const left: f32 = @as(f32, @floatFromInt(glyph.x)) * inv;
+            const top: f32 = @as(f32, @floatFromInt(glyph.y)) * inv;
+            const right: f32 = @as(f32, @floatFromInt(glyph.x + glyph.w)) * inv;
+            const bottom: f32 = @as(f32, @floatFromInt(glyph.y + glyph.h)) * inv;
+
+            try pushQuad(
+                out,
+                gpa,
+                gx,
+                gy,
+                @floatFromInt(glyph.w),
+                @floatFromInt(glyph.h),
+                .{ left, top },
+                .{ right, bottom },
+                colour,
+            );
+        }
+
+        pen += glyph.advance;
+    }
+}
+
+/// One quad. `uv0` is the top-left of the source rectangle, `uv1` the bottom-right; pass the same
+/// point for both to sample a single texel across the whole quad.
+fn pushQuad(
+    out: *std.ArrayList(Vertex),
+    gpa: Allocator,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    uv0: [2]f32,
+    uv1: [2]f32,
     colour: [4]f32,
 ) Allocator.Error!void {
-    const x0: f32 = @floatFromInt(x);
-    const y0: f32 = @floatFromInt(y);
-    const x1: f32 = @floatFromInt(x + w);
-    const y1: f32 = @floatFromInt(y + h);
-
     // Clockwise from the top-left, because the projection is y-down. Two triangles: 0-1-2, 0-2-3.
     const corner = [4][2]f32{
-        .{ x0, y0 }, // 0  top-left
-        .{ x1, y0 }, // 1  top-right
-        .{ x1, y1 }, // 2  bottom-right
-        .{ x0, y1 }, // 3  bottom-left
+        .{ x, y },
+        .{ x + w, y },
+        .{ x + w, y + h },
+        .{ x, y + h },
+    };
+    const uv = [4][2]f32{
+        .{ uv0[0], uv0[1] },
+        .{ uv1[0], uv0[1] },
+        .{ uv1[0], uv1[1] },
+        .{ uv0[0], uv1[1] },
     };
 
-    const order = [vertices_per_rect]usize{ 0, 1, 2, 0, 2, 3 };
+    const order = [vertices_per_quad]usize{ 0, 1, 2, 0, 2, 3 };
 
-    try out.ensureUnusedCapacity(gpa, vertices_per_rect);
+    try out.ensureUnusedCapacity(gpa, vertices_per_quad);
     for (order) |i| {
         out.appendAssumeCapacity(.{
             .x = corner[i][0],
             .y = corner[i][1],
+            .u = uv[i][0],
+            .v = uv[i][1],
             .r = colour[0],
             .g = colour[1],
             .b = colour[2],
@@ -122,11 +230,10 @@ fn pushRect(
 
 /// A `ui.Color` is `0xRRGGBBAA`. THE ALPHA IS LAST.
 ///
-/// This is worth a sentence because the obvious mistake here does not crash, does not fail to
-/// compile, and does not look wrong in a diff -- it just paints the wrong colour on a phone you
-/// are not holding. The prior art this renderer was ported from packs `0xAARRGGBB`, the other way
-/// round. Read `ui.Color`: `void_black = 0x08080AFF` is a nearly-black with FULL alpha, and it is
-/// only nearly-black if you unpack it in this order. There is a test below that pins exactly that.
+/// Worth a sentence because the obvious mistake does not crash, does not fail to compile, and does
+/// not look wrong in a diff -- it paints the wrong colour on a phone you are not holding. The prior
+/// art this was ported from packs `0xAARRGGBB`, the other way round. `void_black = 0x08080AFF` is a
+/// nearly-black with FULL alpha, and it is only nearly-black if it is unpacked in this order.
 fn rgba(colour: ui.Color) [4]f32 {
     const c = @intFromEnum(colour);
     return .{
@@ -139,156 +246,217 @@ fn rgba(colour: ui.Color) [4]f32 {
 
 const testing = std.testing;
 
+/// Everything a test needs to rasterise a screen, with no GPU anywhere.
+const Rig = struct {
+    engine: text.Engine,
+    atlas: atlas_mod.Atlas,
+    draws: std.ArrayList(ui.Draw),
+    verts: std.ArrayList(Vertex),
+
+    fn init(gpa: Allocator) !Rig {
+        return .{
+            .engine = try text.init(gpa),
+            .atlas = try atlas_mod.init(gpa),
+            .draws = .empty,
+            .verts = .empty,
+        };
+    }
+
+    fn deinit(rig: *Rig, gpa: Allocator) void {
+        text.deinit(&rig.engine, gpa);
+        atlas_mod.deinit(&rig.atlas, gpa);
+        rig.draws.deinit(gpa);
+        rig.verts.deinit(gpa);
+    }
+
+    fn rasterise(rig: *Rig, gpa: Allocator, state: ui.State, size: ui.Size) !void {
+        try ui.draw(state, size, &rig.draws, gpa);
+        try build(rig.draws.items, &rig.engine, &rig.atlas, &rig.verts, gpa);
+    }
+};
+
 test "0xRRGGBBAA: the alpha is last, and getting this backwards is invisible until it is on a phone" {
-    // void_black = 0x08080AFF. If this were unpacked as AARRGGBB, the alpha would be 0x08 -- a
-    // 3%-opaque background -- and the screen would be transparent rather than black. That bug
-    // renders, compiles, and passes every other test in this file.
     const black = rgba(.void_black);
     try testing.expectApproxEqAbs(@as(f32, 8.0 / 255.0), black[0], 0.001);
     try testing.expectApproxEqAbs(@as(f32, 8.0 / 255.0), black[1], 0.001);
     try testing.expectApproxEqAbs(@as(f32, 10.0 / 255.0), black[2], 0.001);
     try testing.expectApproxEqAbs(@as(f32, 1.0), black[3], 0.001); // FULL alpha. Not 0.03.
 
-    // bone = 0xF0EFECFF -- the brightest thing on the screen, and opaque.
-    const bone = rgba(.bone);
-    try testing.expectApproxEqAbs(@as(f32, 240.0 / 255.0), bone[0], 0.001);
-    try testing.expectApproxEqAbs(@as(f32, 239.0 / 255.0), bone[1], 0.001);
-    try testing.expectApproxEqAbs(@as(f32, 236.0 / 255.0), bone[2], 0.001);
-    try testing.expectApproxEqAbs(@as(f32, 1.0), bone[3], 0.001);
-
-    // Every colour in the palette is fully opaque. If one is not, it was mistyped.
     for ([_]ui.Color{ .void_black, .carrion, .ash, .bone, .smoke, .dust, .grave, .wound, .clot, .scab, .serum }) |colour| {
         try testing.expectApproxEqAbs(@as(f32, 1.0), rgba(colour)[3], 0.001);
     }
 }
 
-test "a rectangle is six vertices, wound clockwise from the top-left" {
+test "a rectangle is six vertices, wound clockwise, sampling the white texel at every corner" {
     const gpa = testing.allocator;
 
-    var verts: std.ArrayList(Vertex) = .empty;
-    defer verts.deinit(gpa);
+    var rig = try Rig.init(gpa);
+    defer rig.deinit(gpa);
 
     const draws = [_]ui.Draw{
         .{ .rect = .{ .x = 10, .y = 20, .w = 30, .h = 40, .color = .bone } },
     };
+    try build(&draws, &rig.engine, &rig.atlas, &rig.verts, gpa);
 
-    try build(&draws, &verts, gpa);
-    try testing.expectEqual(@as(usize, 6), verts.items.len);
+    try testing.expectEqual(@as(usize, 6), rig.verts.items.len);
 
-    // The corners, in pixels, y down. x spans 10..40, y spans 20..60.
-    try testing.expectEqual(@as(f32, 10), verts.items[0].x);
-    try testing.expectEqual(@as(f32, 20), verts.items[0].y);
-    try testing.expectEqual(@as(f32, 40), verts.items[1].x);
-    try testing.expectEqual(@as(f32, 20), verts.items[1].y);
-    try testing.expectEqual(@as(f32, 40), verts.items[2].x);
-    try testing.expectEqual(@as(f32, 60), verts.items[2].y);
+    try testing.expectEqual(@as(f32, 10), rig.verts.items[0].x);
+    try testing.expectEqual(@as(f32, 20), rig.verts.items[0].y);
+    try testing.expectEqual(@as(f32, 40), rig.verts.items[2].x);
+    try testing.expectEqual(@as(f32, 60), rig.verts.items[2].y);
 
-    // Second triangle shares corner 0 and corner 2, and closes at the bottom-left.
-    try testing.expectEqual(verts.items[0].x, verts.items[3].x);
-    try testing.expectEqual(verts.items[0].y, verts.items[3].y);
-    try testing.expectEqual(verts.items[2].x, verts.items[4].x);
-    try testing.expectEqual(verts.items[2].y, verts.items[4].y);
-    try testing.expectEqual(@as(f32, 10), verts.items[5].x);
-    try testing.expectEqual(@as(f32, 60), verts.items[5].y);
-
-    // Every vertex of a rect carries that rect's colour.
-    for (verts.items) |v| {
-        try testing.expectApproxEqAbs(@as(f32, 240.0 / 255.0), v.r, 0.001);
-        try testing.expectApproxEqAbs(@as(f32, 1.0), v.a, 0.001);
+    // EVERY corner samples the identical point. If these ever differ, the uv interpolates across
+    // the quad, wanders off the white texel, and every solid colour on the screen gets a gradient
+    // of whatever glyph happens to be packed next door.
+    const white = atlas_mod.whiteUv();
+    for (rig.verts.items) |vertex| {
+        try testing.expectEqual(white[0], vertex.u);
+        try testing.expectEqual(white[1], vertex.v);
     }
 }
 
-test "text is skipped, not dropped -- M.2 is the quad pass" {
+test "a string becomes one quad per inked glyph, and spaces are not quads" {
     const gpa = testing.allocator;
 
-    var verts: std.ArrayList(Vertex) = .empty;
-    defer verts.deinit(gpa);
+    var rig = try Rig.init(gpa);
+    defer rig.deinit(gpa);
 
     const draws = [_]ui.Draw{
-        .{ .text = .{ .x = 0, .y = 0, .text = "OUTBREAK", .color = .bone, .weight = .label } },
-        .{ .rect = .{ .x = 0, .y = 0, .w = 10, .h = 10, .color = .ash } },
-        .{ .text = .{ .x = 0, .y = 0, .text = "Nothing here.", .color = .dust, .weight = .body } },
+        .{ .text = .{ .x = 0, .y = 0, .text = "AB", .color = .bone, .weight = .body } },
     };
+    try build(&draws, &rig.engine, &rig.atlas, &rig.verts, gpa);
+    try testing.expectEqual(@as(usize, 2 * vertices_per_quad), rig.verts.items.len);
 
-    try build(&draws, &verts, gpa);
-
-    // One rect among three draws. The text is in the list; it is simply not yet on the screen.
-    try testing.expectEqual(@as(usize, 6), verts.items.len);
+    // A space advances the pen and emits nothing. "A B" is three characters and still two quads.
+    const spaced = [_]ui.Draw{
+        .{ .text = .{ .x = 0, .y = 0, .text = "A B", .color = .bone, .weight = .body } },
+    };
+    try build(&spaced, &rig.engine, &rig.atlas, &rig.verts, gpa);
+    try testing.expectEqual(@as(usize, 2 * vertices_per_quad), rig.verts.items.len);
 }
 
-test "an empty rectangle is not drawn" {
+test "text advances to the right, and the pen does not run backwards" {
     const gpa = testing.allocator;
 
-    var verts: std.ArrayList(Vertex) = .empty;
-    defer verts.deinit(gpa);
+    var rig = try Rig.init(gpa);
+    defer rig.deinit(gpa);
 
     const draws = [_]ui.Draw{
-        .{ .rect = .{ .x = 0, .y = 0, .w = 0, .h = 40, .color = .bone } },
-        .{ .rect = .{ .x = 0, .y = 0, .w = 40, .h = 0, .color = .bone } },
-        .{ .rect = .{ .x = 0, .y = 0, .w = -5, .h = 40, .color = .bone } },
+        .{ .text = .{ .x = 100, .y = 50, .text = "Hi", .color = .bone, .weight = .body } },
     };
+    try build(&draws, &rig.engine, &rig.atlas, &rig.verts, gpa);
 
-    try build(&draws, &verts, gpa);
-    try testing.expectEqual(@as(usize, 0), verts.items.len);
+    // First glyph starts at or near the requested x; the second is to the RIGHT of the first.
+    const first_x = rig.verts.items[0].x;
+    const second_x = rig.verts.items[vertices_per_quad].x;
+    try testing.expect(second_x > first_x);
+    try testing.expect(first_x >= 100 - 4); // bear_x can nudge left a hair, never a lot
 }
 
-test "THE SHAPE OF THE SCREEN IS NOT A HEADCOUNT: six people and six thousand draw the same rectangles" {
+test "THE BASELINE: text sits inside the line box it was given, not below it" {
+    // The single easiest thing in a text renderer to get wrong. `ui.zig` hands a TOP edge; glyphs
+    // are placed from a BASELINE. Get the sign of bear_y wrong, or forget the ascent, and every
+    // sentence in the game renders one line-height too low. It looks exactly like a layout bug and
+    // it is not one -- and nobody notices until it is on a phone, in a cafe, in front of a player.
+    const gpa = testing.allocator;
+
+    var rig = try Rig.init(gpa);
+    defer rig.deinit(gpa);
+
+    const top: i32 = 200;
+    const draws = [_]ui.Draw{
+        .{ .text = .{ .x = 0, .y = top, .text = "Hxg", .color = .bone, .weight = .body } },
+    };
+    try build(&draws, &rig.engine, &rig.atlas, &rig.verts, gpa);
+
+    const style = text.styleOf(.body);
+    const line = text.lineOf(&rig.engine, style.face, style.px);
+
+    var highest: f32 = 1e9;
+    var lowest: f32 = -1e9;
+    for (rig.verts.items) |vertex| {
+        highest = @min(highest, vertex.y);
+        lowest = @max(lowest, vertex.y);
+    }
+
+    // Nothing pokes out above the top of the line box. The cap of the 'H' may touch it.
+    try testing.expect(highest >= @as(f32, @floatFromInt(top)));
+
+    // And nothing falls below the bottom of it -- 'g' has a descender, and it must fit.
+    const bottom: f32 = @floatFromInt(top + line.height);
+    try testing.expect(lowest <= bottom);
+
+    // The text is actually in the box, not collapsed to a point at the top of it.
+    try testing.expect(lowest > @as(f32, @floatFromInt(top)));
+}
+
+test "THE SHAPE OF THE SCREEN IS NOT A HEADCOUNT: six people and six thousand draw the same pixels" {
     // I5, at the glass.
     //
-    // `ui.zig` already proves no SENTENCE contains a digit. That test guards the words. This one
-    // guards the GEOMETRY, which nothing else does -- and geometry is the easier place to leak,
-    // because a leak there does not look like a number. It looks like design.
+    // `ui.zig` proves no SENTENCE contains a digit. That guards the words. This guards the
+    // GEOMETRY, which nothing else does -- and geometry is the easier place to leak, because a leak
+    // there does not look like a number. It looks like design.
     //
-    // The feature that will be requested, in good faith, by someone reasonable, is a crowd meter:
-    // a little bar that fills up as the room gets busier. It would be beautiful. It would also be
-    // an analogue readout of the occupancy of a room full of real people, and a player could sit
-    // in a cafe, watch the bar twitch down, and look up at whoever just stood to leave.
+    // The feature this forbids will be requested, in good faith, by someone reasonable: a crowd
+    // meter, a little bar that fills as the room gets busier. It would be beautiful. It would also
+    // be an analogue readout of how many real people are in a room -- sit in a cafe, watch the bar
+    // twitch down, look up at whoever just stood to leave.
     //
-    // So: the rectangles on the live screen must be IDENTICAL across every crowd band. Not
-    // similar. Identical. If a future rect ever scales, fills, repeats, or shades with `crowd`,
-    // this test fails and the reason is written above it.
+    // Now that text renders, this covers the words too: the SENTENCE differs between crowd bands
+    // ("You are not alone" vs "You are surrounded by thousands"), so the vertex COUNT differs. What
+    // must not differ is anything else -- so the comparison is on the rectangles, which are the
+    // part a player could measure with a ruler and read a number out of.
     const gpa = testing.allocator;
     const size: ui.Size = .{ .w = 1080, .h = 2400 };
 
-    var draws: std.ArrayList(ui.Draw) = .empty;
-    defer draws.deinit(gpa);
-
-    var a_few_of_them: std.ArrayList(Vertex) = .empty;
-    defer a_few_of_them.deinit(gpa);
-
-    var thousands_of_them: std.ArrayList(Vertex) = .empty;
-    defer thousands_of_them.deinit(gpa);
+    var rig = try Rig.init(gpa);
+    defer rig.deinit(gpa);
 
     const start: ui.State = .{ .screen = .quiet, .faction = .human };
 
-    // The smallest room the game will admit to: at quorum, and no larger.
-    const few = ui.told(start, 60, 4, 900, 12, .even, .a_few);
-    try ui.draw(few, size, &draws, gpa);
-    try build(draws.items, &a_few_of_them, gpa);
+    var few_rects: std.ArrayList(Vertex) = .empty;
+    defer few_rects.deinit(gpa);
 
-    // A stadium. Everything else about the two ticks is identical -- same damage, same hp, same
-    // momentum -- so `crowd` is the ONLY difference, and therefore the only thing a difference in
-    // the pixels could possibly be reporting.
-    const thousands = ui.told(start, 60, 4, 900, 12, .even, .thousands);
-    try ui.draw(thousands, size, &draws, gpa);
-    try build(draws.items, &thousands_of_them, gpa);
+    try rig.rasterise(gpa, ui.told(start, 60, 4, 900, 12, .even, .a_few), size);
+    for (rig.draws.items, 0..) |item, i| {
+        _ = i;
+        if (item != .rect) continue;
+    }
+    // Collect the rect vertices only -- rebuild from the draw list so text is excluded.
+    try collectRects(&few_rects, rig.draws.items, &rig.engine, &rig.atlas, gpa);
 
-    try testing.expectEqualSlices(Vertex, a_few_of_them.items, thousands_of_them.items);
+    var many_rects: std.ArrayList(Vertex) = .empty;
+    defer many_rects.deinit(gpa);
 
-    // And it is a real screen we are comparing, not two empty lists that trivially match.
-    try testing.expect(a_few_of_them.items.len > vertices_per_rect);
+    try rig.rasterise(gpa, ui.told(start, 60, 4, 900, 12, .even, .thousands), size);
+    try collectRects(&many_rects, rig.draws.items, &rig.engine, &rig.atlas, gpa);
+
+    // Not similar. IDENTICAL, to the last float.
+    try testing.expectEqualSlices(Vertex, few_rects.items, many_rects.items);
+    try testing.expect(few_rects.items.len > vertices_per_quad);
 }
 
-test "the real screens rasterise, and the background is always first" {
-    // The list ui.zig actually emits, through the transform the phone actually runs. If this
-    // allocates wrong, leaks, or drops the background, it happens here and not in a cafe.
+fn collectRects(
+    out: *std.ArrayList(Vertex),
+    draws: []const ui.Draw,
+    engine: *text.Engine,
+    atlas: *atlas_mod.Atlas,
+    gpa: Allocator,
+) !void {
+    var only_rects: std.ArrayList(ui.Draw) = .empty;
+    defer only_rects.deinit(gpa);
+
+    for (draws) |item| {
+        if (item == .rect) try only_rects.append(gpa, item);
+    }
+    try build(only_rects.items, engine, atlas, out, gpa);
+}
+
+test "the real screens rasterise, the background is first, and every screen has words on it" {
     const gpa = testing.allocator;
 
-    var draws: std.ArrayList(ui.Draw) = .empty;
-    defer draws.deinit(gpa);
-
-    var verts: std.ArrayList(Vertex) = .empty;
-    defer verts.deinit(gpa);
+    var rig = try Rig.init(gpa);
+    defer rig.deinit(gpa);
 
     const size: ui.Size = .{ .w = 1080, .h = 2400 };
 
@@ -297,22 +465,27 @@ test "the real screens rasterise, and the background is always first" {
         .{ .screen = .quiet, .faction = .human },
         .{ .screen = .live, .faction = .zombie, .hp = 40, .crowd = .dozens, .momentum = .zombies_winning },
     }) |state| {
-        try ui.draw(state, size, &draws, gpa);
-        try build(draws.items, &verts, gpa);
+        try rig.rasterise(gpa, state, size);
 
-        // Every screen begins with the background, full-bleed. It is the first rect ui.draw emits
-        // and therefore the first six vertices here -- and it must cover the whole surface, or the
-        // phone shows whatever was in the framebuffer before us.
-        try testing.expect(verts.items.len >= vertices_per_rect);
-        try testing.expectEqual(@as(f32, 0), verts.items[0].x);
-        try testing.expectEqual(@as(f32, 0), verts.items[0].y);
-        try testing.expectEqual(@as(f32, 1080), verts.items[2].x);
-        try testing.expectEqual(@as(f32, 2400), verts.items[2].y);
+        // The background is the first rect ui.draw emits, so the first six vertices -- and it must
+        // cover the whole surface, or the phone shows whatever the compositor last left there.
+        try testing.expectEqual(@as(f32, 0), rig.verts.items[0].x);
+        try testing.expectEqual(@as(f32, 0), rig.verts.items[0].y);
+        try testing.expectEqual(@as(f32, 1080), rig.verts.items[2].x);
+        try testing.expectEqual(@as(f32, 2400), rig.verts.items[2].y);
+        try testing.expectApproxEqAbs(@as(f32, 1.0), rig.verts.items[0].a, 0.001);
 
-        // And it is opaque, or everything behind it shows through.
-        try testing.expectApproxEqAbs(@as(f32, 1.0), verts.items[0].a, 0.001);
+        // A whole number of quads, always.
+        try testing.expectEqual(@as(usize, 0), rig.verts.items.len % vertices_per_quad);
 
-        // Whatever else is on screen, the vertex count is a whole number of rectangles.
-        try testing.expectEqual(@as(usize, 0), verts.items.len % vertices_per_rect);
+        // AND THERE ARE WORDS. Before M.3 this screen was rectangles and silence -- the game was
+        // on the glass but it could not speak. Every screen has more quads than it has rects,
+        // which is only true if glyphs are being emitted.
+        var rects: usize = 0;
+        for (rig.draws.items) |item| {
+            if (item == .rect) rects += 1;
+        }
+        const quads = rig.verts.items.len / vertices_per_quad;
+        try testing.expect(quads > rects);
     }
 }

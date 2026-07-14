@@ -236,6 +236,11 @@ const shell = [_]Source{
     // SHELL: the GLES2 backend. Shaders, a vertex buffer, and one draw call. This is the whole of
     // what needs a GPU to run, which is why it is the whole of what cannot be tested without one.
     .{ .name = "gles.zig", .text = @embedFile("gles.zig") },
+    // SHELL: the glyph engine. The one file that knows what a font is, and the only one that
+    // reaches for the second sanctioned dependency (F1, F6 -- justified in vendor/stb_impl.c).
+    .{ .name = "text.zig", .text = @embedFile("text.zig") },
+    // SHELL: the glyph atlas. Pure, and tested without a GPU -- it makes a byte array, not pixels.
+    .{ .name = "atlas.zig", .text = @embedFile("atlas.zig") },
 };
 
 /// Does `haystack` begin with `needle`? Byte-wise, so that comptime does the least work
