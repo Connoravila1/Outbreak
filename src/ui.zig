@@ -667,6 +667,31 @@ const boot_glitch_end = boot_infection_end + boot_glitch_ms;
 /// The line the terminal is on, and how far into that line we are.
 const boot_line_ms: u32 = boot_terminal_ms / boot_lines.len;
 
+/// ============================================================================
+/// A CLEAN RAMP.
+///
+/// Not linear. A bar advancing at a constant rate is a clock with a paint job -- it reads as an
+/// animation playing rather than as anything actually happening.
+///
+/// And not the stuttering thing I tried before it, either. A bar that sprints, stalls, lurches and
+/// hangs at ninety-seven percent is a JOKE ABOUT loading bars: knowing, cheap, funny exactly once.
+/// This screen is not trying to be funny. It is trying to be ominous, and a gag undercuts that
+/// harder than a straight line ever would.
+///
+/// So: smoothstep. It eases out of nothing, gathers pace through the middle, and SETTLES into place
+/// rather than slamming into it. One curve, no gimmicks, and it never stops moving.
+///
+///     p = 3t^2 - 2t^3
+///
+/// Elapsed percent in, progress percent out. Integer arithmetic throughout, because the core has no
+/// floats (B6) -- at t=100 the terms are three million and two million, nowhere near an i32.
+fn loading(elapsed: i32) i32 {
+    // Explicitly i32. `@min(100, ...)` knows its own bound, so Zig will happily narrow this to a
+    // u7 -- and then `3 * t * t * 100` reaches three million inside a seven-bit type.
+    const t: i32 = @min(100, @max(0, elapsed));
+    return @divTrunc(3 * t * t * 100 - 2 * t * t * t, 10_000);
+}
+
 const BootLine = struct { text: []const u8, status: []const u8, bad: bool };
 
 const boot_lines = [_]BootLine{
@@ -899,22 +924,23 @@ fn drawWordmark(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) 
     // the exact middle line reads as low, and there is a tagline hanging beneath it.
     const top = mid_y - 130;
 
-    // THE GLITCH. Two off-register copies, red and cold blue, for the length of one flinch. The
-    // channels tear apart and snap back -- exactly what the CSS does with `text-shadow` offsets.
-    const glitching = ms >= boot_infection_end and ms < boot_glitch_end;
-    if (glitching) {
-        const swing: i32 = if ((ms / 60) % 2 == 0) 3 else -3;
-        try out.append(gpa, .{ .text = .{ .x = mid_x + swing, .y = top, .text = "OUTBREAK", .color = dim(.blood_glow, 170), .weight = .wordmark, .alignment = .center } });
-        try out.append(gpa, .{ .text = .{ .x = mid_x - swing, .y = top, .text = "OUTBREAK", .color = @enumFromInt(0x24A0FFAA), .weight = .wordmark, .alignment = .center } });
-    }
+    // THERE IS NO GLITCH HERE ANY MORE.
+    //
+    // I had two off-register copies of the wordmark -- one red, one cold blue -- juddering for four
+    // hundred milliseconds. It is a stock effect, it reads as a broken television rather than a
+    // broken world, and the blue belongs to no part of this game's palette. The letters catching
+    // fire is the drama. Nothing needs to shake.
 
     // THE LETTERS BURN IN, ONE AT A TIME, IN LOCKSTEP WITH THE BAR.
     //
     // Not a curtain and not a fade. Each letter ignites on its own -- hot, then cooling to red --
     // fifty milliseconds after the one before it. The left-to-right feel is a CONSEQUENCE of the
     // stagger, not a wipe passing over the word.
+    // IN LOCKSTEP WITH THE BAR -- which means the same uneven curve. The letters catch in bursts,
+    // stall while the bar stalls, and land together with it. They are one event, not two.
     const into = ms -| boot_terminal_ms;
-    const burn: u8 = @intCast(@min(@as(u32, 255), into * 255 / boot_infection_ms));
+    const elapsed: i32 = @intCast(@min(@as(u32, 100), into * 100 / boot_infection_ms));
+    const burn: u8 = @intCast(@divTrunc(loading(elapsed) * 255, 100));
 
     try out.append(gpa, .{ .text = .{
         .x = mid_x,
@@ -947,9 +973,12 @@ fn drawWordmark(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) 
     //
     // It is the GLOW that pulses when idle, not the letters. Scaling the type would re-rasterize
     // every glyph and rebuild the atlas sixty times a second; scaling a disc is one quad.
+    // A HEARTBEAT, not a shimmer. The first version breathed so gently you had to be told it was
+    // moving. It swells hard and falls back -- the light behind the word going in and out, on the
+    // slow rhythm of something large and unwell.
     const idle = ms >= boot_glitch_end;
-    const breath: i32 = if (idle) wander(ms - boot_glitch_end, 2600, 40, 0) else 0;
-    const beat: u8 = if (idle) pulse(ms - boot_glitch_end, 2600, 44, 84) else 60;
+    const breath: i32 = if (idle) wander(ms - boot_glitch_end, 2400, 130, 0) else 0;
+    const beat: u8 = if (idle) pulse(ms - boot_glitch_end, 2400, 26, 165) else 60;
 
     const glow = @divTrunc(size.w * 9, 10) + breath;
     try out.append(gpa, .{ .sprite = .{
@@ -965,7 +994,8 @@ fn drawWordmark(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) 
 /// The infection: the bar fills, and the dark closes in around the wordmark.
 fn drawInfection(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
     const into = ms - boot_terminal_ms;
-    const percent: i32 = @intCast(@min(100, into * 100 / boot_infection_ms));
+    const elapsed: i32 = @intCast(@min(@as(u32, 100), into * 100 / boot_infection_ms));
+    const percent = loading(elapsed);
 
     // THERE IS NO VIGNETTE HERE ANY MORE, AND ITS ABSENCE IS THE POINT.
     //
@@ -1500,4 +1530,87 @@ test "THE BOOT SEQUENCE IS A PURE FUNCTION OF A MILLISECOND" {
     // Tapping twice does not restart the exit. The player is already leaving.
     const twice = touch(tapped, .{ .x = 50, .y = 50 }, size);
     try testing.expectEqual(@as(?u32, ready), twice.leaving_ms);
+}
+
+test "THE LOADING BAR DOES NOT MOVE AT A CONSTANT SPEED" {
+    // A bar that advances evenly reads as a progress ANIMATION -- decoration with a number attached.
+    // A real one sprints, stalls on something it will not name, lurches, crawls, and hangs at
+    // ninety-seven. It reads as work being done, because work is uneven.
+    //
+    // This test is what stops someone "tidying" the curve back into a straight line.
+
+    // It starts at nothing and finishes at everything. A bar that never reaches 100 is a bug you
+    // find in a screenshot on the internet.
+    try testing.expectEqual(@as(i32, 0), loading(0));
+    try testing.expectEqual(@as(i32, 100), loading(100));
+
+    // It never goes backwards. A bar that retreats is worse than no bar.
+    var t: i32 = 1;
+    while (t <= 100) : (t += 1) {
+        try testing.expect(loading(t) >= loading(t - 1));
+    }
+
+    // IT IS NOT A STRAIGHT LINE. If progress equals elapsed all the way along, the curve has been
+    // flattened and the bar has become a clock with a paint job.
+    var uneven = false;
+    t = 1;
+    while (t < 100) : (t += 1) {
+        if (loading(t) != t) uneven = true;
+    }
+    try testing.expect(uneven);
+
+    // IT EASES IN. Behind a straight line for the first half -- it is getting up to speed, not
+    // starting at full tilt.
+    try testing.expect(loading(25) < 25);
+    try testing.expect(loading(10) < 10);
+
+    // IT SETTLES. Ahead of a straight line for the second half, so it arrives rather than slamming.
+    try testing.expect(loading(75) > 75);
+    try testing.expect(loading(90) > 90);
+
+    // It crosses the middle at the middle: the curve is symmetric, so the ramp up and the settle
+    // are the same shape.
+    try testing.expectEqual(@as(i32, 50), loading(50));
+
+    // AND IT DOES NOT STALL IN THE MIDDLE. This is what rules out the stuttering version -- no
+    // pauses, no hang at ninety-seven, no gag. Through the body of the ramp every step is a real
+    // step.
+    //
+    // NOT at the extremes, and that is the ease rather than a stall: a curve that leaves zero
+    // gently spends its first couple of percent below half a point of progress, so in whole
+    // percent it has not visibly moved yet. That is the whole idea of easing in. Asserting
+    // otherwise would be asserting that it does not ease.
+    // It makes real ground across every stretch of the ramp.
+    t = 25;
+    while (t <= 80) : (t += 5) {
+        try testing.expect(loading(t) > loading(t - 5));
+    }
+
+    // AND IT NEVER SITS STILL. This is the assertion that actually rules out the stuttering
+    // version, whose stalls were sixteen percent of the runtime wide -- you could watch the bar
+    // stop and wait.
+    //
+    // Measured across the BODY of the ramp, because the ends are supposed to be flat: leaving zero
+    // gently means the first few percent of time gain less than half a point of progress, and in
+    // whole percent the bar has not visibly moved yet. That is the ease. A test that forbade it
+    // would be a test that forbade easing, which is the thing we are here to do.
+    //
+    // Through the middle, the longest a whole-percent reading repeats is one -- a rounding
+    // artifact, not a pause.
+    var run: i32 = 0;
+    var longest: i32 = 0;
+    t = 11;
+    while (t <= 90) : (t += 1) {
+        if (loading(t) == loading(t - 1)) {
+            run += 1;
+            longest = @max(longest, run);
+        } else {
+            run = 0;
+        }
+    }
+    try testing.expect(longest <= 1);
+
+    // Out of range is clamped rather than exploding. The shell is not always careful.
+    try testing.expectEqual(@as(i32, 0), loading(-50));
+    try testing.expectEqual(@as(i32, 100), loading(500));
 }
