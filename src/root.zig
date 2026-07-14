@@ -45,6 +45,12 @@ pub const session = @import("session.zig");
 /// SHELL. The OS CSPRNG. The only source of unguessable values (B3).
 pub const entropy = @import("entropy.zig");
 
+/// Accounts: one contact point, one account; rate limits at the farm's front door (H5).
+pub const accounts = @import("accounts.zig");
+
+/// SHELL. Passwords and contact fingerprints. The only file that touches crypto.
+pub const credential = @import("credential.zig");
+
 comptime {
     // The forbidden-construct guard runs at compile time, so a distance function or a
     // coordinate in the core fails the build rather than the review. Referencing it here
@@ -71,4 +77,6 @@ test {
     _ = @import("session.zig");
     _ = @import("entropy.zig");
     _ = @import("fuzz_test.zig");
+    _ = @import("accounts.zig");
+    _ = @import("credential.zig");
 }
