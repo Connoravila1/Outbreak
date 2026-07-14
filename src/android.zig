@@ -98,6 +98,21 @@ extern fn ANativeWindow_setBuffersGeometry(*ANativeWindow, i32, i32, i32) i32;
 extern fn ALooper_prepare(i32) ?*ALooper;
 extern fn ALooper_pollOnce(i32, ?*i32, ?*i32, ?*?*anyopaque) i32;
 
+const AConfiguration = opaque {};
+extern fn AConfiguration_new() ?*AConfiguration;
+extern fn AConfiguration_fromAssetManager(*AConfiguration, *AAssetManager) void;
+extern fn AConfiguration_getDensity(*AConfiguration) i32;
+extern fn AConfiguration_delete(*AConfiguration) void;
+
+/// Android's baseline density. 160 dots per inch is 1 dp = 1 px, by definition, and every other
+/// density is expressed as a multiple of it.
+const baseline_density: i32 = 160;
+
+/// The density Android reports when it does not know, and when it has not been set.
+const density_unknown: i32 = 0;
+const density_any: i32 = 0xfffe;
+const density_none: i32 = 0xffff;
+
 extern fn AInputQueue_attachLooper(*AInputQueue, *ALooper, i32, ?*anyopaque, ?*anyopaque) void;
 extern fn AInputQueue_detachLooper(*AInputQueue) void;
 extern fn AInputQueue_getEvent(*AInputQueue, *?*AInputEvent) i32;
@@ -214,6 +229,10 @@ export fn ANativeActivity_onCreate(
         .onLowMemory = null,
     };
 
+    // BEFORE the render thread starts, so it is never read while being written. The UI is laid out
+    // in dp; without this the game renders correctly at about a millimetre and a half tall.
+    density_scale = scaleOf(activity);
+
     host.running.store(true, .release);
     render_thread = std.Thread.spawn(.{}, render, .{}) catch null;
 }
@@ -303,6 +322,63 @@ fn onDestroy(_: *ANativeActivity) callconv(.c) void {
 }
 
 // ---- the render thread. It owns EGL, and it owns the game. ----
+
+/// ============================================================================
+/// THE UI IS LAID OUT IN DP. THE SCREEN IS PAINTED IN PIXELS. THIS IS THE ONLY PLACE THAT KNOWS.
+///
+/// `ui.zig` places things at `pad = 22`, `line = 26`, body text at 17. Those are DENSITY-
+/// INDEPENDENT PIXELS -- the unit Android defines as one pixel at 160dpi. On a modern phone at
+/// ~440dpi they are not pixels at all: taken literally, seventeen physical pixels of body text is
+/// about a millimetre and a half tall, which renders perfectly and cannot be read.
+///
+/// The fix does NOT belong in `ui.zig`. The interface is pure, integer, and has never heard of a
+/// phone, and that is worth more than the convenience of scaling it there. So the shell does what
+/// the shell is for: it converts.
+///
+///   * `ui.draw` and `ui.touch` are handed a size in DP -- physical pixels divided by scale.
+///   * A touch is divided by scale on the way in.
+///   * The renderer multiplies by scale on the way out, and rasterizes glyphs at the physical
+///     size, so the type is sharp rather than a scaled-up blur.
+///
+/// The core never learns the density. Nothing in `ui.zig` changed to make this work.
+fn scaleOf(activity: *ANativeActivity) f32 {
+    const assets = activity.assetManager orelse return 1.0;
+    const config = AConfiguration_new() orelse return 1.0;
+    defer AConfiguration_delete(config);
+
+    AConfiguration_fromAssetManager(config, assets);
+    const density = AConfiguration_getDensity(config);
+
+    // Android has three ways of saying "no idea", and a phone that reports any of them is a phone
+    // we draw at 1:1 rather than one we crash on.
+    if (density == density_unknown or density == density_any or density == density_none) return 1.0;
+    if (density <= 0) return 1.0;
+
+    const scale = @as(f32, @floatFromInt(density)) / @as(f32, @floatFromInt(baseline_density));
+
+    // A sanity clamp, not a guess. Real phones land between 1.0 (mdpi) and 4.0 (xxxhdpi); anything
+    // outside that is a lying or broken configuration, and drawing the UI at 40x would be worse
+    // than drawing it small.
+    return @min(@max(scale, 1.0), 4.0);
+}
+
+/// The density scale, read once when the activity is created and never again.
+///
+/// A phone's density does not change while the app is running. A FOLDABLE's can -- and when that
+/// day comes, `onConfigurationChanged` is the callback that re-reads this, and the surface is
+/// recreated anyway. It is a single f32 written once before the render thread starts and only read
+/// after, so it needs no lock.
+var density_scale: f32 = 1.0;
+
+/// Physical pixels -> dp. The direction things come IN: a touch, a surface size.
+fn toDp(physical: i32) i32 {
+    return @intFromFloat(@round(@as(f32, @floatFromInt(physical)) / density_scale));
+}
+
+/// The surface, in the units `ui.zig` lays out in.
+fn sizeInDp(surface: *const Surface) ui.Size {
+    return .{ .w = toDp(surface.width), .h = toDp(surface.height) };
+}
 
 const Surface = struct {
     display: EGLDisplay = null,
@@ -447,7 +523,14 @@ fn render() void {
             defer host.mutex.unlock(io);
 
             if (host.pending_touch) |at| {
-                host.state = ui.touch(host.state, at, .{ .w = surface.width, .h = surface.height });
+                // The touch arrived in PHYSICAL pixels; the UI thinks in dp. Divide here, or a tap
+                // on the Confirm button lands three times too far down the screen and the game
+                // appears not to respond to touch at all.
+                const in_dp: ui.Touch = .{
+                    .x = toDp(at.x),
+                    .y = toDp(at.y),
+                };
+                host.state = ui.touch(host.state, in_dp, sizeInDp(&surface));
                 host.pending_touch = null;
 
                 // The state moved. That is the ONLY thing that makes the screen stale.
@@ -488,7 +571,8 @@ fn render() void {
             break :blk host.state;
         };
 
-        ui.draw(state, .{ .w = surface.width, .h = surface.height }, &draws, gpa) catch continue;
+        // IN DP. The interface has never heard of a phone and does not start now.
+        ui.draw(state, sizeInDp(&surface), &draws, gpa) catch continue;
 
         present(&surface, draws.items, &engine, &atlas, &verts, gpa);
         dirty = false;
@@ -530,7 +614,10 @@ fn present(
     // A failed allocation, or a full atlas, is a DROPPED FRAME -- not a dead process. The next
     // frame tries again with the capacity this one already reserved (E2, E5 in spirit: nothing a
     // renderer does may take the game down).
-    quads.build(draws, engine, atlas, verts, gpa) catch {
+    // The draw list is in dp. `scale` turns it back into the pixels this surface actually has --
+    // and rasterizes the glyphs at the physical size, so the type is sharp rather than a blur
+    // magnified from a smaller one.
+    quads.build(draws, engine, atlas, density_scale, verts, gpa) catch {
         _ = eglSwapBuffers(surface.display, surface.surface);
         return;
     };

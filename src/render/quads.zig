@@ -90,10 +90,26 @@ pub const vertices_per_quad = 6;
 /// The engine and the atlas are MUTABLE because a glyph the game has never drawn before is
 /// rasterized and packed on first sight. After the first few frames of a screen, that stops
 /// happening and this function only reads.
+/// ============================================================================
+/// THE DRAW LIST IS IN DP. THE SCREEN IS IN PIXELS. `scale` IS THE ONLY BRIDGE.
+///
+/// `ui.zig` lays out at `pad = 22`, `line = 26`, body text at 17 -- density-independent pixels,
+/// the unit Android defines as one pixel at 160dpi. On a ~440dpi phone, taken literally, that body
+/// text is a millimetre and a half tall. It renders perfectly. It cannot be read.
+///
+/// The interface is not the place to fix that. `ui.zig` is pure, integer, and has never heard of a
+/// phone, and keeping it that way is worth more than the convenience of scaling it there. So the
+/// conversion happens HERE, at the last moment before the pixels exist, and the core never learns
+/// the density.
+///
+/// Glyphs are rasterized at `style.px * scale` -- the PHYSICAL size -- so the type is genuinely
+/// sharp. Scaling a 17px raster up by 2.75 would be a blur, and it is the difference between text
+/// that reads like a message and text that reads like a scanned fax.
 pub fn build(
     draws: []const ui.Draw,
     engine: *text.Engine,
     atlas: *atlas_mod.Atlas,
+    scale: f32,
     out: *std.ArrayList(Vertex),
     gpa: Allocator,
 ) Error!void {
@@ -105,14 +121,19 @@ pub fn build(
             // waste of the bus.
             if (it.w <= 0 or it.h <= 0) continue;
 
+            // Snapped to whole pixels. A rectangle edge on a half-pixel is a rectangle with a
+            // blurry grey line down one side.
+            const x = px(it.x, scale);
+            const y = px(it.y, scale);
             const white = atlas_mod.whiteUv();
+
             try pushQuad(
                 out,
                 gpa,
-                @floatFromInt(it.x),
-                @floatFromInt(it.y),
-                @floatFromInt(it.w),
-                @floatFromInt(it.h),
+                x,
+                y,
+                px(it.x + it.w, scale) - x,
+                px(it.y + it.h, scale) - y,
                 // Every corner samples the SAME point. The uv is therefore constant across the
                 // whole quad, so every fragment lands exactly on the white texel's centre -- no
                 // interpolation, no bleeding from a neighbour, whatever the sampler is doing.
@@ -122,8 +143,13 @@ pub fn build(
             );
         },
 
-        .text => |it| try pushString(out, engine, atlas, gpa, it.x, it.y, it.text, it.weight, rgba(it.color)),
+        .text => |it| try pushString(out, engine, atlas, gpa, scale, it.x, it.y, it.text, it.weight, rgba(it.color)),
     };
+}
+
+/// dp -> physical pixels, snapped to the grid.
+fn px(dp: i32, scale: f32) f32 {
+    return @round(@as(f32, @floatFromInt(dp)) * scale);
 }
 
 /// One string, one pen, left to right.
@@ -137,6 +163,7 @@ fn pushString(
     engine: *text.Engine,
     atlas: *atlas_mod.Atlas,
     gpa: Allocator,
+    scale: f32,
     x: i32,
     y: i32,
     string: []const u8,
@@ -144,14 +171,23 @@ fn pushString(
     colour: [4]f32,
 ) Error!void {
     const style = text.styleOf(weight);
-    const line = text.lineOf(engine, style.face, style.px);
 
-    const baseline: i32 = y + line.ascent;
-    var pen: i32 = x;
+    // THE GLYPHS ARE RASTERIZED AT THE PHYSICAL SIZE, not the dp size scaled up afterwards. A 17px
+    // raster magnified 2.75x is a blur; a 47px raster is type. This is the entire reason the scale
+    // is threaded down here rather than applied to the vertices at the end.
+    const physical_px: u16 = @intFromFloat(@max(1.0, @round(@as(f32, @floatFromInt(style.px)) * scale)));
+
+    // And the line metrics come from the size actually being drawn, or the baseline is computed
+    // for a font nobody is looking at.
+    const line = text.lineOf(engine, style.face, physical_px);
+
+    // Everything from here down is in PHYSICAL pixels.
+    const baseline: i32 = @as(i32, @intFromFloat(px(y, scale))) + line.ascent;
+    var pen: i32 = @intFromFloat(px(x, scale));
 
     var it = text.codepoints(string);
     while (it.next()) |codepoint| {
-        const glyph = try atlas_mod.ensure(atlas, engine, gpa, style.face, style.px, codepoint);
+        const glyph = try atlas_mod.ensure(atlas, engine, gpa, style.face, physical_px, codepoint);
 
         // A space. It moves the pen and puts no ink on the page (E4).
         if (glyph.w > 0 and glyph.h > 0) {
@@ -252,6 +288,9 @@ const Rig = struct {
     atlas: atlas_mod.Atlas,
     draws: std.ArrayList(ui.Draw),
     verts: std.ArrayList(Vertex),
+    /// 1:1 by default -- dp and pixels coincide, so a test asserting "x is 10" still means it.
+    /// The scaling tests set this explicitly.
+    scale: f32 = 1.0,
 
     fn init(gpa: Allocator) !Rig {
         return .{
@@ -271,7 +310,7 @@ const Rig = struct {
 
     fn rasterise(rig: *Rig, gpa: Allocator, state: ui.State, size: ui.Size) !void {
         try ui.draw(state, size, &rig.draws, gpa);
-        try build(rig.draws.items, &rig.engine, &rig.atlas, &rig.verts, gpa);
+        try build(rig.draws.items, &rig.engine, &rig.atlas, rig.scale, &rig.verts, gpa);
     }
 };
 
@@ -296,7 +335,7 @@ test "a rectangle is six vertices, wound clockwise, sampling the white texel at 
     const draws = [_]ui.Draw{
         .{ .rect = .{ .x = 10, .y = 20, .w = 30, .h = 40, .color = .bone } },
     };
-    try build(&draws, &rig.engine, &rig.atlas, &rig.verts, gpa);
+    try build(&draws, &rig.engine, &rig.atlas, rig.scale, &rig.verts, gpa);
 
     try testing.expectEqual(@as(usize, 6), rig.verts.items.len);
 
@@ -324,14 +363,14 @@ test "a string becomes one quad per inked glyph, and spaces are not quads" {
     const draws = [_]ui.Draw{
         .{ .text = .{ .x = 0, .y = 0, .text = "AB", .color = .bone, .weight = .body } },
     };
-    try build(&draws, &rig.engine, &rig.atlas, &rig.verts, gpa);
+    try build(&draws, &rig.engine, &rig.atlas, rig.scale, &rig.verts, gpa);
     try testing.expectEqual(@as(usize, 2 * vertices_per_quad), rig.verts.items.len);
 
     // A space advances the pen and emits nothing. "A B" is three characters and still two quads.
     const spaced = [_]ui.Draw{
         .{ .text = .{ .x = 0, .y = 0, .text = "A B", .color = .bone, .weight = .body } },
     };
-    try build(&spaced, &rig.engine, &rig.atlas, &rig.verts, gpa);
+    try build(&spaced, &rig.engine, &rig.atlas, rig.scale, &rig.verts, gpa);
     try testing.expectEqual(@as(usize, 2 * vertices_per_quad), rig.verts.items.len);
 }
 
@@ -344,7 +383,7 @@ test "text advances to the right, and the pen does not run backwards" {
     const draws = [_]ui.Draw{
         .{ .text = .{ .x = 100, .y = 50, .text = "Hi", .color = .bone, .weight = .body } },
     };
-    try build(&draws, &rig.engine, &rig.atlas, &rig.verts, gpa);
+    try build(&draws, &rig.engine, &rig.atlas, rig.scale, &rig.verts, gpa);
 
     // First glyph starts at or near the requested x; the second is to the RIGHT of the first.
     const first_x = rig.verts.items[0].x;
@@ -367,7 +406,7 @@ test "THE BASELINE: text sits inside the line box it was given, not below it" {
     const draws = [_]ui.Draw{
         .{ .text = .{ .x = 0, .y = top, .text = "Hxg", .color = .bone, .weight = .body } },
     };
-    try build(&draws, &rig.engine, &rig.atlas, &rig.verts, gpa);
+    try build(&draws, &rig.engine, &rig.atlas, rig.scale, &rig.verts, gpa);
 
     const style = text.styleOf(.body);
     const line = text.lineOf(&rig.engine, style.face, style.px);
@@ -388,6 +427,116 @@ test "THE BASELINE: text sits inside the line box it was given, not below it" {
 
     // The text is actually in the box, not collapsed to a point at the top of it.
     try testing.expect(lowest > @as(f32, @floatFromInt(top)));
+}
+
+test "DENSITY: the same layout is physically the same size on a cheap phone and a flagship" {
+    // THE BUG THIS EXISTS TO PREVENT, AND IT IS NOT A CRASH.
+    //
+    // `ui.zig` lays out in dp -- pad 22, body text 17. Taken as physical pixels on a ~440dpi phone,
+    // that body text is about a millimetre and a half tall. It renders PERFECTLY. Every test passes.
+    // Every rectangle is where it should be. And no human being can read a word of it.
+    //
+    // No assertion in this codebase catches "too small to read", so this one catches the thing
+    // underneath it: at 3x density, everything must be three times as many pixels.
+    const gpa = testing.allocator;
+
+    var rig = try Rig.init(gpa);
+    defer rig.deinit(gpa);
+
+    const draws = [_]ui.Draw{
+        .{ .rect = .{ .x = 10, .y = 20, .w = 30, .h = 40, .color = .bone } },
+    };
+
+    rig.scale = 1.0;
+    try build(&draws, &rig.engine, &rig.atlas, rig.scale, &rig.verts, gpa);
+    const mdpi_x = rig.verts.items[0].x;
+    const mdpi_w = rig.verts.items[2].x - rig.verts.items[0].x;
+
+    var big: std.ArrayList(Vertex) = .empty;
+    defer big.deinit(gpa);
+
+    try build(&draws, &rig.engine, &rig.atlas, 3.0, &big, gpa);
+    const xxhdpi_x = big.items[0].x;
+    const xxhdpi_w = big.items[2].x - big.items[0].x;
+
+    // Three times the density, three times the pixels -- so the SAME PHYSICAL SIZE in the hand.
+    try testing.expectApproxEqAbs(mdpi_x * 3.0, xxhdpi_x, 0.001);
+    try testing.expectApproxEqAbs(mdpi_w * 3.0, xxhdpi_w, 0.001);
+}
+
+test "DENSITY: the type is rasterized at the physical size, not magnified from a small one" {
+    // The difference between text that reads like a message and text that reads like a fax.
+    //
+    // A 17px glyph blown up 3x is a blur with the same 17px of detail in it. A 51px glyph is type.
+    // So at 3x density the GLYPH ITSELF must be bigger in the atlas -- not just its quad.
+    const gpa = testing.allocator;
+
+    var rig = try Rig.init(gpa);
+    defer rig.deinit(gpa);
+
+    const style = text.styleOf(.body);
+
+    const small = try atlas_mod.ensure(&rig.atlas, &rig.engine, gpa, style.face, style.px, 'H');
+    const large = try atlas_mod.ensure(&rig.atlas, &rig.engine, gpa, style.face, style.px * 3, 'H');
+
+    // Not the same rectangle scaled -- a genuinely larger raster, with more ink in it.
+    try testing.expect(large.h > small.h * 2);
+    try testing.expect(large.w > small.w * 2);
+
+    // And the renderer asks for the big one when the density is high. Same draw, two densities:
+    // the quads must differ in size, which can only happen if the glyph did.
+    const draws = [_]ui.Draw{
+        .{ .text = .{ .x = 0, .y = 0, .text = "H", .color = .bone, .weight = .body } },
+    };
+
+    try build(&draws, &rig.engine, &rig.atlas, 1.0, &rig.verts, gpa);
+    const small_h = rig.verts.items[2].y - rig.verts.items[0].y;
+
+    var big: std.ArrayList(Vertex) = .empty;
+    defer big.deinit(gpa);
+
+    try build(&draws, &rig.engine, &rig.atlas, 3.0, &big, gpa);
+    const large_h = big.items[2].y - big.items[0].y;
+
+    try testing.expect(large_h > small_h * 2.0);
+}
+
+test "DENSITY: a touch in physical pixels finds the button that was laid out in dp" {
+    // The other half, and the half that makes the game look BROKEN rather than merely small: the
+    // touch arrives in physical pixels and the buttons were placed in dp. Forget to divide, and on
+    // a 3x phone every tap lands three times too far down -- the Confirm button does nothing, and
+    // the game appears not to respond to touch at all.
+    //
+    // `android.zig` does the division. This pins the arithmetic it relies on.
+    const size_physical: ui.Size = .{ .w = 1080, .h = 2400 };
+    const scale: f32 = 3.0;
+
+    const size_dp: ui.Size = .{
+        .w = @intFromFloat(@round(@as(f32, @floatFromInt(size_physical.w)) / scale)),
+        .h = @intFromFloat(@round(@as(f32, @floatFromInt(size_physical.h)) / scale)),
+    };
+    try testing.expectEqual(@as(i32, 360), size_dp.w);
+    try testing.expectEqual(@as(i32, 800), size_dp.h);
+
+    // A player taps the middle of the Confirm button. `ui.zig` decides where that is, in dp.
+    var state: ui.State = .{};
+    state = ui.touch(state, .{ .x = 60, .y = 300 }, size_dp); // a faction card
+    try testing.expect(state.hovering != null);
+
+    // Now the same tap as the OS delivers it -- in physical pixels -- divided back into dp. It must
+    // land on the same thing. If the division were missing, y would be 900 in a screen 800 tall.
+    const physical_x: i32 = 60 * 3;
+    const physical_y: i32 = 300 * 3;
+
+    const back_to_dp: ui.Touch = .{
+        .x = @intFromFloat(@round(@as(f32, @floatFromInt(physical_x)) / scale)),
+        .y = @intFromFloat(@round(@as(f32, @floatFromInt(physical_y)) / scale)),
+    };
+
+    var same: ui.State = .{};
+    same = ui.touch(same, back_to_dp, size_dp);
+    try testing.expectEqual(state.hovering, same.hovering);
+    try testing.expect(same.hovering != null);
 }
 
 test "THE SHAPE OF THE SCREEN IS NOT A HEADCOUNT: six people and six thousand draw the same pixels" {
@@ -449,7 +598,7 @@ fn collectRects(
     for (draws) |item| {
         if (item == .rect) try only_rects.append(gpa, item);
     }
-    try build(only_rects.items, engine, atlas, out, gpa);
+    try build(only_rects.items, engine, atlas, 1.0, out, gpa);
 }
 
 test "the real screens rasterise, the background is first, and every screen has words on it" {
