@@ -762,7 +762,15 @@ fn drawInfection(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocator)
 fn drawBootTail(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
     const mid_x = @divTrunc(size.w, 2);
 
-    const since = ms - boot_glitch_end;
+    // SATURATING. This function runs from `boot_infection_end`, but the tagline is timed from
+    // `boot_glitch_end` -- which is 420ms LATER. A plain subtraction underflows a u32 for every one
+    // of those 420 milliseconds, and this library ships ReleaseSafe, so it does not wrap quietly:
+    // it panics, on the phone, four seconds into the first thing a player ever sees.
+    //
+    // It shipped. The tests sampled instants either side of the window and stepped clean over it.
+    // The test below now walks every millisecond, because a boot sequence that is a pure function
+    // of one integer has no excuse for being sampled.
+    const since = ms -| boot_glitch_end;
     const fade: u8 = @intCast(@min(@as(u32, 255), since * 255 / 400));
 
     try out.append(gpa, .{ .text = .{
@@ -1033,6 +1041,33 @@ test "THE CREDIT IS REACHABLE, AND IT NAMES THE PEOPLE" {
     const undecided = touch(.{ .screen = .credits, .faction = null }, .{ .x = back.x + 4, .y = back.y + 4 }, size);
     try testing.expectEqual(Screen.choose_side, undecided.screen);
     try testing.expectEqual(@as(?Faction, null), undecided.faction);
+}
+
+test "EVERY MILLISECOND OF THE BOOT SEQUENCE, NOT A SAMPLE OF THEM" {
+    // THIS TEST EXISTS BECAUSE THE SAMPLED ONE SHIPPED A CRASH.
+    //
+    // The tagline's fade was timed from the END of the glitch, but the function that draws it
+    // starts at the START of the glitch -- so for 420 milliseconds it computed `ms - later_ms` on
+    // a u32. Underflow. ReleaseSafe turns that into a panic rather than a wrap, so the app died on
+    // the phone, four seconds into the first thing a player ever sees.
+    //
+    // The other test checked millisecond 3,199 and millisecond 4,820. The crash lived at 3,200.
+    //
+    // The boot sequence is a pure function of a single integer. There is no excuse for sampling
+    // it: walk the whole domain. It takes milliseconds.
+    const gpa = testing.allocator;
+
+    var out: std.ArrayList(Draw) = .empty;
+    defer out.deinit(gpa);
+
+    // Two sizes, because a division by a screen dimension is another way to reach zero.
+    for ([_]Size{ .{ .w = 360, .h = 800 }, .{ .w = 1080, .h = 2400 } }) |size| {
+        var ms: u32 = 0;
+        while (ms < boot_glitch_end + 4000) : (ms += 1) {
+            try draw(.{ .screen = .boot, .boot_ms = ms }, size, &out, gpa);
+            try testing.expect(out.items.len > 0);
+        }
+    }
 }
 
 test "THE BOOT SEQUENCE IS A PURE FUNCTION OF A MILLISECOND" {
