@@ -145,6 +145,39 @@ pub fn build(b: *std.Build) void {
             .dest_dir = .{ .override = .{ .custom = b.fmt("android/{s}", .{triple}) } },
         });
         android_step.dependOn(&install.step);
+
+        // ============================================================================
+        // THE HOST IS COMPILED. THIS IS NOT OPTIONAL, AND IT WAS NOT HAPPENING.
+        //
+        // The library above is rooted at `ffi.zig`. It contains the ten C ABI functions and
+        // NOTHING ELSE -- `android.zig` is not reachable from it, and `root.zig` does not import
+        // it either. So the Android host -- the render loop, the EGL bring-up, the lifecycle
+        // callbacks, the renderer, every line of it -- WAS COMPILED BY NOTHING.
+        //
+        // It was not "written but not yet run on a device." It had never been through a compiler
+        // at all. `zig build android` went green while saying nothing whatsoever about it, which
+        // is worse than a red build: a green one that checks nothing also supplies confidence.
+        // Proven by appending garbage to the file and watching every build step pass.
+        //
+        // An OBJECT, not a library: the host's `extern fn`s (EGL, GLES, the NDK) are resolved by
+        // the APK's linker against the device's own system libraries, which do not exist here.
+        // An object file does not need them resolved -- but it is fully type-checked, fully code
+        // generated, and it fires every comptime guard in the file. That is the whole point.
+        // ============================================================================
+        const host = b.addObject(.{
+            .name = b.fmt("host-{s}", .{triple}),
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/android.zig"),
+                .target = b.resolveTargetQuery(query),
+                .optimize = .ReleaseSafe,
+            }),
+        });
+
+        android_step.dependOn(&host.step);
+
+        // And it is checked by the DEFAULT build too, so a broken host fails `zig build` on the
+        // machine of whoever broke it, in the second they break it -- not months later, in a cafe.
+        b.default_step.dependOn(&host.step);
     }
 
     // Compiling is enough to fire every comptime guard: the size guards (A7) and the
