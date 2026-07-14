@@ -44,6 +44,15 @@ pub const Error = error{
     BadVersion,
     Truncated,
     UnknownRecord,
+    /// A field whose value is not one this program recognises -- a faction byte of 7, say.
+    ///
+    /// FOUND BY THE FUZZER, ON ITS FIRST RUN. `Faction` is an exhaustive enum(u8), so
+    /// `@enumFromInt(7)` is ILLEGAL BEHAVIOUR: a panic, from data alone. A corrupted journal --
+    /// a tampered file, a power cut mid-write, a bad disk -- crashed the server that read it.
+    ///
+    /// Network- and disk-derived integers are never turned into an enum without a check. The
+    /// value is now validated and an unrecognised one is a clean rejection (E3).
+    BadValue,
 };
 
 /// What the shell needs to know before it can replay anything.
@@ -283,11 +292,20 @@ const report_size = 4 + 8;
 const engagement_size = 8 + 8 + 2 + 2;
 
 /// CORE. The i-th entry of a roster payload.
-pub fn rosterEntry(payload: []const u8, i: usize) struct { player: PlayerId, faction: Faction, hp: u16 } {
+///
+/// The faction byte is VALIDATED, not cast. See `Error.BadValue`.
+pub fn rosterEntry(payload: []const u8, i: usize) Error!struct { player: PlayerId, faction: Faction, hp: u16 } {
     const at = i * roster_entry_size;
+
+    const faction: Faction = switch (readInt(payload, at + 4, u8)) {
+        0 => .human,
+        1 => .zombie,
+        else => return Error.BadValue, // a faction we do not have is not a faction
+    };
+
     return .{
         .player = @enumFromInt(readInt(payload, at, u32)),
-        .faction = @enumFromInt(readInt(payload, at + 4, u8)),
+        .faction = faction,
         .hp = readInt(payload, at + 5, u16),
     };
 }
@@ -452,8 +470,8 @@ test "a journal round-trips" {
     const first = (try next(&cursor)).?;
     try testing.expectEqual(@as(u32, 3), first.roster.count);
     try testing.expectEqual(@as(u64, 0), first.roster.index);
-    try testing.expectEqual(Faction.zombie, rosterEntry(first.roster.payload, 1).faction);
-    try testing.expectEqual(@as(u16, 80), rosterEntry(first.roster.payload, 2).hp);
+    try testing.expectEqual(Faction.zombie, (try rosterEntry(first.roster.payload, 1)).faction);
+    try testing.expectEqual(@as(u16, 80), (try rosterEntry(first.roster.payload, 2)).hp);
 
     const second = (try next(&cursor)).?;
     try testing.expectEqual(@as(u64, 7), second.tick.index);

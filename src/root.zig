@@ -70,4 +70,5 @@ test {
     _ = @import("protocol.zig");
     _ = @import("session.zig");
     _ = @import("entropy.zig");
+    _ = @import("fuzz_test.zig");
 }

@@ -55,6 +55,13 @@ pub const version: u16 = 1;
 pub const Error = error{
     BadVersion,
     Truncated,
+    /// A byte that is not a value this program has. `Momentum` and `Crowd` are exhaustive
+    /// enums, so casting an arbitrary byte into one is ILLEGAL BEHAVIOUR -- a panic, from data
+    /// alone. A hostile or broken server could crash every client that parsed its reply.
+    ///
+    /// Found by the fuzzer. An attacker-controlled integer is never turned into an enum
+    /// without a check.
+    BadValue,
 };
 
 /// A server-issued session. Opaque, unguessable, and it is the ONLY thing that identifies the
@@ -214,13 +221,32 @@ pub fn encodeResponse(response: Response) [response_size]u8 {
 
 pub fn decodeResponse(bytes: []const u8) Error!Response {
     if (bytes.len != response_size) return Error.Truncated;
+
+    const momentum: Momentum = switch (bytes[14]) {
+        0 => .even,
+        1 => .humans_edge,
+        2 => .zombies_edge,
+        3 => .humans_winning,
+        4 => .zombies_winning,
+        else => return Error.BadValue,
+    };
+
+    const crowd: Crowd = switch (bytes[15]) {
+        0 => .a_few,
+        1 => .dozens,
+        2 => .scores,
+        3 => .hundreds,
+        4 => .thousands,
+        else => return Error.BadValue,
+    };
+
     return .{
         .tick = std.mem.readInt(u64, bytes[0..8], .little),
         .hp = std.mem.readInt(u16, bytes[8..10], .little),
         .damage = std.mem.readInt(u16, bytes[10..12], .little),
         .xp = std.mem.readInt(u16, bytes[12..14], .little),
-        .momentum = @enumFromInt(bytes[14]),
-        .crowd = @enumFromInt(bytes[15]),
+        .momentum = momentum,
+        .crowd = crowd,
     };
 }
 
@@ -432,4 +458,26 @@ test "the only lie a modified phone can tell is a false cell" {
 
     // And a false cell buys nothing: it is worth nothing without k real humans standing in it
     // (H2), and no exploit conjures strangers into a room.
+}
+
+test "an attacker-controlled byte is never cast into an enum" {
+    // THE CRASH THE FUZZER FOUND, ON ITS FIRST RUN.
+    //
+    // Momentum and Crowd are exhaustive enums, so @enumFromInt on an arbitrary byte is ILLEGAL
+    // BEHAVIOUR -- a panic, from data alone. A hostile or merely broken server could crash every
+    // client that parsed its reply, with a single byte.
+    //
+    // A network- or disk-derived integer is never turned into an enum without a check.
+    var bytes = encodeResponse(quiet(1, 100));
+
+    bytes[14] = 200; // not a momentum
+    try testing.expectError(Error.BadValue, decodeResponse(&bytes));
+
+    bytes[14] = 0;
+    bytes[15] = 77; // not a crowd
+    try testing.expectError(Error.BadValue, decodeResponse(&bytes));
+
+    // And every legal value still decodes.
+    bytes[15] = 4;
+    _ = try decodeResponse(&bytes);
 }

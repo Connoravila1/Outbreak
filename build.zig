@@ -27,6 +27,21 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run the test suite under a leak-detecting allocator");
     test_step.dependOn(&run_tests.step);
 
+    // ============================================================================
+    // BUILD MODE IS A SECURITY DECISION (SECURITY.md, Phase 0 bedrock).
+    //
+    // Anything that will ever face untrusted input ships ReleaseSafe, never ReleaseFast.
+    // Zig's safe modes keep integer-overflow, bounds, and unreachable checks live at runtime,
+    // and those checks are what turn a memory-corruption exploit into a clean crash.
+    //
+    // `sim` is the ONE exception and it is allowed to be: it faces no network, parses nothing
+    // hostile, and exists to produce honest performance numbers (G1) -- which ReleaseSafe would
+    // distort. It is a development tool and is never shipped.
+    //
+    // When the server binary lands, it is ReleaseSafe. This comment is here so that decision is
+    // made on purpose rather than inherited from whatever the last person typed.
+    // ============================================================================
+
     // The Phase 0 exit criterion, as a program you can run: ten thousand synthetic players
     // through a simulated week, replayed, under a leak-detecting allocator.
     //

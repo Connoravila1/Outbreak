@@ -59,7 +59,7 @@ pub fn replay(gpa: Allocator, bytes: []const u8, rules: combat.Rules) Error!stru
 
             var i: usize = 0;
             while (i < roster.count) : (i += 1) {
-                const entry = journal.rosterEntry(roster.payload, i);
+                const entry = try journal.rosterEntry(roster.payload, i);
                 try world_mod.add(&world, gpa, .{
                     // Nowhere. The next tick record says where they really were; until then
                     // nobody is anywhere, which is the honest state of affairs -- and crucially
