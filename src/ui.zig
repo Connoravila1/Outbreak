@@ -337,7 +337,7 @@ pub fn touch(state: State, at: Touch, size: Size) State {
         //
         // Once it IS offered, the tap begins the ending rather than jumping: the screen takes four
         // hundred milliseconds to get out of the way, and `advance` finishes the job.
-        .boot => if (state.boot_ms >= boot_settle_end and state.leaving_ms == null) {
+        .boot => if (afterWake(state.boot_ms) >= boot_settle_end and state.leaving_ms == null) {
             next.leaving_ms = state.boot_ms;
         },
 
@@ -680,6 +680,29 @@ const boot_settle_end = boot_infection_end + boot_settle_ms;
 const boot_line_ms: u32 = boot_terminal_ms / boot_lines.len;
 
 /// ============================================================================
+/// THE WAKE. Before anything happens, something has to be ON.
+///
+/// The sequence used to begin mid-thought: the app opened and a terminal was already typing, which
+/// is not a beginning, it is a jump cut into one. There was no moment of the screen coming alive.
+///
+/// So: black. Then the scanlines rise out of it -- the tube warming, and nothing else -- and it
+/// holds there for a beat, empty and humming, before the first line is typed.
+///
+/// The pause is the point. It is the breath before the sentence.
+const boot_fade_ms: u32 = 340;
+const boot_hold_ms: u32 = 260;
+const boot_wake_ms = boot_fade_ms + boot_hold_ms;
+
+/// The sequence's own clock, which starts once the screen is awake.
+///
+/// Everything downstream -- the terminal, the infection, the settle -- is written against this
+/// rather than against the app's clock, so the wake could be lengthened, shortened or removed
+/// without a single phase boundary moving.
+fn afterWake(ms: u32) u32 {
+    return ms -| boot_wake_ms;
+}
+
+/// ============================================================================
 /// A CLEAN RAMP.
 ///
 /// Not linear. A bar advancing at a constant rate is a clock with a paint job -- it reads as an
@@ -759,7 +782,11 @@ fn pulse(ms: u32, period: u32, low: u32, high: u32) u8 {
 }
 
 fn drawBoot(state: State, size: Size, insets: Insets, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
-    const ms = state.boot_ms;
+    const raw = state.boot_ms;
+
+    // THE SEQUENCE'S OWN CLOCK. Zero until the screen is awake, so nothing below has to know the
+    // wake exists.
+    const ms = afterWake(raw);
 
     // Scorched char, not the game's usual near-black. The boot screen is a different room -- and
     // it reaches the glass, edge to edge.
@@ -800,7 +827,10 @@ fn drawBoot(state: State, size: Size, insets: Insets, out: *std.ArrayList(Draw),
         try drawBootTail(ms, size, out, gpa);
     }
 
-    try drawScanlines(size, insets, out, gpa);
+    // THE TUBE WARMING. The scanlines rise out of black over a third of a second, and for a beat
+    // after that they are the only thing on the screen.
+    const woken: u8 = @intCast(@min(@as(u32, 255), raw * 255 / boot_fade_ms));
+    try drawScanlines(size, insets, woken, out, gpa);
 
     // THE WAY OUT. The player tapped, and the infection finishes what it started: the dark closes
     // in from the edges, the wordmark flares, and the screen is taken. Four hundred milliseconds.
@@ -1119,7 +1149,7 @@ fn drawBootTail(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) 
 
 /// The CRT. Six percent white, every third row. It costs a few hundred rectangles and it is what
 /// makes the whole thing feel like it is being displayed rather than drawn.
-fn drawScanlines(size: Size, insets: Insets, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
+fn drawScanlines(size: Size, insets: Insets, alpha: u8, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
     // THE CRT REACHES THE GLASS. Scanlines that stop at the safe area leave a flat band top and
     // bottom, and a flat band is a black bar with extra steps -- it looks cropped even when the
     // colour behind it is exactly right.
@@ -1133,7 +1163,7 @@ fn drawScanlines(size: Size, insets: Insets, out: *std.ArrayList(Draw), gpa: All
             .y = y,
             .w = insets.bleedWidth(size),
             .h = 1,
-            .color = dim(.bone, 15),
+            .color = dim(.bone, @intCast(@as(u32, 15) * alpha / 255)),
         } });
     }
 }
@@ -1402,7 +1432,7 @@ test "EVERY MILLISECOND OF THE BOOT SEQUENCE, NOT A SAMPLE OF THEM" {
 
     for ([_]Size{ .{ .w = 360, .h = 800 }, .{ .w = 1080, .h = 2400 } }) |size| {
         var ms: u32 = 0;
-        while (ms < boot_settle_end + 4000) : (ms += 1) {
+        while (ms < boot_wake_ms + boot_settle_end + 4000) : (ms += 1) {
             try draw(.{ .screen = .boot, .boot_ms = ms }, size, real, &out, gpa);
             try testing.expect(out.items.len > 0);
         }
@@ -1410,7 +1440,7 @@ test "EVERY MILLISECOND OF THE BOOT SEQUENCE, NOT A SAMPLE OF THEM" {
         // AND EVERY MILLISECOND OF THE EXIT, from every instant it could have been started at.
         // The last crash was an underflow in a phase boundary, and the exit adds four more.
         var began: u32 = 0;
-        while (began < boot_settle_end + 2000) : (began += 37) {
+        while (began < boot_wake_ms + boot_settle_end + 2000) : (began += 37) {
             var t: u32 = 0;
             while (t < boot_exit_ms + 200) : (t += 1) {
                 const state: State = .{ .screen = .boot, .boot_ms = began + t, .leaving_ms = began };
@@ -1427,12 +1457,12 @@ test "EVERY MILLISECOND OF THE BOOT SEQUENCE, NOT A SAMPLE OF THEM" {
 
     // A tap at 900ms is a tap DURING the terminal boot, and the invitation has not been extended
     // yet. It does nothing -- the game is still introducing itself.
-    const too_early = touch(.{ .screen = .boot, .boot_ms = 900 }, .{ .x = 10, .y = 10 }, .{ .w = 360, .h = 800 });
+    const too_early = touch(.{ .screen = .boot, .boot_ms = boot_wake_ms + 900 }, .{ .x = 10, .y = 10 }, .{ .w = 360, .h = 800 });
     try testing.expectEqual(Screen.boot, too_early.screen);
     try testing.expectEqual(@as(?u32, null), too_early.leaving_ms);
 
     // Once the sequence has finished, it begins the exit rather than jumping.
-    const offered = boot_settle_end + 10;
+    const offered = boot_wake_ms + boot_settle_end + 10;
     const tapped = touch(.{ .screen = .boot, .boot_ms = offered }, .{ .x = 10, .y = 10 }, .{ .w = 360, .h = 800 });
     try testing.expectEqual(Screen.boot, tapped.screen);
     try testing.expectEqual(@as(?u32, offered), tapped.leaving_ms);
@@ -1461,7 +1491,7 @@ test "THE BOOT SEQUENCE IS A PURE FUNCTION OF A MILLISECOND" {
     }.at;
 
     // EARLY: the terminal is up and the wordmark has not burned in.
-    try draw(.{ .screen = .boot, .boot_ms = 300 }, size, .{}, &out, gpa);
+    try draw(.{ .screen = .boot, .boot_ms = boot_wake_ms + 300 }, size, .{}, &out, gpa);
     try testing.expect(!wordmarkAt(out.items));
 
     // THE TERMINAL TYPES. At 300ms the first line is a PREFIX of itself -- a few characters in --
@@ -1481,7 +1511,7 @@ test "THE BOOT SEQUENCE IS A PURE FUNCTION OF A MILLISECOND" {
     try testing.expect(!saw_last_line);
 
     // And by the end of its slot, the line is complete and its verdict has landed.
-    try draw(.{ .screen = .boot, .boot_ms = boot_line_ms - 1 }, size, .{}, &out, gpa);
+    try draw(.{ .screen = .boot, .boot_ms = boot_wake_ms + boot_line_ms - 1 }, size, .{}, &out, gpa);
     var complete_first = false;
     for (out.items) |item| switch (item) {
         .text => |t| if (std.mem.eql(u8, t.text, boot_lines[0].text)) {
@@ -1492,7 +1522,7 @@ test "THE BOOT SEQUENCE IS A PURE FUNCTION OF A MILLISECOND" {
     try testing.expect(complete_first);
 
     // LATE IN THE TERMINAL: every line is up, including the one that is not OK.
-    try draw(.{ .screen = .boot, .boot_ms = boot_terminal_ms - 1 }, size, .{}, &out, gpa);
+    try draw(.{ .screen = .boot, .boot_ms = boot_wake_ms + boot_terminal_ms - 1 }, size, .{}, &out, gpa);
     var saw_contamination = false;
     for (out.items) |item| switch (item) {
         .text => |t| if (std.mem.eql(u8, t.text, boot_lines[3].text)) {
@@ -1503,7 +1533,7 @@ test "THE BOOT SEQUENCE IS A PURE FUNCTION OF A MILLISECOND" {
     try testing.expect(saw_contamination);
 
     // THE WORDMARK IS NOT ON THE TERMINAL SCREEN AT ALL.
-    try draw(.{ .screen = .boot, .boot_ms = boot_terminal_ms - 1 }, size, .{}, &out, gpa);
+    try draw(.{ .screen = .boot, .boot_ms = boot_wake_ms + boot_terminal_ms - 1 }, size, .{}, &out, gpa);
     try testing.expect(!wordmarkAt(out.items));
 
     // AND FROM THE FIRST MILLISECOND OF THE INFECTION IT IS THERE -- but barely lit. The letters
@@ -1520,23 +1550,23 @@ test "THE BOOT SEQUENCE IS A PURE FUNCTION OF A MILLISECOND" {
         }
     }.at;
 
-    try draw(.{ .screen = .boot, .boot_ms = boot_terminal_ms + 20 }, size, .{}, &out, gpa);
+    try draw(.{ .screen = .boot, .boot_ms = boot_wake_ms + boot_terminal_ms + 20 }, size, .{}, &out, gpa);
     try testing.expect(wordmarkAt(out.items));
     const early = burnAt(out.items);
 
-    try draw(.{ .screen = .boot, .boot_ms = boot_terminal_ms + @divTrunc(boot_infection_ms, 2) }, size, .{}, &out, gpa);
+    try draw(.{ .screen = .boot, .boot_ms = boot_wake_ms + boot_terminal_ms + @divTrunc(boot_infection_ms, 2) }, size, .{}, &out, gpa);
     const midway = burnAt(out.items);
 
     // The fire spreads. If it does not, the word is popping in rather than igniting.
     try testing.expect(early < midway);
 
     // And by the end of the infection it has fully caught: every letter is lit, at its own colour.
-    try draw(.{ .screen = .boot, .boot_ms = boot_infection_end }, size, .{}, &out, gpa);
+    try draw(.{ .screen = .boot, .boot_ms = boot_wake_ms + boot_infection_end }, size, .{}, &out, gpa);
     try testing.expect(wordmarkAt(out.items));
     try testing.expectEqual(@as(u8, 255), burnAt(out.items));
 
     // AT REST: the wordmark is up, the invitation is pulsing, and nothing is still loading.
-    try draw(.{ .screen = .boot, .boot_ms = boot_settle_end + 1200 }, size, .{}, &out, gpa);
+    try draw(.{ .screen = .boot, .boot_ms = boot_wake_ms + boot_settle_end + 1200 }, size, .{}, &out, gpa);
     try testing.expect(wordmarkAt(out.items));
 
     var saw_tap = false;
@@ -1554,8 +1584,8 @@ test "THE BOOT SEQUENCE IS A PURE FUNCTION OF A MILLISECOND" {
     // DETERMINISTIC. The same millisecond twice is the same frame twice, to the byte.
     var again: std.ArrayList(Draw) = .empty;
     defer again.deinit(gpa);
-    try draw(.{ .screen = .boot, .boot_ms = 2400 }, size, .{}, &out, gpa);
-    try draw(.{ .screen = .boot, .boot_ms = 2400 }, size, .{}, &again, gpa);
+    try draw(.{ .screen = .boot, .boot_ms = boot_wake_ms + 2400 }, size, .{}, &out, gpa);
+    try draw(.{ .screen = .boot, .boot_ms = boot_wake_ms + 2400 }, size, .{}, &again, gpa);
     try testing.expectEqual(out.items.len, again.items.len);
 
     // AND IT IS SKIPPABLE. A splash screen you cannot escape is being shown for someone else's
@@ -1566,16 +1596,16 @@ test "THE BOOT SEQUENCE IS A PURE FUNCTION OF A MILLISECOND" {
     // exists rather than the ending being done inside `touch`.
     // THE TAP DOES NOT WORK UNTIL THE SEQUENCE HAS FINISHED. "Tap to enter" is an invitation, and
     // it is not extended until the screen has said everything it has to say.
-    const too_soon = touch(.{ .screen = .boot, .boot_ms = 200 }, .{ .x = 100, .y = 100 }, size);
+    const too_soon = touch(.{ .screen = .boot, .boot_ms = boot_wake_ms + 200 }, .{ .x = 100, .y = 100 }, size);
     try testing.expectEqual(@as(?u32, null), too_soon.leaving_ms);
     try testing.expectEqual(Screen.boot, advance(too_soon, 900).screen);
 
-    const mid_infection = touch(.{ .screen = .boot, .boot_ms = boot_infection_end - 1 }, .{ .x = 100, .y = 100 }, size);
+    const mid_infection = touch(.{ .screen = .boot, .boot_ms = boot_wake_ms + boot_infection_end - 1 }, .{ .x = 100, .y = 100 }, size);
     try testing.expectEqual(@as(?u32, null), mid_infection.leaving_ms);
 
     // Once it IS offered, the tap begins the ending -- it does not jump. The four hundred
     // milliseconds after it are not touches, which is why `advance` exists at all.
-    const ready = boot_settle_end + 500;
+    const ready = boot_wake_ms + boot_settle_end + 500;
     const tapped = touch(.{ .screen = .boot, .boot_ms = ready }, .{ .x = 100, .y = 100 }, size);
     try testing.expectEqual(Screen.boot, tapped.screen);
     try testing.expectEqual(@as(?u32, ready), tapped.leaving_ms);
@@ -1707,28 +1737,91 @@ test "NOTHING IN THE BOOT SEQUENCE CUTS" {
 
     // THE TERMINAL OVERLAPS THE FIELD. Just after the infection starts, the last terminal line is
     // still on screen, dimming, while the spores come up underneath it.
-    try draw(.{ .screen = .boot, .boot_ms = boot_terminal_ms + 40 }, size, .{}, &out, gpa);
+    try draw(.{ .screen = .boot, .boot_ms = boot_wake_ms + boot_terminal_ms + 40 }, size, .{}, &out, gpa);
     try testing.expect(has.text(out.items, "PERIMETER")); // still there
     try testing.expect(has.sprite(out.items)); // and the field is already rising
 
     // ...and it is gone once the blend is over. A lingering terminal is its own bug.
-    try draw(.{ .screen = .boot, .boot_ms = boot_terminal_ms + boot_blend_ms + 50 }, size, .{}, &out, gpa);
+    try draw(.{ .screen = .boot, .boot_ms = boot_wake_ms + boot_terminal_ms + boot_blend_ms + 50 }, size, .{}, &out, gpa);
     try testing.expect(!has.text(out.items, "PERIMETER"));
 
     // THE BAR OVERLAPS THE TAGLINE. Containment does not simply stop failing: the bar is still on
     // screen, fading, while the tagline rises through it. This is the transition that was missing
     // entirely -- the screen used to sit frozen here and then blip to the title.
-    try draw(.{ .screen = .boot, .boot_ms = boot_infection_end + 60 }, size, .{}, &out, gpa);
+    try draw(.{ .screen = .boot, .boot_ms = boot_wake_ms + boot_infection_end + 60 }, size, .{}, &out, gpa);
     try testing.expect(has.text(out.items, "C O N T A I N M E N T"));
     try testing.expect(has.text(out.items, "L A S T   S T A N D"));
 
     // And by the end of the settle the bar has gone and the title is all that is left.
-    try draw(.{ .screen = .boot, .boot_ms = boot_settle_end + 10 }, size, .{}, &out, gpa);
+    try draw(.{ .screen = .boot, .boot_ms = boot_wake_ms + boot_settle_end + 10 }, size, .{}, &out, gpa);
     try testing.expect(!has.text(out.items, "C O N T A I N M E N T"));
     try testing.expect(has.text(out.items, "L A S T   S T A N D"));
 
     // The invitation waits for the screen to finish becoming itself, and only then arrives.
     try testing.expect(!has.text(out.items, "T A P"));
-    try draw(.{ .screen = .boot, .boot_ms = boot_settle_end + 900 }, size, .{}, &out, gpa);
+    try draw(.{ .screen = .boot, .boot_ms = boot_wake_ms + boot_settle_end + 900 }, size, .{}, &out, gpa);
     try testing.expect(has.text(out.items, "T A P"));
+}
+
+test "THE SCREEN WAKES BEFORE IT SPEAKS" {
+    // The sequence used to begin mid-thought: the app opened and a terminal was already typing,
+    // which is not a beginning, it is a jump cut into one.
+    //
+    // Now there is black, then the tube warms -- the scanlines rise out of nothing -- and it holds
+    // there for a beat, empty and humming, before the first character is typed. The pause is the
+    // point; it is the breath before the sentence.
+    const gpa = testing.allocator;
+    const size: Size = .{ .w = 360, .h = 800 };
+
+    var out: std.ArrayList(Draw) = .empty;
+    defer out.deinit(gpa);
+
+    const anyText = struct {
+        fn go(list: []const Draw) bool {
+            for (list) |item| switch (item) {
+                .text => return true,
+                else => {},
+            };
+            return false;
+        }
+    }.go;
+
+    // The scanline alpha, as the tube warms. It is the faintest thing on the screen, so it is
+    // measured rather than eyeballed.
+    const scanline = struct {
+        fn alpha(list: []const Draw) u32 {
+            for (list) |item| switch (item) {
+                // The scanlines are the full-width, one-pixel-high rows of bone.
+                .rect => |r| if (r.h == 1 and r.w > 100) return @intFromEnum(r.color) & 0xFF,
+                else => {},
+            };
+            return 0;
+        }
+    }.alpha;
+
+    // AT THE VERY FIRST MILLISECOND: black. Not a word on the screen, and the tube barely lit.
+    try draw(.{ .screen = .boot, .boot_ms = 0 }, size, .{}, &out, gpa);
+    try testing.expect(!anyText(out.items));
+    try testing.expectEqual(@as(u32, 0), scanline(out.items));
+
+    // PART WAY THROUGH THE FADE: the lines are coming up, and there is still nothing to read.
+    try draw(.{ .screen = .boot, .boot_ms = boot_fade_ms / 2 }, size, .{}, &out, gpa);
+    const half = scanline(out.items);
+    try testing.expect(half > 0);
+    try testing.expect(!anyText(out.items));
+
+    // AND THE HOLD: fully warm, and STILL silent. This beat is the whole reason the wake exists --
+    // without it the fade would run straight into the first line and the screen would never be
+    // simply on.
+    try draw(.{ .screen = .boot, .boot_ms = boot_wake_ms - 1 }, size, .{}, &out, gpa);
+    try testing.expect(scanline(out.items) > half);
+    try testing.expect(!anyText(out.items));
+
+    // THEN IT SPEAKS. The first character of the first line, and not before.
+    try draw(.{ .screen = .boot, .boot_ms = boot_wake_ms + 40 }, size, .{}, &out, gpa);
+    try testing.expect(anyText(out.items));
+
+    // And a tap during the wake does nothing. There is not yet anything to skip.
+    const early = touch(.{ .screen = .boot, .boot_ms = 100 }, .{ .x = 10, .y = 10 }, size);
+    try testing.expectEqual(@as(?u32, null), early.leaving_ms);
 }
