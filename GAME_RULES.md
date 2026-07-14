@@ -140,44 +140,41 @@ Contested ground (a tie) is held by **nobody**. We do not invent a winner to tid
 
 ---
 
-## 5a. GPS cadence — `src/gps.zig` (`Policy`)
+## 5a. GPS cadence & battery — `src/gps.zig`
 
-**Battery is a hard constraint, not an optimization (G5).** *"A game that drains a phone in three hours is not shipped."* This is the one criterion that can fail Phase 3 outright — combat can be retuned, cell size can be retuned, a phone that dies at lunchtime cannot be retuned into a game anyone plays.
+**Full detail: [MOBILE_ROADMAP.md](MOBILE_ROADMAP.md) §2.** Summary here.
 
-### The insight that makes it cheap
+**Battery is a hard constraint (G5)** and the one criterion that can fail Phase 3 outright.
 
-> **The game only cares where you are when you STOP.**
+### A correction, recorded
 
-An engagement needs you present across many ticks, with other people, in one room. Someone walking past a café is not *in* the café. Someone on a bus is not in a room at all — they are in transit, and **transit is not a place**.
+The first policy suspended reporting in a vehicle — *"moving means you are nowhere."* **That was a game-design decision wearing an engineer's coat.** A parked car is a place. A crowded carriage holds three real humans in one room. *"Is a vehicle a room?"* is the designer's question; **the battery does not get to answer it.** The policy now contains **no rule about vehicles**.
 
-So we don't track people. We notice when they **settle**:
+### The four levers (none of them are Zig)
 
-| | |
-|---|---|
-| **Moving** (in a vehicle) | GPS **off**. Report `nowhere`. You are not in a room. |
-| **Just stopped** | **One fix.** Quantize it. That is your room. |
-| **Still stopped** | GPS **off**. You haven't moved; your room hasn't changed. |
+Battery is radio duty cycle and wakeups, not CPU. **Being fast is worth nothing; being asleep is worth everything.**
 
-| Knob | Value | Note |
+1. **Fix only when the room might have changed** — the hardware motion trigger says so for free.
+2. **A geofence, offloaded to the sensor hub.** The app sleeps; the *chip* watches. **The biggest lever.**
+3. **Report only when the room CHANGES.** The server already keeps your last room if you say nothing.
+4. **No socket when quiet.** Quiet is the normal state. A push wakes us when the cell goes live.
+
+### The numbers (a simulated commuter's day)
+
+| | Dead v1.0 spec | Now |
 |---|---|---|
-| `base_seconds` | 30 | One tick. The floor. |
-| `max_seconds` | 900 (15 min) | Exponential backoff for someone who hasn't moved. |
-| `max_seconds_in_fight` | 120 | So walking out of a room registers promptly. |
-| `patience` | 2 | Unchanged fixes before we start doubling. |
-| `max_seconds_background` | 1800 | Lazier still when off-screen. |
+| GPS fixes/day | 17,280 | **304** |
+| Sends/day | 2,880 | **16** |
+| Socket open | all day | **12.5 min** |
 
-### The number
+**It proves the radio is no longer the problem — i.e. that the real measurement is worth taking.** It does not prove the phase passes. Only eight hours on real hardware does that (3.5).
 
-**101 GPS fixes in a simulated commuter's day. The dead v1.0 spec was 17,280 — a 171× reduction.**
-
-And note where it came from: **not** from optimizing the polling loop, but from *the game never wanting the data*. The thing that makes it safe is the thing that makes it cheap — again.
-
-**What that proves, and what it doesn't.** It proves the GPS radio is no longer the problem. It does **not** prove the phase passes. Two costs remain, and one is probably now the *bigger* one:
-
-1. **The persistent connection.** A report every 30 s is 2,880 sends a day, each waking the radio. Every chat app does this, so it's solved — but it is now plausibly a larger draw than the GPS, and it must be **measured, not assumed**.
-2. **The foreground service.** A floor cost of staying alive, with nothing to do with us.
-
-Only a real phone over eight real hours settles it (3.5). This test exists to say whether that measurement is **worth taking**. At 17,280 fixes it would not have been — the phase would already be over.
+| Knob | Value |
+|---|---|
+| `base_seconds` | 30 (one tick) |
+| `armed_seconds` | 3600 — a geofence is best-effort, so we look once an hour regardless |
+| `engaged_seconds` | 60 — so walking out of a fight registers |
+| `patience` | 2 unchanged fixes before we arm and sleep |
 
 ---
 
@@ -257,7 +254,7 @@ Each of these is *currently* implemented one way and could go another. The colum
 |---|---|---|---|
 | ~~O1~~ | ~~Exact hostile count, or a band?~~ | **DECIDED 2026-07-13: generic. No specific number of people.** The author's call. Implemented as the crowd band. | closed |
 | O2 | How often *should* a fight happen? | ~5/day, 5 min each — an accident of two constants, not a target | Phase 1 (cheap to retune forever, but the target should exist) |
-| O3 | Cell size (39 bits, ~38 m) | Chosen for squareness, not from data | **Phase 2 — but see O6, which removes the deadline** |
+| **O3** 🔴 | **Cell size (39 bits)** — **the most consequential unvalidated number in the project** | **THREE independent forces now say *coarser*: GPS jitter, privacy, and — newly — battery.** A 39-bit cell is 24 m in London, *inside* urban GPS error, and it **requires the GPS radio**. A 37-bit cell (48 m) can be served by free wifi/tower location. Against them, one force says finer: the fantasy — *"six people in this coffee shop"* only lands if the cell **is** the coffee shop. **Answerable in Phase 3, from GPS jitter measured in a real café. It should be.** | **Phase 3** |
 | **O6** | Make cell precision **server-directed** | Planned for Phase 2's handshake | Phase 2 |
 | **O8** | **Accessibility overlay** — a custom-rendered surface is invisible to TalkBack/VoiceOver | Owed. An ambient *text* game a blind player could otherwise play perfectly. | Before launch |
 | **O9** | **iOS graphics path** — EGL/GLES does not exist on iOS | **Answered, and it is not a rewrite.** `CAMetalLayer` + **ANGLE's Metal backend, statically linked**: the GLES renderer, shaders, and atlas stay **byte-identical**. Already hardware-proven on a foreign OS through ANGLE. Six bounded tasks, not a second graphics stack. **ANGLE would be a second sanctioned dependency (F1/F6) and needs its own written justification at the import site.** | Phase 5 |
