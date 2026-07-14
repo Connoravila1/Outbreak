@@ -127,6 +127,12 @@ pub const State = struct {
     /// no clock, by simply passing the millisecond you want to look at.
     boot_ms: u32 = 0,
 
+    /// When the player tapped to leave the boot screen. Null until they do.
+    ///
+    /// The tap does not end the boot screen; it BEGINS THE ENDING OF IT. `advance` finishes the
+    /// job once the animation has actually played.
+    leaving_ms: ?u32 = null,
+
     /// Chosen once, permanently. Null until they choose.
     faction: ?Faction = null,
     /// Highlighted but not yet confirmed.
@@ -222,6 +228,47 @@ pub fn conditionWord(hp: u16) []const u8 {
     return "Barely";
 }
 
+/// THE COLOUR BEHIND EVERYTHING, INCLUDING THE PARTS WE ARE NOT ALLOWED TO DRAW IN.
+///
+/// The status bar and the gesture bar sit OUTSIDE the safe area, and the safe area is the only
+/// place the layout may put anything. Left alone, those strips show whatever was beneath us --
+/// which is black, and which reads as two bars bracketing the app.
+///
+/// So the shell clears the ENTIRE surface to this colour first, and then draws the inset content
+/// on top. The background is edge to edge; only the content is inset. That is what "full bleed"
+/// means and it is the difference between an app and an app in a letterbox.
+pub fn background(state: State) Color {
+    return switch (state.screen) {
+        .boot => .char_deep,
+        else => .void_black,
+    };
+}
+
+/// How long the app takes to get out of its own way once the player taps.
+const boot_exit_ms: u32 = 420;
+
+/// CORE. Move time forward. Pure: the shell hands in the clock, exactly as it does for the tick.
+///
+/// This exists because an ANIMATION HAS TO FINISH. `touch` cannot both start the exit and end it
+/// -- the player taps once, and the four hundred milliseconds that follow are not touches. So the
+/// shell calls this every frame and the state machine advances itself.
+pub fn advance(state: State, ms: u32) State {
+    var next = state;
+
+    if (state.screen == .boot) {
+        next.boot_ms = ms;
+
+        if (state.leaving_ms) |began| {
+            if (ms -| began >= boot_exit_ms) {
+                next.screen = if (state.faction == null) .choose_side else .quiet;
+                next.leaving_ms = null;
+            }
+        }
+    }
+
+    return next;
+}
+
 // ============================================================================ input
 
 /// CORE. The player touched the screen. Returns the new state.
@@ -231,9 +278,12 @@ pub fn touch(state: State, at: Touch, size: Size) State {
     var next = state;
 
     switch (state.screen) {
-        // A tap ends the boot sequence, at ANY point in it. A splash screen you cannot skip is a
-        // splash screen that is being shown to you for someone else's benefit.
-        .boot => next.screen = if (state.faction == null) .choose_side else .quiet,
+        // A tap BEGINS THE END of the boot sequence, at any point in it -- a splash screen you
+        // cannot skip is being shown for someone else's benefit. It does not jump: the screen
+        // takes four hundred milliseconds to get out of the way, and `advance` finishes it.
+        .boot => if (state.leaving_ms == null) {
+            next.leaving_ms = state.boot_ms;
+        },
 
         .choose_side => {
             const human = factionButton(size, .human);
@@ -584,6 +634,20 @@ const spores = [_]Spore{
     .{ .fx = 520, .fy = 500, .r = 4, .hot = false },
 };
 
+/// A signed triangle wave, -amp..+amp. Integer only: the core has no floats and does not need any.
+///
+/// This is what makes the spores DRIFT. Each one is given its own period and its own phase offset,
+/// so the field wanders rather than marching -- and because it is a pure function of the clock, the
+/// motion is identical on every device and costs nothing to store.
+fn wander(ms: u32, period: u32, amp: i32, phase: u32) i32 {
+    const quarter = period / 4;
+    const t = (ms + phase) % period;
+
+    if (t < quarter) return @divTrunc(amp * @as(i32, @intCast(t)), @as(i32, @intCast(quarter)));
+    if (t < 3 * quarter) return amp - @divTrunc(2 * amp * @as(i32, @intCast(t - quarter)), @as(i32, @intCast(2 * quarter)));
+    return -amp + @divTrunc(amp * @as(i32, @intCast(t - 3 * quarter)), @as(i32, @intCast(quarter)));
+}
+
 /// A triangle wave, 0..255, integer only. The core has no floats and does not need them for this.
 fn pulse(ms: u32, period: u32, low: u32, high: u32) u8 {
     const half = period / 2;
@@ -602,7 +666,7 @@ fn drawBoot(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allocator)
     if (ms < boot_terminal_ms) {
         try drawBootTerminal(ms, size, out, gpa);
     } else {
-        try drawSpores(size, out, gpa);
+        try drawSpores(ms, size, out, gpa);
         try drawWordmark(ms, size, out, gpa);
 
         if (ms < boot_infection_end) {
@@ -613,6 +677,47 @@ fn drawBoot(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allocator)
     }
 
     try drawScanlines(size, out, gpa);
+
+    // THE WAY OUT. The player tapped, and the infection finishes what it started: the dark closes
+    // in from the edges, the wordmark flares, and the screen is taken. Four hundred milliseconds.
+    if (state.leaving_ms) |began| {
+        const since = ms -| began;
+        const t: i32 = @intCast(@min(@as(u32, 100), since * 100 / boot_exit_ms));
+
+        // The vignette collapses inward -- the same sprite as the infection wipe, run the rest of
+        // the way. It opened around the wordmark; now it closes over it.
+        const open = 260 - @divTrunc(t * 26, 10); // 260% of the screen down to nothing
+        const w = @divTrunc(size.w * open, 100);
+        const h = @divTrunc(size.h * open, 100);
+        try out.append(gpa, .{ .sprite = .{
+            .x = @divTrunc(size.w, 2) - @divTrunc(w, 2),
+            .y = @divTrunc(size.h, 2) - @divTrunc(h, 2),
+            .w = w,
+            .h = h,
+            .color = .char_deep,
+            .sprite = .vignette,
+        } });
+
+        // And a flare of blood through it as it goes -- brightest in the middle of the wipe, gone
+        // by the end, so the screen does not simply fade: it is TAKEN.
+        const flare: u8 = @intCast(if (t < 50) @as(u32, @intCast(t)) * 90 / 50 else @as(u32, @intCast(100 - t)) * 90 / 50);
+        const bloom = size.w * 2;
+        try out.append(gpa, .{ .sprite = .{
+            .x = @divTrunc(size.w, 2) - @divTrunc(bloom, 2),
+            .y = @divTrunc(size.h, 2) - @divTrunc(bloom, 2),
+            .w = bloom,
+            .h = bloom,
+            .color = dim(.blood, flare),
+            .sprite = .disc,
+        } });
+
+        // Then the last of it goes to black, so the next screen arrives out of nothing rather than
+        // being revealed behind a half-faded splash.
+        const close: u8 = @intCast(if (t > 60) (@as(u32, @intCast(t)) - 60) * 255 / 40 else 0);
+        if (close > 0) {
+            try out.append(gpa, .{ .rect = .{ .x = 0, .y = 0, .w = size.w, .h = size.h, .color = dim(.void_black, close) } });
+        }
+    }
 }
 
 fn drawBootTerminal(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
@@ -645,18 +750,26 @@ fn drawBootTerminal(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocat
 }
 
 /// The spore fields: a band at the top, and the same band mirrored at the bottom.
-fn drawSpores(size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
+fn drawSpores(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
     const band = @divTrunc(size.h * 34, 100);
 
-    for (spores) |s| {
-        const x = @divTrunc(size.w * s.fx, 1000);
-        const y = @divTrunc(band * s.fy, 1000);
+    for (spores, 0..) |s, i| {
+        const n: u32 = @intCast(i);
+
+        // THEY WANDER. Each spore gets its own period and its own phase, so the field drifts
+        // instead of marching in step. Slow -- these are spores in still air, not flies.
+        const drift_x = wander(ms, 7000 + n * 900, 10, n * 613);
+        const drift_y = wander(ms, 9000 + n * 700, 7, n * 971);
+
+        const x = @divTrunc(size.w * s.fx, 1000) + drift_x;
+        const y = @divTrunc(band * s.fy, 1000) + drift_y;
         const colour: Color = if (s.hot) .blood_glow else .blood_deep;
 
         // Top.
         try out.append(gpa, .{ .sprite = .{ .x = x - s.r, .y = y - s.r, .w = s.r * 2, .h = s.r * 2, .color = colour, .sprite = .disc } });
-        // And mirrored at the bottom, exactly as the mock flips the band.
-        try out.append(gpa, .{ .sprite = .{ .x = x - s.r, .y = size.h - y - s.r, .w = s.r * 2, .h = s.r * 2, .color = colour, .sprite = .disc } });
+        // And mirrored at the bottom, exactly as the mock flips the band -- but drifting the other
+        // way, so the two fields do not look like one field reflected.
+        try out.append(gpa, .{ .sprite = .{ .x = x - drift_x * 2 - s.r, .y = size.h - y - s.r, .w = s.r * 2, .h = s.r * 2, .color = colour, .sprite = .disc } });
     }
 
     // The two soft blooms that make it a field rather than a scatter of dots.
@@ -688,15 +801,23 @@ fn drawWordmark(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) 
     const mid_x = @divTrunc(size.w, 2);
     const mid_y = @divTrunc(size.h, 2);
 
-    // The bloom. This is the disc doing the work a `text-shadow` does in CSS -- and it is the same
-    // one draw call as everything else.
-    const glow = @divTrunc(size.w * 9, 10);
+    // THE HEARTBEAT. Once the sequence has settled, the bloom breathes -- it swells and dims on a
+    // slow cycle, so the title screen is alive rather than a still image with a spinner missing.
+    //
+    // It is the GLOW that pulses, not the letters. Scaling the type would resample the glyphs every
+    // frame and rebuild the atlas; scaling a disc costs one quad and looks like a pulse of light
+    // behind the word, which is what it is meant to be.
+    const idle = ms >= boot_glitch_end;
+    const breath: i32 = if (idle) wander(ms - boot_glitch_end, 2600, 40, 0) else 0;
+    const beat: u8 = if (idle) pulse(ms - boot_glitch_end, 2600, 44, 84) else 60;
+
+    const glow = @divTrunc(size.w * 9, 10) + breath;
     try out.append(gpa, .{ .sprite = .{
         .x = mid_x - @divTrunc(glow, 2),
         .y = mid_y - @divTrunc(glow, 2) - 10,
         .w = glow,
         .h = glow,
-        .color = dim(.blood, 60),
+        .color = dim(.blood, beat),
         .sprite = .disc,
     } });
 
@@ -717,8 +838,8 @@ fn drawWordmark(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) 
     // background, over and over. So do we -- except ours are literal rectangles of background
     // colour painted back over the letters, which is what that gradient was always describing.
     var x: i32 = mid_x - @divTrunc(size.w, 2);
-    while (x < mid_x + @divTrunc(size.w, 2)) : (x += 16) {
-        try out.append(gpa, .{ .rect = .{ .x = x, .y = top - 6, .w = 2, .h = 68, .color = dim(.char_deep, 140) } });
+    while (x < mid_x + @divTrunc(size.w, 2)) : (x += 18) {
+        try out.append(gpa, .{ .rect = .{ .x = x, .y = top - 8, .w = 2, .h = 84, .color = dim(.char_deep, 140) } });
     }
 }
 
@@ -786,7 +907,7 @@ fn drawBootTail(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) 
     if (since > 300) {
         try out.append(gpa, .{ .text = .{
             .x = mid_x,
-            .y = size.h - 52,
+            .y = size.h - 120,
             .text = "T A P   T O   E N T E R",
             .color = dim(.terminal, pulse(since, 1600, 90, 255)),
             .weight = .label,
@@ -1067,7 +1188,29 @@ test "EVERY MILLISECOND OF THE BOOT SEQUENCE, NOT A SAMPLE OF THEM" {
             try draw(.{ .screen = .boot, .boot_ms = ms }, size, &out, gpa);
             try testing.expect(out.items.len > 0);
         }
+
+        // AND EVERY MILLISECOND OF THE EXIT, from every instant it could have been started at.
+        // The last crash was an underflow in a phase boundary, and the exit adds four more.
+        var began: u32 = 0;
+        while (began < boot_glitch_end + 2000) : (began += 37) {
+            var t: u32 = 0;
+            while (t < boot_exit_ms + 200) : (t += 1) {
+                const state: State = .{ .screen = .boot, .boot_ms = began + t, .leaving_ms = began };
+                try draw(state, size, &out, gpa);
+                _ = advance(state, began + t);
+            }
+        }
     }
+
+    // The exit finishes. A screen that begins leaving and never leaves is a hang.
+    const leaving: State = .{ .screen = .boot, .boot_ms = 5000, .leaving_ms = 5000 };
+    try testing.expectEqual(Screen.boot, advance(leaving, 5000 + boot_exit_ms - 1).screen);
+    try testing.expectEqual(Screen.choose_side, advance(leaving, 5000 + boot_exit_ms).screen);
+
+    // And a tap begins the exit rather than jumping, so the animation has time to play.
+    const tapped = touch(.{ .screen = .boot, .boot_ms = 900 }, .{ .x = 10, .y = 10 }, .{ .w = 360, .h = 800 });
+    try testing.expectEqual(Screen.boot, tapped.screen);
+    try testing.expectEqual(@as(?u32, 900), tapped.leaving_ms);
 }
 
 test "THE BOOT SEQUENCE IS A PURE FUNCTION OF A MILLISECOND" {
@@ -1151,9 +1294,20 @@ test "THE BOOT SEQUENCE IS A PURE FUNCTION OF A MILLISECOND" {
 
     // AND IT IS SKIPPABLE. A splash screen you cannot escape is being shown for someone else's
     // benefit, not the player's.
+    //
+    // But a tap BEGINS the exit; it does not jump. The four hundred milliseconds after it are not
+    // touches, so `advance` is what finishes the job -- and that is the whole reason `advance`
+    // exists rather than the ending being done inside `touch`.
     const tapped = touch(.{ .screen = .boot, .boot_ms = 200 }, .{ .x = 100, .y = 100 }, size);
-    try testing.expectEqual(Screen.choose_side, tapped.screen);
+    try testing.expectEqual(Screen.boot, tapped.screen);
+    try testing.expectEqual(@as(?u32, 200), tapped.leaving_ms);
+    try testing.expectEqual(Screen.choose_side, advance(tapped, 200 + boot_exit_ms).screen);
 
-    const returning = touch(.{ .screen = .boot, .faction = .human }, .{ .x = 100, .y = 100 }, size);
-    try testing.expectEqual(Screen.quiet, returning.screen);
+    // A returning player, who has already chosen, lands back in the quiet.
+    const returning = touch(.{ .screen = .boot, .boot_ms = 200, .faction = .human }, .{ .x = 100, .y = 100 }, size);
+    try testing.expectEqual(Screen.quiet, advance(returning, 200 + boot_exit_ms).screen);
+
+    // Tapping twice does not restart the exit. The player is already leaving.
+    const twice = touch(tapped, .{ .x = 50, .y = 50 }, size);
+    try testing.expectEqual(@as(?u32, 200), twice.leaving_ms);
 }

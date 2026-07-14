@@ -646,11 +646,13 @@ fn render() void {
 
             // The clock, handed to the core as a plain number. This is the ONLY place the boot
             // animation gets its time, and the core cannot reach for it (B3).
-            if (host.state.screen == .boot) {
-                const now = Io.Timestamp.now(io, .awake);
-                const elapsed = now.nanoseconds - opened_at.nanoseconds;
-                host.state.boot_ms = @intCast(@divTrunc(@max(0, elapsed), std.time.ns_per_ms));
-            }
+            //
+            // `advance` is what lets an animation FINISH. A tap begins the exit; the four hundred
+            // milliseconds that follow are not touches, so the state machine moves itself.
+            const now = Io.Timestamp.now(io, .awake);
+            const elapsed = now.nanoseconds - opened_at.nanoseconds;
+            const ms: u32 = @intCast(@divTrunc(@max(0, elapsed), std.time.ns_per_ms));
+            host.state = ui.advance(host.state, ms);
 
             break :blk host.state;
         };
@@ -658,7 +660,7 @@ fn render() void {
         // IN DP. The interface has never heard of a phone and does not start now.
         ui.draw(state, sizeInDp(&surface), &draws, gpa) catch continue;
 
-        present(&surface, draws.items, &engine, &atlas, &verts, gpa);
+        present(&surface, draws.items, state, &engine, &atlas, &verts, gpa);
 
         // THE BOOT SEQUENCE IS THE ONE THING IN THIS GAME THAT ANIMATES, so it is the one thing
         // that redraws without being asked. It lasts about four seconds, once, at startup.
@@ -680,6 +682,7 @@ fn render() void {
 fn present(
     surface: *Surface,
     draws: []const ui.Draw,
+    state_for_background: ui.State,
     engine: *text.Engine,
     atlas: *atlas_mod.Atlas,
     verts: *std.ArrayList(quads.Vertex),
@@ -687,11 +690,24 @@ fn present(
 ) void {
     glViewport(0, 0, surface.width, surface.height);
 
-    // Black, always, and underneath everything. `ui.draw` emits a full-bleed background rect as
-    // its first command, so this is belt and braces -- but on the one frame where it is not, the
-    // alternative is showing whatever the compositor last left in this buffer, which could be the
-    // previous app. Costs nothing. Do it.
-    glClearColor(0, 0, 0, 1.0);
+    // ============================================================================
+    // FULL BLEED. THE BACKGROUND COVERS THE WHOLE PHONE; ONLY THE CONTENT IS INSET.
+    //
+    // The layout is confined to the safe area -- it must be, or the game's name renders under the
+    // clock. But the BACKGROUND is not layout. Clear only the safe area and the strips behind the
+    // status bar and the gesture bar keep whatever was under us, which is black, and the app sits
+    // in a letterbox with a bar top and bottom.
+    //
+    // So the entire surface is cleared to the colour the core says is behind everything, and the
+    // inset content is drawn on top of it. Edge to edge.
+    const behind = ui.background(state_for_background);
+    const packed_rgba = @intFromEnum(behind);
+    glClearColor(
+        @as(f32, @floatFromInt((packed_rgba >> 24) & 0xFF)) / 255.0,
+        @as(f32, @floatFromInt((packed_rgba >> 16) & 0xFF)) / 255.0,
+        @as(f32, @floatFromInt((packed_rgba >> 8) & 0xFF)) / 255.0,
+        1.0,
+    );
     glClear(GL_COLOR_BUFFER_BIT);
 
     const renderer = if (surface.renderer) |*r| r else {
