@@ -57,6 +57,9 @@ pub const transport = @import("transport.zig");
 /// SHELL. The C ABI: what the phone may ask the core to do, and nothing else (3.1, H1).
 pub const ffi = @import("ffi.zig");
 
+/// The interface, as a pure function: (told, touched) -> a list of things to draw (3.4).
+pub const ui = @import("ui.zig");
+
 comptime {
     // The forbidden-construct guard runs at compile time, so a distance function or a
     // coordinate in the core fails the build rather than the review. Referencing it here
@@ -88,4 +91,5 @@ test {
     _ = @import("transport.zig");
     _ = @import("transport_test.zig");
     _ = @import("ffi.zig");
+    _ = @import("ui.zig");
 }

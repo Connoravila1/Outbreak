@@ -173,6 +173,7 @@ const core = [_]Source{
     .{ .name = "session.zig", .text = @embedFile("session.zig") },
     .{ .name = "fuzz_test.zig", .text = @embedFile("fuzz_test.zig") },
     .{ .name = "accounts.zig", .text = @embedFile("accounts.zig") },
+    .{ .name = "ui.zig", .text = @embedFile("ui.zig") },
 };
 
 /// SHELL (B1, B3). Permitted to touch the outside world. Exactly one file here is
