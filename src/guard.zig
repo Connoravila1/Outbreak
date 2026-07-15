@@ -264,6 +264,12 @@ const shell = [_]Source{
     // in one expression. The phone is the only place in the system where a latitude ever exists,
     // and this is that place in its entirety.
     .{ .name = "location.zig", .text = @embedFile("location.zig") },
+    // SHELL. The server, as a runnable program: bind a socket, accept connections, beat a tick.
+    // Everything under it was built and tested in Phase 2; this only assembles it.
+    .{ .name = "server.zig", .text = @embedFile("server.zig") },
+    // SHELL. The client socket: room up, tell down. Sends a session token and a u64, never a
+    // coordinate -- the coordinate died in location.zig (H1, B6).
+    .{ .name = "client.zig", .text = @embedFile("client.zig") },
 };
 
 /// ============================================================================

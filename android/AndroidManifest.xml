@@ -40,14 +40,17 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
 
+    <!-- The socket (M.7). The client sends a session token and a u64 room id, and reads back a
+         fixed-size tell. It never sends a coordinate — the coordinate died in location.zig. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <!-- The GPS hardware is required. A phone without it cannot know which room it is in. -->
     <uses-feature android:name="android.hardware.location.gps" android:required="true" />
 
     <!--
         NOT YET REQUESTED, AND DELIBERATELY SO.
 
-        INTERNET is M.7. This build knows which room it is in and tells nobody, which is a
-        strange and rather pleasant state for a location game to be in.
+INTERNET carries the room to the server and the tell back. The coordinate is never on it.
     -->
 
     <!--

@@ -177,6 +177,32 @@ pub fn build(b: *std.Build) void {
     sim_step.dependOn(&run_sim.step);
 
     // ============================================================================
+    // THE SERVER, AS A RUNNABLE PROGRAM (M.7).
+    //
+    //     zig build server                       # 127.0.0.1:7777, 30s tick
+    //     zig build run-server -- --tick=3       # faster tick for a live test
+    //
+    // ReleaseSafe, ALWAYS -- it reads bytes off a socket from a phone it cannot verify, and the
+    // safety checks are what turn a corruption bug into a clean abort rather than an exploit. This
+    // is the "when the server binary lands, it is ReleaseSafe" decision, now landed.
+    const server = b.addExecutable(.{
+        .name = "outbreak-server",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/server.zig"),
+            .target = target,
+            .optimize = .ReleaseSafe,
+        }),
+    });
+    const install_server = b.addInstallArtifact(server, .{});
+    const server_step = b.step("server", "Build the server binary");
+    server_step.dependOn(&install_server.step);
+
+    const run_server = b.addRunArtifact(server);
+    if (b.args) |args| run_server.addArgs(args);
+    const run_server_step = b.step("run-server", "Build and run the server");
+    run_server_step.dependOn(&run_server.step);
+
+    // ============================================================================
     // THE ANDROID STATIC LIBRARY (3.1).
     //
     // The pure core, cross-compiled for a phone. This is the payoff the roadmap promised: "the

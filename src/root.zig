@@ -75,6 +75,9 @@ pub const quads = @import("render/quads.zig");
 /// ever exists, and this is that place (M.5, B6).
 pub const location = @import("location.zig");
 
+/// SHELL. The client socket: room up, tell down (M.7).
+pub const client = @import("client.zig");
+
 comptime {
     // The forbidden-construct guard runs at compile time, so a distance function or a
     // coordinate in the core fails the build rather than the review. Referencing it here
@@ -111,4 +114,5 @@ test {
     _ = @import("render/quads.zig");
     _ = @import("render/gles.zig");
     _ = @import("location.zig");
+    _ = @import("client.zig");
 }

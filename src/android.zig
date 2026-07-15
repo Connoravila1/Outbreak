@@ -49,6 +49,7 @@ const gles = @import("render/gles.zig");
 const text = @import("render/text.zig");
 const atlas_mod = @import("render/atlas.zig");
 const location = @import("location.zig");
+const client = @import("client.zig");
 const flags = @import("flags");
 
 const Io = std.Io;
@@ -602,6 +603,14 @@ fn render() void {
     var surface: Surface = .{};
     defer tearDown(&surface);
 
+    // The client socket, started once the player has chosen a side (M.7). It runs on its own thread
+    // -- a blocking socket cannot share the render thread -- and reports the room while it lives.
+    var client_thread: ?std.Thread = null;
+    defer if (client_thread) |t| {
+        client.stop();
+        t.join();
+    };
+
     _ = ALooper_prepare(0);
 
     // WHEN THE APP OPENED. The boot sequence is a pure function of the milliseconds since this
@@ -667,6 +676,21 @@ fn render() void {
         {
             host.mutex.lock(io) catch break;
             defer host.mutex.unlock(io);
+
+            // ONCE A SIDE IS CHOSEN, connect. The client needs the faction for its Hello, and there
+            // is nothing to report before the player is in the game.
+            if (client_thread == null) {
+                if (host.state.faction) |faction| {
+                    client_thread = std.Thread.spawn(.{}, client.run, .{ gpa, faction }) catch null;
+                }
+            }
+
+            // A TELL FROM THE SERVER. Folded into the interface exactly as a local `told` would be
+            // -- the phone renders what it is told and computes nothing (H1).
+            if (client.takeResponse()) |r| {
+                host.state = ui.told(host.state, r.hp, r.level, r.total_xp, r.damage, r.momentum, r.crowd);
+                dirty = true;
+            }
 
             if (host.pending_touch) |at| {
                 // The touch arrived in PHYSICAL pixels; the UI thinks in dp. Divide here, or a tap
