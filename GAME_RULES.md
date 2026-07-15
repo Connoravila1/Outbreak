@@ -155,7 +155,7 @@ The first policy suspended reporting in a vehicle — *"moving means you are now
 Battery is radio duty cycle and wakeups, not CPU. **Being fast is worth nothing; being asleep is worth everything.**
 
 1. **Fix only when the room might have changed** — the hardware motion trigger says so for free.
-2. **A geofence, offloaded to the sensor hub.** The app sleeps; the *chip* watches. **The biggest lever.**
+2. **Stay asleep until a coordinate-free signal says you moved rooms**, then take one fix. The significant-motion sensor (watched by the sensor hub while the app sleeps) and a shift in the room's Wi-Fi fingerprint. **The biggest lever.** *Not a geofence — that would need Google Play Services (a dependency we refuse) and have the OS store a raw coordinate (which the design forbids).*
 3. **Report only when the room CHANGES.** The server already keeps your last room if you say nothing.
 4. **No socket when quiet.** Quiet is the normal state. A push wakes us when the cell goes live.
 
@@ -172,7 +172,7 @@ Battery is radio duty cycle and wakeups, not CPU. **Being fast is worth nothing;
 | Knob | Value |
 |---|---|
 | `base_seconds` | 30 (one tick) |
-| `armed_seconds` | 3600 — a geofence is best-effort, so we look once an hour regardless |
+| `armed_seconds` | 3600 — the wake signal is best-effort (a motion trigger can be missed), so we look once an hour regardless |
 | `engaged_seconds` | 60 — so walking out of a fight registers |
 | `patience` | 2 unchanged fixes before we arm and sleep |
 

@@ -39,9 +39,16 @@
 //!    rooms, and the hardware significant-motion trigger tells us that for free.
 //!
 //! 2. THE WATCHING.
-//!    A GEOFENCE, armed around the room we are in, is offloaded to the sensor hub on modern
-//!    phones. The app sleeps; the CHIP watches; we are woken on the way out. This is how Life360
-//!    knows you left work without following you, and it is the single biggest lever there is.
+//!    Stay asleep until something free says the room might have changed, then take ONE fix. This
+//!    policy asks for a single boolean -- `moved_since_fix` -- and DOES NOT CARE what set it. That
+//!    is the whole trick, and it is the single biggest lever there is: the app is not running
+//!    between wakeups.
+//!
+//!    What sets that boolean is a SHELL decision, recorded in BATTERY.md (2026-07-14): the
+//!    hardware significant-motion sensor, and a change in the room's Wi-Fi radio fingerprint --
+//!    NOT a hardware geofence. A geofence needs Google Play Services (refused, F1) and would have
+//!    the OS persist a raw coordinate (forbidden, I7). Both wake sources are coordinate-free, and
+//!    this core never learns which one fired, or where.
 //!
 //! 3. THE SENDING.
 //!    We report only when the room CHANGES -- not every tick. The server already assumes this:
@@ -74,7 +81,7 @@ const assert = std.debug.assert;
 ///
 /// A HINT, never a fact. A phone in a pocket is jittery; a phone on a café table is perfectly
 /// still while its owner is not. The policy uses it to avoid fixes it would obviously waste, and
-/// lets the geofence do the real work.
+/// lets the wake signal do the real work.
 ///
 /// NOTE WHAT IS NOT HERE: any rule about vehicles. Whether a bus is a room is a question for the
 /// designer, not for the battery. See the header.
@@ -93,9 +100,10 @@ pub const Motion = enum {
 pub const Mode = enum {
     /// ASLEEP. No GPS, no socket, no wakeups.
     ///
-    /// A geofence is armed around the room we are in, and on a modern phone that geofence is
-    /// watched by the SENSOR HUB, not by us. The chip wakes the app when we leave. This is the
-    /// normal state of this game -- most of the time it says nothing at all -- and it is the
+    /// Something coordinate-free is watching for us to leave -- the significant-motion sensor, and
+    /// a shift in the room's Wi-Fi fingerprint (BATTERY.md, 2026-07-14), NOT a geofence. On a
+    /// modern phone the motion watch is the SENSOR HUB, not us; the app is woken when we move. This
+    /// is the normal state of this game -- most of the time it says nothing at all -- and it is the
     /// single biggest thing standing between us and a phone that dies at lunchtime.
     ///
     /// A push wakes us if our cell goes live while we are asleep.
@@ -134,15 +142,15 @@ pub const Policy = struct {
 
     /// How long we will sit armed and asleep before taking a confirming fix.
     ///
-    /// A geofence can be missed (the sensor hub is best-effort, not a promise), so we do not trust
-    /// it forever. Once an hour we look, even if nothing woke us.
+    /// A wake signal can be missed (the sensor hub is best-effort, not a promise; a Wi-Fi shift can
+    /// go unseen), so we do not trust it forever. Once an hour we look, even if nothing woke us.
     armed_seconds: u32 = 3600,
 
     /// While a fight is running. Not because the fight needs it -- the tick resolves whatever it
     /// is given -- but because a player who walks out should stop being in the room.
     engaged_seconds: u32 = 60,
 
-    /// Consecutive unchanged fixes before we trust the room enough to arm the geofence and sleep.
+    /// Consecutive unchanged fixes before we trust the room enough to arm the wake watch and sleep.
     patience: u8 = 2,
 
     pub const default: Policy = .{};
@@ -161,8 +169,10 @@ pub const Sense = struct {
     /// Consecutive fixes that landed in the SAME room. Not the room. Just: the same one.
     unchanged_fixes: u8 = 0,
 
-    /// The hardware significant-motion trigger fired, or the geofence did. The phone has
-    /// physically left where it was. Nearly free, and the most useful signal the OS gives us.
+    /// The phone physically left where it was. Set by the shell from a coordinate-free source --
+    /// the significant-motion sensor, or a change in the room's Wi-Fi fingerprint (BATTERY.md,
+    /// 2026-07-14). Nearly free, and the most useful signal the OS gives us. The policy does not
+    /// know, and must not care, which source set it.
     moved_since_fix: bool = false,
 
     /// We have never had a fix. We do not know which room we are in.
@@ -196,8 +206,8 @@ pub fn plan(sense: Sense, policy: Policy) Plan {
         };
     }
 
-    // The phone physically moved, or the geofence fired. Whatever we thought we knew about the
-    // room is now a guess. One fix.
+    // The phone physically moved -- the motion sensor fired, or the room's Wi-Fi fingerprint
+    // shifted. Whatever we thought we knew about the room is now a guess. One fix.
     if (sense.moved_since_fix) {
         return .{ .mode = .fix, .next_look_seconds = policy.base_seconds, .report = false, .connect = false };
     }
@@ -215,7 +225,7 @@ pub fn plan(sense: Sense, policy: Policy) Plan {
         };
     }
 
-    // ASLEEP. The room is settled, the geofence is armed, and the sensor hub is watching. We will
+    // ASLEEP. The room is settled, the wake watch is armed, and the sensor hub is watching. We will
     // not look again for an hour unless something wakes us -- and we hold no socket at all.
     if (sense.seconds_since_fix >= policy.armed_seconds) {
         return .{ .mode = .fix, .next_look_seconds = policy.base_seconds, .report = false, .connect = false };
@@ -235,8 +245,8 @@ const testing = std.testing;
 
 test "the normal state of this game is ASLEEP" {
     // The game says nothing almost all of the time. So almost all of the time the phone should be
-    // doing nothing: no GPS, no socket, no wakeups. A geofence, watched by the sensor hub, and an
-    // app that is not running.
+    // doing nothing: no GPS, no socket, no wakeups. A coordinate-free wake watch (the motion sensor
+    // hub, a Wi-Fi fingerprint), and an app that is not running.
     const p = plan(.{
         .motion = .still,
         .have_room = true,
@@ -309,15 +319,16 @@ test "moving wakes it immediately, however deeply it was asleep" {
         .have_room = true,
         .unchanged_fixes = 30,
         .seconds_since_fix = 5,
-        .moved_since_fix = true, // the geofence fired, or the phone was picked up
+        .moved_since_fix = true, // the motion sensor fired, or the Wi-Fi fingerprint shifted
     }, .default);
 
     try testing.expectEqual(Mode.fix, p.mode);
 }
 
-test "the geofence is trusted, but not forever" {
-    // The sensor hub is best-effort, not a promise. A missed geofence would leave a player
-    // reporting a room they left hours ago. So we look once an hour regardless.
+test "the wake signal is trusted, but not forever" {
+    // The wake signal is best-effort, not a promise -- a sensor-hub motion trigger can be missed,
+    // a Wi-Fi shift can go unseen. A missed wake would leave a player reporting a room they left
+    // hours ago. So we look once an hour regardless.
     const policy: Policy = .default;
 
     const asleep: Sense = .{
@@ -334,6 +345,13 @@ test "A COMMUTER'S DAY: what does the phone actually do?" {
     // The Phase 3 exit criterion, as far as a laptop can take it. "Eight hours of background play
     // costs less than 5% battery." Only real hardware settles that (3.5). What this can produce is
     // the INPUT to it: how often the radio wakes, and how often we send.
+    //
+    // CAVEAT (2026-07-14): the `moved_since_fix` model below is GEOFENCE-SHAPED -- it fires exactly
+    // at room boundaries and continuously in a vehicle. The wake signal we actually chose (the
+    // significant-motion sensor + a Wi-Fi fingerprint shift; BATTERY.md) fires on a coarser, less
+    // boundary-precise pattern, so the pinned counts WILL move once the real signal is wired. This
+    // test still earns its place: it proves the POLICY logic is sound and bounded. It does not
+    // prove the fix count -- M.9 does.
     const policy: Policy = .default;
 
     var fixes: u32 = 0;
@@ -357,7 +375,8 @@ test "A COMMUTER'S DAY: what does the phone actually do?" {
         };
 
         // The phone physically moves when they get up, get on the bus, walk to lunch. On the bus,
-        // the geofence fires constantly -- a moving vehicle leaves its room every few seconds.
+        // the wake signal fires constantly -- a moving vehicle leaves its room every few seconds.
+        // (Geofence-shaped model; see the CAVEAT above.)
         sense.moved_since_fix = switch (sense.motion) {
             .in_vehicle => true,
             .on_foot => tick % 4 == 0,
@@ -403,10 +422,10 @@ test "A COMMUTER'S DAY: what does the phone actually do?" {
     // TIMES IN A DAY, and holds a socket open for twelve and a half minutes of it. The rest of the
     // day it is not merely idle -- it is not running.
     //
-    // The fixes are dominated by the two bus rides, where the geofence fires continuously because
+    // The fixes are dominated by the two bus rides, where the wake signal fires continuously because
     // a moving vehicle leaves its room every few seconds. That is honest: if a vehicle IS a room,
     // then a commute genuinely costs GPS. It is also the number most sensitive to the cell size --
-    // see the header, and GAME_RULES O3.
+    // see the header, and GAME_RULES O3. (Geofence-shaped model; see the CAVEAT above.)
     try testing.expectEqual(@as(u32, 304), fixes);
     try testing.expectEqual(@as(u32, 16), sends);
     try testing.expectEqual(@as(u32, 25), connected_ticks);
