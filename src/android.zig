@@ -632,6 +632,38 @@ fn render() void {
     var dirty = true;
 
     while (host.running.load(.acquire)) {
+        // ---- THE GAME MOVES BEFORE THE SCREEN DOES.
+        //
+        // Connecting, and folding a tell from the server, happen at the TOP of the loop -- before
+        // the window is even looked at -- because neither needs a window and the game must not stop
+        // being played just because the screen is off.
+        //
+        // This was a bug: the fold used to live below the `window == null` check, so a fight that
+        // started while the screen was dark was never folded, and the phone came back from black
+        // still saying "Nothing here." while your hit points had quietly halved. You are meant to
+        // know when you are under attack. The state advances whether or not anyone is looking; the
+        // screen, when it wakes, shows where the game actually is.
+        {
+            host.mutex.lock(io) catch break;
+            defer host.mutex.unlock(io);
+
+            // Once a side is chosen, connect. The client needs the faction for its Hello, and there
+            // is nothing to report before the player is in the game.
+            if (client_thread == null) {
+                if (host.state.faction) |faction| {
+                    client_thread = std.Thread.spawn(.{}, client.run, .{ gpa, faction }) catch null;
+                }
+            }
+
+            // A TELL FROM THE SERVER, folded exactly as a local `told` would be -- the phone renders
+            // what it is told and computes nothing (H1). Marks the screen dirty so a WAKING phone
+            // repaints to the true state.
+            if (client.takeResponse()) |r| {
+                host.state = ui.told(host.state, r.hp, r.level, r.total_xp, r.damage, r.momentum, r.crowd);
+                dirty = true;
+            }
+        }
+
         // ---- has the window come or gone?
         var window: ?*ANativeWindow = null;
         var queue: ?*AInputQueue = null;
@@ -676,21 +708,6 @@ fn render() void {
         {
             host.mutex.lock(io) catch break;
             defer host.mutex.unlock(io);
-
-            // ONCE A SIDE IS CHOSEN, connect. The client needs the faction for its Hello, and there
-            // is nothing to report before the player is in the game.
-            if (client_thread == null) {
-                if (host.state.faction) |faction| {
-                    client_thread = std.Thread.spawn(.{}, client.run, .{ gpa, faction }) catch null;
-                }
-            }
-
-            // A TELL FROM THE SERVER. Folded into the interface exactly as a local `told` would be
-            // -- the phone renders what it is told and computes nothing (H1).
-            if (client.takeResponse()) |r| {
-                host.state = ui.told(host.state, r.hp, r.level, r.total_xp, r.damage, r.momentum, r.crowd);
-                dirty = true;
-            }
 
             if (host.pending_touch) |at| {
                 // The touch arrived in PHYSICAL pixels; the UI thinks in dp. Divide here, or a tap
