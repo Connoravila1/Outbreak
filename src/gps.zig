@@ -212,14 +212,16 @@ pub fn plan(sense: Sense, policy: Policy) Plan {
         return .{ .mode = .fix, .next_look_seconds = policy.base_seconds, .report = false, .connect = false };
     }
 
-    // We are not yet sure the room is settled. Keep looking, cheaply.
+    // We are not yet sure the room is settled -- still acquiring, or moving. Keep the receiver
+    // REGISTERED and let the OS duty-cycle it at the base interval. Do NOT pulse it off between
+    // fixes: removing and re-adding the request every tick churns re-acquisition and fights the
+    // platform's own GNSS scheduling. On real hardware that showed up as the request toggling on and
+    // off every 30s. The radio sleeps only once the room settles (below), not between confirming
+    // fixes.
     if (sense.unchanged_fixes < policy.patience) {
-        if (sense.seconds_since_fix >= policy.base_seconds) {
-            return .{ .mode = .fix, .next_look_seconds = policy.base_seconds, .report = false, .connect = false };
-        }
         return .{
-            .mode = .armed,
-            .next_look_seconds = policy.base_seconds - sense.seconds_since_fix,
+            .mode = .fix,
+            .next_look_seconds = policy.base_seconds,
             .report = sense.room_is_news,
             .connect = sense.room_is_news,
         };
@@ -414,7 +416,7 @@ test "A COMMUTER'S DAY: what does the phone actually do?" {
     //
     // Against the dead v1.0 spec: 17,280 GPS fixes a day, and a socket held open every second of
     // it.
-    // GPS FIXES:      304  (the dead v1.0 spec: 17,280)
+    // GPS FIXES:      309  (the dead v1.0 spec: 17,280)
     // SENDS:            16  (a report every tick would be: 2,880)
     // CONNECTED TICKS:  25  (a persistent socket would be: 2,880 -- all day, every day)
     //
@@ -426,7 +428,7 @@ test "A COMMUTER'S DAY: what does the phone actually do?" {
     // a moving vehicle leaves its room every few seconds. That is honest: if a vehicle IS a room,
     // then a commute genuinely costs GPS. It is also the number most sensitive to the cell size --
     // see the header, and GAME_RULES O3. (Geofence-shaped model; see the CAVEAT above.)
-    try testing.expectEqual(@as(u32, 304), fixes);
+    try testing.expectEqual(@as(u32, 309), fixes);
     try testing.expectEqual(@as(u32, 16), sends);
     try testing.expectEqual(@as(u32, 25), connected_ticks);
 }
