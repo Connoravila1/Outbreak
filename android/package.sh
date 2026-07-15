@@ -69,15 +69,15 @@ mkdir -p "$OUT/classes"
     -bootclasspath "$PLATFORM" \
     -classpath "$PLATFORM" \
     -d "$OUT/classes" \
-    "$ROOT/android/java/com/outbreak/game/Fix.java" 2>&1 | grep -v "bootstrap class path\|source value 8\|target value 8\|deprecat" || true
+    "$ROOT/android/java/com/outbreak/game/OutbreakService.java" 2>&1 | grep -v "bootstrap class path\|source value 8\|target value 8\|deprecat" || true
 
-test -f "$OUT/classes/com/outbreak/game/Fix.class" || { echo "no Fix.class; aborting"; exit 1; }
+test -f "$OUT/classes/com/outbreak/game/OutbreakService.class" || { echo "no OutbreakService.class; aborting"; exit 1; }
 
 echo "==> d8"
 "$BUILD_TOOLS/d8" \
     --lib "$PLATFORM" \
     --output "$OUT" \
-    "$OUT/classes/com/outbreak/game/Fix.class"
+    "$OUT/classes/com/outbreak/game/OutbreakService.class"
 
 test -f "$OUT/classes.dex" || { echo "no classes.dex; aborting"; exit 1; }
 

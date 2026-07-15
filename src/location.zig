@@ -59,8 +59,8 @@ extern fn jnishim_attach(vm: ?*anyopaque) ?*anyopaque;
 extern fn jnishim_detach(vm: ?*anyopaque) void;
 extern fn jnishim_has_location_permission(env: ?*anyopaque, activity: ?*anyopaque) c_int;
 extern fn jnishim_request_location_permission(env: ?*anyopaque, activity: ?*anyopaque) void;
-extern fn jnishim_start_location(env: ?*anyopaque, activity: ?*anyopaque, min_ms: c_int, min_metres: f32) c_int;
-extern fn jnishim_stop_location(env: ?*anyopaque, activity: ?*anyopaque) void;
+extern fn jnishim_start_service(env: ?*anyopaque, activity: ?*anyopaque, interval_ms: c_long) void;
+extern fn jnishim_stop_service(env: ?*anyopaque, activity: ?*anyopaque) void;
 
 // ============================================================================ what survives
 
@@ -96,16 +96,16 @@ var precision: std.atomic.Value(u8) = .init(spatial.default_precision);
 
 /// THE ONLY FUNCTION IN THIS PROJECT THAT WILL EVER HOLD A LATITUDE.
 ///
-/// Called by the JVM, from `Fix.onLocationChanged`, on the main thread. The name is not a choice:
-/// the JVM resolves `Java_com_outbreak_game_Fix_onLocation` by symbol out of the shared library,
-/// and it must match the class and method exactly.
+/// Called by the JVM, from `OutbreakService.onLocationChanged`, on the main thread. The name is not
+/// a choice: the JVM resolves `Java_com_outbreak_game_OutbreakService_onLocation` by symbol out of
+/// the shared library, and it must match the class and method exactly.
 ///
 /// It is exported from ZIG rather than from the C shim on purpose. The coordinate's first stop in
 /// our code is this function, and its last stop is this function.
 ///
 /// ONE EXPRESSION. `quantize` takes the floats, returns a `u64`, and the parameters go out of
 /// scope on the next line. There is no branch in which they are kept, and no field to keep them in.
-export fn Java_com_outbreak_game_Fix_onLocation(
+export fn Java_com_outbreak_game_OutbreakService_onLocation(
     env: ?*anyopaque,
     class: ?*anyopaque,
     latitude: f64,
@@ -209,36 +209,35 @@ pub fn requestPermission(radio: *Radio) void {
     jnishim_request_location_permission(env, radio.activity);
 }
 
-/// Turn the radio on. `min_seconds` and `min_metres` are the OS's own throttle, and they are the
-/// first line of the battery budget: the hardware does not wake for a fix we said we did not want.
+/// Start the foreground service, which owns the GPS subscription. `min_seconds` is the OS's own
+/// throttle and the first line of the battery budget: the hardware does not wake for a fix we said
+/// we did not want (G5).
 ///
-/// Failure is not an error. It is a phone that will not be telling us where it is, and `gps.zig`
-/// already knows how to have never had a fix (E4).
-pub fn start(radio: *Radio, min_seconds: u32, min_metres: f32) void {
+/// Failure is not an error -- a phone that will not tell us where it is, which `gps.zig` already
+/// knows how to handle (E4).
+pub fn start(radio: *Radio, min_seconds: u32) void {
     if (radio.running) return;
 
     const env = jnishim_attach(radio.vm) orelse return;
 
-    // EXPLICITLY u32. `@min(x, 3600)` knows its own bound, so Zig narrows the result to a type just
-    // wide enough to hold 3600 -- and then multiplying by a thousand overflows it. ReleaseSafe does
-    // not wrap: it panics, in `onResume`, on the phone.
-    //
-    // This is the second time this exact narrowing has bitten me (the first was the loading curve),
-    // and both times the code read as obviously fine. `@min` with a comptime bound is a type
-    // change wearing a clamp's clothes.
+    // EXPLICITLY u32 before the multiply. `@min(x, 3600)` knows its own bound, so Zig narrows the
+    // result to a type just wide enough to hold 3600 -- and then multiplying by a thousand
+    // overflows it. ReleaseSafe panics rather than wrapping. Second time this exact narrowing has
+    // bitten me; `@min` with a comptime bound is a type change wearing a clamp's clothes.
     const seconds: u32 = @min(min_seconds, 3600);
-    const ms: c_int = @intCast(seconds * 1000);
+    const ms: c_long = @intCast(@as(u64, seconds) * 1000);
 
-    radio.running = jnishim_start_location(env, radio.activity, ms, min_metres) != 0;
+    jnishim_start_service(env, radio.activity, ms);
+    radio.running = true;
 }
 
-/// Turn it off. THIS IS THE BATTERY BUDGET, in one function: a radio that is not on costs nothing,
-/// and being asleep is worth more than any amount of being fast (G5).
+/// Stop the service. The radio goes quiet and the notification disappears. THIS IS THE BATTERY
+/// BUDGET, in one function: a service that is not running costs nothing (G5).
 pub fn stop(radio: *Radio) void {
     if (!radio.running) return;
 
     const env = jnishim_attach(radio.vm) orelse return;
-    jnishim_stop_location(env, radio.activity);
+    jnishim_stop_service(env, radio.activity);
     radio.running = false;
 }
 

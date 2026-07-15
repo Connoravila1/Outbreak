@@ -29,16 +29,18 @@
 //! ============================================================================
 //! AND THE LINE THAT MATTERS MORE THAN ANY OTHER IN THIS FILE
 //!
-//! The GPS callback (M.5, not yet written) receives a latitude and a longitude. It must call
-//! `ffi.outbreak_quantize`, take the u64, and DROP THE FLOATS IN THE SAME FUNCTION.
-//!
-//! Not store them. Not cache them. Not log them. Not put them in a crash report.
+//! The GPS callback lives in `location.zig` (M.5). It receives a latitude and a longitude, calls
+//! the quantizer, takes the u64, and DROPS THE FLOATS IN THE SAME FUNCTION. Not stored, not cached,
+//! not logged, not put in a crash report.
 //!
 //! The server has no coordinate and structurally cannot leak one -- the build fails if a float
-//! appears in the core. THE PHONE IS THEREFORE THE ONLY PLACE A COORDINATE EVER EXISTS, which
-//! makes it the only place one can leak from. There is no guard that can enforce this for us on
-//! the platform side. It is discipline, and it is written here so that the next person to touch
-//! the location handler reads it before they touch it.
+//! appears in the core. THE PHONE IS THEREFORE THE ONLY PLACE A COORDINATE EVER EXISTS, which makes
+//! it the only place one can leak from. No guard can enforce this on the platform side. It is
+//! discipline, and it lives in the header of location.zig so the next person reads it first.
+//!
+//! There is one JVM class now (`OutbreakService`), because Android has no native location API and a
+//! backgrounded app needs a foreground service to keep the radio alive (M.6). It holds no
+//! coordinate. It is the whole of the Java in this project.
 
 const std = @import("std");
 const ui = @import("ui.zig");
@@ -358,19 +360,17 @@ fn armLocation() void {
     if (location.permitted(&radio)) {
         if (comptime flags.diagnostic) {
             // THE CAFE TEST WANTS FLICKER, FAST. At the production interval you would sit still for
-            // ten minutes to collect twenty samples; that is a fine way to save a battery and a
-            // terrible way to find out whether a stationary phone holds its room. So the diagnostic
-            // build fixes as fast as the GPS will give it -- every second, zero-metre threshold --
-            // and drift, if it is going to happen, happens in seconds.
+            // ten minutes to collect twenty samples -- a fine way to save a battery and a terrible
+            // way to find out whether a stationary phone holds its room. So the diagnostic build
+            // fixes as fast as the GPS will give it, every second, and drift shows up in seconds.
             //
-            // This is exactly why it is a diagnostic build and never a shipping one: one fix a
-            // second is the battery bug the production interval exists to prevent.
-            location.start(&radio, 1, 0.0);
+            // Exactly why it is a diagnostic build and never a shipping one: one fix a second is the
+            // battery bug the production interval exists to prevent.
+            location.start(&radio, 1);
         } else {
-            // The OS's own throttle, and the first line of the battery budget: the hardware does
-            // not wake for a fix we told it we did not want (G5). `gps.zig` owns the real policy;
-            // these are its floor.
-            location.start(&radio, 30, 20.0);
+            // The floor of the battery budget: the hardware does not wake for a fix we told it we
+            // did not want (G5). `gps.zig` owns the real policy; this is its minimum.
+            location.start(&radio, 30);
         }
         return;
     }

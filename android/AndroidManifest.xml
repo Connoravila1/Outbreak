@@ -34,6 +34,12 @@
     -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 
+    <!-- The foreground service that keeps the radio alive while backgrounded (M.6). The typed
+         permission is required on Android 14+; it declares WHY the service runs in the background,
+         and "location" is the honest answer. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+
     <!-- The GPS hardware is required. A phone without it cannot know which room it is in. -->
     <uses-feature android:name="android.hardware.location.gps" android:required="true" />
 
@@ -88,5 +94,14 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- The foreground service. `foregroundServiceType="location"` is what lets a backgrounded
+             app keep receiving fixes; without it Android throttles background location to a few per
+             hour and eventually kills the process. It is not exported: nothing outside the app may
+             start it. -->
+        <service
+            android:name=".OutbreakService"
+            android:exported="false"
+            android:foregroundServiceType="location" />
     </application>
 </manifest>

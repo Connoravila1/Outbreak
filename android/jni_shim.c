@@ -146,118 +146,87 @@ void jnishim_request_location_permission(JNIEnv *env, jobject activity) {
     (*env)->DeleteLocalRef(env, activity_class);
 }
 
-// ---------------------------------------------------------------- location
+// ---------------------------------------------------------------- the service
 
-/// The listener, held as a global ref for as long as it is registered.
+/// Start the foreground service, handing it the fix interval.
 ///
-/// This is a reference to a Java object with NO FIELDS. It cannot be holding a coordinate, because
-/// there is nowhere in it to put one. See `Fix.java`.
-static jobject g_listener = NULL;
-
-/// Start listening.
+/// The service, not the activity, owns the location subscription -- which is exactly what makes it
+/// survive the activity being backgrounded. We only start it here; it registers the listener,
+/// shows the notification, and delivers fixes to Zig on its own.
 ///
-/// `min_ms` and `min_metres` are the OS's own throttle, and they are the first line of the battery
-/// budget: the radio does not wake for a fix we told it we did not want. The policy in `gps.zig`
-/// decides the numbers; this only carries them across.
-///
-/// Returns 0 on failure, which is not an error -- it is a phone that will not be telling us where
-/// it is, and the policy already knows how to have never had a fix (E4).
-int jnishim_start_location(JNIEnv *env, jobject activity, int min_ms, float min_metres) {
-    if (g_listener != NULL) return 1; // already running
+/// `interval_ms` is chosen by `gps.zig`'s policy (or by the diagnostic build) and threaded through
+/// as an Intent extra.
+void jnishim_start_service(JNIEnv *env, jobject activity, long interval_ms) {
+    jclass activity_class = (*env)->GetObjectClass(env, activity);
 
-    jclass ctx = (*env)->FindClass(env, "android/content/Context");
-    jmethodID get_service = (*env)->GetMethodID(env, ctx, "getSystemService",
-                                                "(Ljava/lang/String;)Ljava/lang/Object;");
-    if (cleared(env, "getSystemService id") || get_service == NULL) return 0;
+    // Intent intent = new Intent(activity, OutbreakService.class);
+    jclass intent_class = (*env)->FindClass(env, "android/content/Intent");
+    if (cleared(env, "Intent class") || intent_class == NULL) return;
 
-    jstring name = (*env)->NewStringUTF(env, "location");
-    jobject manager = (*env)->CallObjectMethod(env, activity, get_service, name);
-    (*env)->DeleteLocalRef(env, name);
-    if (cleared(env, "getSystemService") || manager == NULL) return 0;
-
-    // OUR one Java class -- so `FindClass` is the WRONG TOOL, and this was the bug.
-    //
-    // In a native callback there are no Java frames on the stack, so `FindClass` falls back to the
-    // SYSTEM class loader, which has never heard of com.outbreak.game.Fix and never will. It throws
-    // ClassNotFoundException. And because the first version of `cleared()` swallowed exceptions in
-    // silence, the observable symptom was simply that the GPS did not work.
-    //
-    // The app's classes live in the ACTIVITY's class loader. So we go and ask it.
-    jclass fix_class = find_app_class(env, activity, "com.outbreak.game.Fix");
-    if (fix_class == NULL) {
-        LOG("could not load com.outbreak.game.Fix -- is classes.dex in the APK?");
-        return 0;
+    jclass service_class = find_app_class(env, activity, "com.outbreak.game.OutbreakService");
+    if (service_class == NULL) {
+        LOG("could not load OutbreakService -- is classes.dex in the APK?");
+        return;
     }
 
-    jmethodID init = (*env)->GetMethodID(env, fix_class, "<init>", "()V");
-    jobject listener = (*env)->NewObject(env, fix_class, init);
-    if (cleared(env, "new Fix") || listener == NULL) return 0;
+    jmethodID intent_ctor = (*env)->GetMethodID(
+        env, intent_class, "<init>", "(Landroid/content/Context;Ljava/lang/Class;)V");
+    jobject intent = (*env)->NewObject(env, intent_class, intent_ctor, activity, service_class);
+    if (cleared(env, "new Intent") || intent == NULL) return;
 
-    jclass manager_class = (*env)->GetObjectClass(env, manager);
-    jmethodID request = (*env)->GetMethodID(
-        env, manager_class, "requestLocationUpdates",
-        "(Ljava/lang/String;JFLandroid/location/LocationListener;Landroid/os/Looper;)V");
-    if (cleared(env, "requestLocationUpdates id") || request == NULL) return 0;
+    // intent.putExtra("interval_ms", (long) interval_ms);
+    jmethodID put_extra = (*env)->GetMethodID(
+        env, intent_class, "putExtra", "(Ljava/lang/String;J)Landroid/content/Intent;");
+    jstring key = (*env)->NewStringUTF(env, "interval_ms");
+    (*env)->CallObjectMethod(env, intent, put_extra, key, (jlong)interval_ms);
+    cleared(env, "putExtra");
+    (*env)->DeleteLocalRef(env, key);
 
-    // The MAIN looper: the callback lands on the OS thread, which is where Android wants it. The
-    // native method it calls does almost nothing -- quantize and store a u64 -- so the main thread
-    // is never held up (the one contract that matters, see android.zig).
-    jclass looper_class = (*env)->FindClass(env, "android/os/Looper");
-    jmethodID get_main = (*env)->GetStaticMethodID(env, looper_class, "getMainLooper",
-                                                   "()Landroid/os/Looper;");
-    jobject main_looper = (*env)->CallStaticObjectMethod(env, looper_class, get_main);
-
-    // GPS first. The fused provider is a Play Services dependency and this project does not take
-    // one lightly (F1); the platform provider is in the OS and needs nothing.
-    jstring provider = (*env)->NewStringUTF(env, "gps");
-
-    // NOTE the double. In C varargs a float is promoted to double, and JNI's vararg call reads it
-    // back as one -- passing a jfloat here is the classic way to hand the JVM a garbage distance.
-    (*env)->CallVoidMethod(env, manager, request, provider, (jlong)min_ms, (jdouble)min_metres,
-                           listener, main_looper);
-    int ok = !cleared(env, "requestLocationUpdates");
-
-    if (ok) {
-        g_listener = (*env)->NewGlobalRef(env, listener);
-        LOG("location updates requested: every %dms / %.0fm", min_ms, (double)min_metres);
+    // activity.startForegroundService(intent)  -- API 26+. This is the call that legally requires
+    // the service to call startForeground() within a few seconds, which OutbreakService does first.
+    jmethodID start_fgs = (*env)->GetMethodID(
+        env, activity_class, "startForegroundService", "(Landroid/content/Intent;)Landroid/content/ComponentName;");
+    if (cleared(env, "startForegroundService id") || start_fgs == NULL) {
+        // Pre-26 fallback: startService.
+        jmethodID start = (*env)->GetMethodID(
+            env, activity_class, "startService", "(Landroid/content/Intent;)Landroid/content/ComponentName;");
+        if (start != NULL) {
+            (*env)->CallObjectMethod(env, activity, start, intent);
+            cleared(env, "startService");
+        }
+    } else {
+        (*env)->CallObjectMethod(env, activity, start_fgs, intent);
+        cleared(env, "startForegroundService");
     }
 
-    (*env)->DeleteLocalRef(env, provider);
-    (*env)->DeleteLocalRef(env, main_looper);
-    (*env)->DeleteLocalRef(env, looper_class);
-    (*env)->DeleteLocalRef(env, manager_class);
-    (*env)->DeleteLocalRef(env, listener);
-    (*env)->DeleteLocalRef(env, fix_class);
-    (*env)->DeleteLocalRef(env, manager);
-    (*env)->DeleteLocalRef(env, ctx);
-
-    return ok;
+    (*env)->DeleteLocalRef(env, intent);
+    (*env)->DeleteLocalRef(env, service_class);
+    (*env)->DeleteLocalRef(env, intent_class);
+    (*env)->DeleteLocalRef(env, activity_class);
 }
 
-/// Stop listening. The radio goes quiet, which is the whole battery budget in one function.
-void jnishim_stop_location(JNIEnv *env, jobject activity) {
-    if (g_listener == NULL) return;
+/// Stop the service. The radio goes quiet and the notification disappears -- the whole battery
+/// budget in one call: a service that is not running costs nothing.
+void jnishim_stop_service(JNIEnv *env, jobject activity) {
+    jclass activity_class = (*env)->GetObjectClass(env, activity);
 
-    jclass ctx = (*env)->FindClass(env, "android/content/Context");
-    jmethodID get_service = (*env)->GetMethodID(env, ctx, "getSystemService",
-                                                "(Ljava/lang/String;)Ljava/lang/Object;");
-    jstring name = (*env)->NewStringUTF(env, "location");
-    jobject manager = (*env)->CallObjectMethod(env, activity, get_service, name);
-    (*env)->DeleteLocalRef(env, name);
+    jclass intent_class = (*env)->FindClass(env, "android/content/Intent");
+    jclass service_class = find_app_class(env, activity, "com.outbreak.game.OutbreakService");
+    if (service_class == NULL) return;
 
-    if (!cleared(env, "getSystemService (stop)") && manager != NULL) {
-        jclass manager_class = (*env)->GetObjectClass(env, manager);
-        jmethodID remove = (*env)->GetMethodID(env, manager_class, "removeUpdates",
-                                               "(Landroid/location/LocationListener;)V");
-        if (remove != NULL) {
-            (*env)->CallVoidMethod(env, manager, remove, g_listener);
-            cleared(env, "removeUpdates");
-        }
-        (*env)->DeleteLocalRef(env, manager_class);
-        (*env)->DeleteLocalRef(env, manager);
+    jmethodID intent_ctor = (*env)->GetMethodID(
+        env, intent_class, "<init>", "(Landroid/content/Context;Ljava/lang/Class;)V");
+    jobject intent = (*env)->NewObject(env, intent_class, intent_ctor, activity, service_class);
+
+    jmethodID stop = (*env)->GetMethodID(
+        env, activity_class, "stopService", "(Landroid/content/Intent;)Z");
+    if (!cleared(env, "stopService id") && stop != NULL) {
+        (*env)->CallBooleanMethod(env, activity, stop, intent);
+        cleared(env, "stopService");
     }
 
-    (*env)->DeleteGlobalRef(env, g_listener);
-    g_listener = NULL;
-    (*env)->DeleteLocalRef(env, ctx);
+    (*env)->DeleteLocalRef(env, intent);
+    (*env)->DeleteLocalRef(env, service_class);
+    (*env)->DeleteLocalRef(env, intent_class);
+    (*env)->DeleteLocalRef(env, activity_class);
 }
