@@ -205,6 +205,57 @@ void jnishim_start_service(JNIEnv *env, jobject activity, long interval_ms) {
     (*env)->DeleteLocalRef(env, activity_class);
 }
 
+/// Command the running service to resume (active != 0) or pause (active == 0) GPS updates.
+///
+/// This does NOT start or stop the service -- it delivers a fresh Intent to the one already
+/// running, carrying a boolean the service reads in onStartCommand. The foreground service stays
+/// up (M.6); only its GPS subscription is toggled. It is the governor's hand on the radio.
+///
+/// startForegroundService, not startService: the service is already foreground, and re-delivering
+/// through the same door the initial start used is idempotent (the service re-calls
+/// startForeground, which is harmless) and never trips the background-start restriction on O+.
+void jnishim_set_gps_active(JNIEnv *env, jobject activity, int active) {
+    jclass activity_class = (*env)->GetObjectClass(env, activity);
+
+    jclass intent_class = (*env)->FindClass(env, "android/content/Intent");
+    if (cleared(env, "Intent class (set_gps)") || intent_class == NULL) return;
+
+    jclass service_class = find_app_class(env, activity, "com.outbreak.game.OutbreakService");
+    if (service_class == NULL) return;
+
+    jmethodID intent_ctor = (*env)->GetMethodID(
+        env, intent_class, "<init>", "(Landroid/content/Context;Ljava/lang/Class;)V");
+    jobject intent = (*env)->NewObject(env, intent_class, intent_ctor, activity, service_class);
+    if (cleared(env, "new Intent (set_gps)") || intent == NULL) return;
+
+    // intent.putExtra("gps_active", (boolean) active)
+    jmethodID put_extra = (*env)->GetMethodID(
+        env, intent_class, "putExtra", "(Ljava/lang/String;Z)Landroid/content/Intent;");
+    jstring key = (*env)->NewStringUTF(env, "gps_active");
+    (*env)->CallObjectMethod(env, intent, put_extra, key, (jboolean)(active ? 1 : 0));
+    cleared(env, "putExtra gps_active");
+    (*env)->DeleteLocalRef(env, key);
+
+    jmethodID start_fgs = (*env)->GetMethodID(
+        env, activity_class, "startForegroundService", "(Landroid/content/Intent;)Landroid/content/ComponentName;");
+    if (cleared(env, "startForegroundService id (set_gps)") || start_fgs == NULL) {
+        jmethodID start = (*env)->GetMethodID(
+            env, activity_class, "startService", "(Landroid/content/Intent;)Landroid/content/ComponentName;");
+        if (start != NULL) {
+            (*env)->CallObjectMethod(env, activity, start, intent);
+            cleared(env, "startService (set_gps)");
+        }
+    } else {
+        (*env)->CallObjectMethod(env, activity, start_fgs, intent);
+        cleared(env, "startForegroundService (set_gps)");
+    }
+
+    (*env)->DeleteLocalRef(env, intent);
+    (*env)->DeleteLocalRef(env, service_class);
+    (*env)->DeleteLocalRef(env, intent_class);
+    (*env)->DeleteLocalRef(env, activity_class);
+}
+
 /// Stop the service. The radio goes quiet and the notification disappears -- the whole battery
 /// budget in one call: a service that is not running costs nothing.
 void jnishim_stop_service(JNIEnv *env, jobject activity) {

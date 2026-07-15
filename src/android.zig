@@ -50,6 +50,7 @@ const text = @import("render/text.zig");
 const atlas_mod = @import("render/atlas.zig");
 const location = @import("location.zig");
 const client = @import("client.zig");
+const governor = @import("governor.zig");
 const flags = @import("flags");
 
 const Io = std.Io;
@@ -379,6 +380,38 @@ fn armLocation() void {
     location.requestPermission(&radio);
 }
 
+/// THE GOVERNOR THREAD. Runs the pure GPS policy (`gps.zig`, via `governor.zig`) against the live
+/// radio, so the receiver sleeps once the room settles and wakes when the phone moves.
+///
+/// Its OWN thread, like the client's, because it must keep deciding while the app is backgrounded --
+/// which is the whole reason the foreground service exists (M.6). Every `base_seconds` it does
+/// microseconds of work and then sleeps in the kernel; waking to check a policy is nothing next to
+/// the GPS fix it is deciding whether to take (G5). It is not a spin -- `idle` sleeps off the CPU.
+///
+/// IT NEVER SEES A COORDINATE. It reads integer counts from `location.read()`, asks the pure policy,
+/// and turns the radio on or off. The floats died in `location.zig` long before this loop runs.
+///
+/// `in_fight` is left false until the socket lifecycle is wired (Lever 4 / M.8): combat still
+/// resolves server-side, the governor simply does not yet look more often while a fight is on.
+fn governorLoop() void {
+    var threaded: Io.Threaded = .init(std.heap.smp_allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var gov: governor.Governor = .{};
+    const cadence_ms: i64 = @as(i64, gov.policy.base_seconds) * 1000;
+
+    while (host.running.load(.acquire)) {
+        const reading = location.read();
+        const moved = location.takeMoved();
+
+        const action = gov.step(reading, gov.policy.base_seconds, moved, false);
+        location.setGpsActive(&radio, action.gps_on);
+
+        idle(io, cadence_ms);
+    }
+}
+
 fn onPause(_: *ANativeActivity) callconv(.c) void {
     // Not visible. We stop drawing entirely -- a game that renders to a screen nobody is looking
     // at is a game that drains a battery for nothing (G5).
@@ -610,6 +643,14 @@ fn render() void {
         client.stop();
         t.join();
     };
+
+    // The governor: it sleeps the GPS while the room is settled and wakes it on movement. Its own
+    // thread so it keeps deciding in the background (M.6). NOT in a diagnostic build -- the cafe
+    // test wants GPS running flat out, and a governor that kept switching it off would defeat it.
+    // It watches `host.running` and returns when the app is torn down, so the defer just joins it.
+    const governor_thread: ?std.Thread =
+        if (comptime flags.diagnostic) null else std.Thread.spawn(.{}, governorLoop, .{}) catch null;
+    defer if (governor_thread) |t| t.join();
 
     _ = ALooper_prepare(0);
 

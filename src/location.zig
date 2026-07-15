@@ -61,6 +61,10 @@ extern fn jnishim_has_location_permission(env: ?*anyopaque, activity: ?*anyopaqu
 extern fn jnishim_request_location_permission(env: ?*anyopaque, activity: ?*anyopaque) void;
 extern fn jnishim_start_service(env: ?*anyopaque, activity: ?*anyopaque, interval_ms: c_long) void;
 extern fn jnishim_stop_service(env: ?*anyopaque, activity: ?*anyopaque) void;
+/// Command the ALREADY-RUNNING service to resume or pause GPS updates without tearing it down. The
+/// foreground service stays alive (that is what keeps us alive in the background, M.6); only the
+/// GPS subscription is toggled. This is how the governor sleeps the radio while the room is settled.
+extern fn jnishim_set_gps_active(env: ?*anyopaque, activity: ?*anyopaque, active: c_int) void;
 
 // ============================================================================ what survives
 
@@ -86,6 +90,15 @@ var accuracy_metres: std.atomic.Value(u32) = .init(0);
 /// the other side. Counts, not places.
 var fix_count: std.atomic.Value(u32) = .init(0);
 var room_changes: std.atomic.Value(u32) = .init(0);
+
+/// THE WAKE SIGNAL. Set by the significant-motion sensor -- the phone physically moved. It carries
+/// NO LOCATION: it is a hardware "you moved" interrupt from the sensor hub, not a fix (BATTERY.md,
+/// 2026-07-14). The governor reads and clears it with `takeMoved`, and it is the one thing that
+/// wakes the GPS back up once the room has settled and the radio has gone to sleep.
+///
+/// A geofence would have done this job too, and been rejected: it needs Google Play Services (F1)
+/// and would have the OS persist a raw coordinate (I7). A motion interrupt persists nothing.
+var moved: std.atomic.Value(bool) = .init(false);
 
 /// The precision the server told us to quantize at. Until the socket lands (M.7) it is the
 /// default, and the server is authoritative over it precisely so that changing the cell size is a
@@ -140,6 +153,21 @@ export fn Java_com_outbreak_game_OutbreakService_onLocation(
     diagnose(id, metres);
 }
 
+/// THE WAKE. Called by the JVM from `OutbreakService`'s significant-motion trigger. It sets one
+/// bit and returns -- the phone moved, the governor should look. Like `onLocation`, the JVM
+/// resolves it by symbol, so the name is the class and method exactly.
+///
+/// It carries NO ARGUMENTS and no location: a significant-motion trigger is a hardware "you moved"
+/// event with nothing attached. There is nothing here to leak, because there is nothing here.
+export fn Java_com_outbreak_game_OutbreakService_onMotion(
+    env: ?*anyopaque,
+    class: ?*anyopaque,
+) callconv(.c) void {
+    _ = env;
+    _ = class;
+    moved.store(true, .release);
+}
+
 /// Print the room. Never the place.
 ///
 /// Compiled away entirely off Android -- `__android_log_write` is bionic's, and the test binary
@@ -178,6 +206,12 @@ pub fn read() Reading {
         .fixes = fix_count.load(.monotonic),
         .room_changes = room_changes.load(.monotonic),
     };
+}
+
+/// Read the wake flag and clear it. True if the significant-motion sensor fired since the last
+/// call. The governor calls this once a cycle; clearing it means one trigger is one wake.
+pub fn takeMoved() bool {
+    return moved.swap(false, .acq_rel);
 }
 
 /// The server is authoritative over the cell size (D1). Called when the welcome lands (M.7).
@@ -239,6 +273,19 @@ pub fn stop(radio: *Radio) void {
     const env = jnishim_attach(radio.vm) orelse return;
     jnishim_stop_service(env, radio.activity);
     radio.running = false;
+}
+
+/// Resume or pause GPS fixes WITHOUT stopping the service. This is the governor's hand on the
+/// radio: the foreground service stays up (so we survive backgrounding, M.6), and only the GPS
+/// subscription comes and goes. `active = false` while the room is settled is the whole battery
+/// win -- a receiver that is not running costs nothing (G5).
+///
+/// A no-op if the service was never started -- there is nothing to command.
+pub fn setGpsActive(radio: *Radio, active: bool) void {
+    if (!radio.running) return;
+
+    const env = jnishim_attach(radio.vm) orelse return;
+    jnishim_set_gps_active(env, radio.activity, @intFromBool(active));
 }
 
 const testing = std.testing;

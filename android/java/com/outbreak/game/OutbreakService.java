@@ -7,6 +7,10 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.hardware.Sensor;
+import android.hardware.SensorManager;
+import android.hardware.TriggerEvent;
+import android.hardware.TriggerEventListener;
 import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
@@ -17,10 +21,13 @@ import android.os.Looper;
 /**
  * THE ONLY JAVA IN THIS PROJECT. Read this before you add a second line to it.
  *
- * It is a foreground service AND the location listener, in one class, and that is deliberate:
+ * It is a foreground service, the location listener, AND the significant-motion trigger, in one
+ * class, and that is deliberate:
  *
  *   - Android has no native location API. Every route to a live fix runs through a Java callback
- *     object, which needs a class, which needs a dex. JNI cannot conjure one.
+ *     object, which needs a class, which needs a dex. JNI cannot conjure one. The same is true of
+ *     the significant-motion sensor: its trigger is a Java callback object, so it lives here too
+ *     rather than earning a second class.
  *
  *   - Background location needs a foreground service. Without one, Android throttles a backgrounded
  *     app's location to a few fixes an hour and eventually kills it. An ambient game whose whole
@@ -29,6 +36,17 @@ import android.os.Looper;
  * Folding the listener INTO the service is not just tidiness. It is correctness: the listener is
  * owned by the foreground service, not by the activity, so it survives the activity being
  * backgrounded or destroyed. That is the entire point of M.6.
+ *
+ * ============================================================================
+ * THE RADIO SLEEPS WHEN THE ROOM IS SETTLED (BATTERY.md, 2026-07-14).
+ *
+ * This service does not poll GPS on a timer. The pure policy in gps.zig decides when the radio runs
+ * and a Zig "governor" enacts it, toggling this service's GPS subscription through onStartCommand
+ * (the `gps_active` extra). When the room is settled the governor pauses GPS entirely; the
+ * significant-motion trigger below is what wakes it again -- a sensor-hub interrupt that fires when
+ * the phone physically moves and carries NO LOCATION. It calls onMotion(), which sets one bit in
+ * Zig. That bit, not a geofence, is the wake signal. (A geofence was rejected: it needs Google Play
+ * Services, which this project refuses, and would have the OS persist a raw coordinate.)
  *
  * ============================================================================
  * IT HOLDS NO COORDINATE. THAT IS THE DESIGN.
@@ -64,13 +82,35 @@ public final class OutbreakService extends Service implements LocationListener {
     /** Implemented in Zig. Quantizes, and the floats are dead when it returns. */
     private static native void onLocation(double latitude, double longitude, float accuracyMetres);
 
+    /** Implemented in Zig. The significant-motion sensor fired; sets one bit and returns. No args,
+        no location -- a "you moved" interrupt has nothing attached. */
+    private static native void onMotion();
+
     private static final String CHANNEL_ID = "outbreak_location";
     private static final int NOTIFICATION_ID = 1;
 
     /** Milliseconds between fixes, handed in by the shell via the start Intent. */
     public static final String EXTRA_INTERVAL_MS = "interval_ms";
 
+    /** A command from the governor: resume (true) or pause (false) GPS updates. Its PRESENCE marks
+        an Intent as a command rather than the initial start. */
+    public static final String EXTRA_GPS_ACTIVE = "gps_active";
+
     private LocationManager manager;
+
+    /** The significant-motion sensor and its one-shot trigger. Null on a device that has no such
+        sensor -- in which case the radio still sleeps and wakes on the governor's hourly re-check,
+        just without the prompt motion wake. */
+    private SensorManager sensors;
+    private Sensor significantMotion;
+    private TriggerEventListener motionTrigger;
+
+    /** Whether GPS updates are currently subscribed. The governor toggles this; we keep it so a
+        redundant command is a no-op rather than a second subscription. */
+    private boolean gpsActive = false;
+
+    /** The GPS minimum interval, kept from the initial start so a later resume uses the same value. */
+    private long intervalMs = 30000;
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
@@ -80,26 +120,64 @@ public final class OutbreakService extends Service implements LocationListener {
 
         if (manager == null) {
             manager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
+            sensors = (SensorManager) getSystemService(Context.SENSOR_SERVICE);
+            significantMotion = (sensors == null) ? null
+                    : sensors.getDefaultSensor(Sensor.TYPE_SIGNIFICANT_MOTION);
+            motionTrigger = new TriggerEventListener() {
+                @Override public void onTrigger(TriggerEvent event) {
+                    // The phone physically moved. Tell Zig, then RE-ARM: significant motion is a
+                    // one-shot sensor -- it disables itself the instant it fires.
+                    onMotion();
+                    armMotion();
+                }
+            };
+        }
 
-            long intervalMs = 30000;
+        // TWO KINDS OF Intent land here. A command from the governor carries `gps_active` and only
+        // toggles the radio. The initial start (no such extra) sets the interval, turns GPS on to
+        // find the room, and arms the motion trigger.
+        if (intent != null && intent.hasExtra(EXTRA_GPS_ACTIVE)) {
+            setGps(intent.getBooleanExtra(EXTRA_GPS_ACTIVE, true));
+        } else {
             if (intent != null) intervalMs = intent.getLongExtra(EXTRA_INTERVAL_MS, 30000);
+            setGps(true);
+            armMotion();
+        }
 
-            try {
+        // START_STICKY: if the system kills us under memory pressure, restart us when it can. An
+        // ambient game wants to come back on its own.
+        return START_STICKY;
+    }
+
+    /** Resume or pause GPS updates. Idempotent -- asking for the state we are already in does
+        nothing, so a repeated command never opens a second subscription. */
+    private void setGps(boolean active) {
+        if (manager == null || active == gpsActive) return;
+        try {
+            if (active) {
                 // GPS provider, not fused: fused is a Play Services dependency this project does not
                 // take lightly (F1); the platform provider is in the OS and needs nothing. The
                 // callback lands on the main looper, does almost nothing (quantize + store a u64),
                 // and returns -- so the main thread is never held up.
                 manager.requestLocationUpdates(
                         LocationManager.GPS_PROVIDER, intervalMs, 0.0f, this, Looper.getMainLooper());
-            } catch (SecurityException e) {
-                // Permission was revoked between the check and here. Not an error: a phone that will
-                // not tell us where it is, which the policy already knows how to handle.
+            } else {
+                // THE BATTERY WIN, in one call: a receiver that is not running costs nothing (G5).
+                manager.removeUpdates(this);
             }
+            gpsActive = active;
+        } catch (SecurityException e) {
+            // Permission was revoked between the check and here. Not an error: a phone that will
+            // not tell us where it is, which the policy already knows how to handle.
         }
+    }
 
-        // START_STICKY: if the system kills us under memory pressure, restart us when it can. An
-        // ambient game wants to come back on its own.
-        return START_STICKY;
+    /** Arm the one-shot significant-motion trigger, if the device has one. A no-op otherwise, and
+        the phone falls back to the governor's hourly re-check for movement. */
+    private void armMotion() {
+        if (sensors != null && significantMotion != null) {
+            sensors.requestTriggerSensor(motionTrigger, significantMotion);
+        }
     }
 
     @Override
@@ -111,6 +189,9 @@ public final class OutbreakService extends Service implements LocationListener {
     @Override
     public void onDestroy() {
         if (manager != null) manager.removeUpdates(this);
+        if (sensors != null && significantMotion != null && motionTrigger != null) {
+            sensors.cancelTriggerSensor(motionTrigger, significantMotion);
+        }
         super.onDestroy();
     }
 
