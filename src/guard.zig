@@ -270,6 +270,11 @@ const shell = [_]Source{
     // SHELL. The client socket: room up, tell down. Sends a session token and a u64, never a
     // coordinate -- the coordinate died in location.zig (H1, B6).
     .{ .name = "client.zig", .text = @embedFile("client.zig") },
+    // SHELL. Governs the GPS radio by the pure policy in gps.zig: builds a Sense from live counts
+    // and seconds, calls plan(), turns the radio on and off. It touches the clock and the radio, so
+    // it is shell -- but it holds no coordinate (it works in counters, not places), and the guard
+    // pins the f64 out of it just the same.
+    .{ .name = "governor.zig", .text = @embedFile("governor.zig") },
 };
 
 /// ============================================================================

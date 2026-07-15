@@ -78,6 +78,9 @@ pub const location = @import("location.zig");
 /// SHELL. The client socket: room up, tell down (M.7).
 pub const client = @import("client.zig");
 
+/// SHELL. Governs the GPS radio by the pure policy in `gps.zig`.
+pub const governor = @import("governor.zig");
+
 comptime {
     // The forbidden-construct guard runs at compile time, so a distance function or a
     // coordinate in the core fails the build rather than the review. Referencing it here
@@ -115,4 +118,5 @@ test {
     _ = @import("render/gles.zig");
     _ = @import("location.zig");
     _ = @import("client.zig");
+    _ = @import("governor.zig");
 }
