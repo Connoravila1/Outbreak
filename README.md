@@ -8,7 +8,9 @@ A mobile game where you choose a faction, human or zombie, held permanent for th
 
 **Phase 0 — the core, in isolation.** No network, no phone, no map, no server. The game currently runs entirely as a test suite and a simulation.
 
-Phase 0 is complete. Its exit criterion — ten thousand synthetic players through a simulated week, any tick replaying deterministically, zero leaks — is met.
+Phase 0 is complete (10k synthetic players through a simulated week, deterministic replay, zero leaks). Phases 1–2 are done: the world persists to disk and restarts identically, and byte- and time-identical silence is proven over a real TCP socket.
+
+**Phase 3 (the phone) is well underway, and running on real hardware.** The Android host, the GLES renderer, the glyph engine, the boot sequence, GPS, a background foreground-service, and the client socket all work on a device. A real GPS fix becomes a room and the coordinate dies in one function; the phone connects to the server, reports its room, and receives the tell; and networked combat resolves across the wire. The cell size (O3) has been measured in the field. Still owed for the phase: the 8-hour battery number on real hardware, combat push notifications, and a real registration flow.
 
 ## Build
 
