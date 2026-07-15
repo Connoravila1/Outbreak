@@ -53,15 +53,18 @@ echo "==> linking liboutbreak.so"
 
 test -f "$OUT/lib/arm64-v8a/liboutbreak.so" || { echo "no .so; aborting"; exit 1; }
 
-# ---- 1b. THE ONE JAVA CLASS.
+# ---- 1b. THE JAVA. Still one source file, one top-level class.
 #
 # Android has no native location API -- there is no LocationManager in the NDK and there never has
 # been. Every route to a live fix runs through a Java callback object, which needs a class, which
-# needs a dex. So there is exactly one, it has no fields, and it forwards two doubles to Zig.
+# needs a dex. So there is one source file: OutbreakService.java.
 #
-# javac -> .class -> d8 -> classes.dex. Two commands. This is the entire Java toolchain in this
-# project, and it is why there is no Gradle.
-echo "==> compiling the one Java class"
+# javac -> .class -> d8 -> classes.dex. NOTE: one source file can compile to MORE than one .class --
+# an anonymous listener (the significant-motion trigger) becomes OutbreakService$1.class. d8 must
+# dex ALL of them, or the missing inner class is a NoClassDefFoundError the moment the service runs.
+# It compiles and dexes clean either way; the crash is at class-load time on the phone. (This bit
+# once: d8 was handed only OutbreakService.class by name.)
+echo "==> compiling the Java"
 rm -rf "$OUT/classes"
 mkdir -p "$OUT/classes"
 "$JAVA_HOME/bin/javac" \
@@ -73,11 +76,11 @@ mkdir -p "$OUT/classes"
 
 test -f "$OUT/classes/com/outbreak/game/OutbreakService.class" || { echo "no OutbreakService.class; aborting"; exit 1; }
 
-echo "==> d8"
+echo "==> d8 (every compiled class, inner classes included)"
 "$BUILD_TOOLS/d8" \
     --lib "$PLATFORM" \
     --output "$OUT" \
-    "$OUT/classes/com/outbreak/game/OutbreakService.class"
+    "$OUT/classes/com/outbreak/game/"*.class
 
 test -f "$OUT/classes.dex" || { echo "no classes.dex; aborting"; exit 1; }
 
