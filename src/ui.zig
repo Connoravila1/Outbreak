@@ -184,6 +184,15 @@ pub const State = struct {
     tells: [max_tells][]const u8 = @splat(""),
     tell_count: u8 = 0,
 
+    /// RIPPLES THE PLAYER'S OWN FINGER LEFT ON THE DIAL. A small ring, oldest overwritten first.
+    ///
+    /// A ripple is decoration and nothing else: it is born where a finger touched and expands on the
+    /// clock. It says nothing about anyone in the room -- it cannot, it is a function of the tap and
+    /// the millisecond, and there is no count or bearing anywhere in it (I2, I3). It is here purely
+    /// because a live instrument that answers a touch feels alive, and this one did not.
+    ripples: [max_ripples]Ripple = @splat(.{}),
+    ripple_head: u8 = 0,
+
     /// THE CAFE TEST, ON THE GLASS. Null in every build that is not the diagnostic one.
     ///
     /// It reports on THIS PHONE and nothing else: which room it thinks it is in, how wrong its own
@@ -195,7 +204,12 @@ pub const State = struct {
     diagnostic: ?Diagnostic = null,
 
     pub const max_tells = 8;
+    pub const max_ripples = 4;
 };
+
+/// A ring expanding from where a finger touched the dial. `born_ms == 0` is an empty slot: it never
+/// coincides with a real tap, because the first frame the app can be touched is well past zero.
+pub const Ripple = struct { x: i32 = 0, y: i32 = 0, born_ms: u32 = 0 };
 
 /// What the phone knows about ITS OWN sense of place. Never about anyone else's.
 pub const Diagnostic = struct {
@@ -410,7 +424,21 @@ pub fn touch(state: State, at: Touch, size: Size) State {
         },
 
         .quiet => {
-            if (within(at, creditsLink(size))) next.screen = .credits;
+            if (within(at, creditsLink(size))) {
+                next.screen = .credits;
+            } else {
+                // A tap on the dial leaves a ripple. This is SCREEN-pixel geometry -- "did the
+                // finger land inside the circle drawn on the glass" -- integer, no float, and
+                // nothing to do with a cell. A9 forbids geometry on `CellId`, which has no
+                // coordinate to measure; a drawn circle on a touchscreen is not that.
+                const g = sonarGeometry(size);
+                const dx = at.x - g.cx;
+                const dy = at.y - g.cy;
+                if (dx * dx + dy * dy <= g.r * g.r) {
+                    next.ripples[next.ripple_head % State.max_ripples] = .{ .x = at.x, .y = at.y, .born_ms = state.now_ms };
+                    next.ripple_head +%= 1;
+                }
+            }
         },
 
         .credits => {
@@ -705,9 +733,33 @@ const sonar_motes = [_]Mote{
 const sweep_step_quiet_ms: u32 = 27; // ~7s a revolution
 const sweep_step_live_ms: u32 = 14; // ~3.5s
 
+/// INFECTION VEINS. Tendrils that snake out from the centre and breathe -- the boot screen's blood,
+/// reaching into the dial. Each entry is a base angle; the tendril wobbles as it reaches the rim,
+/// so it reads as something organic growing rather than a spoke. Decoration on the clock, like the
+/// rest -- it is drawn from a table and a millisecond, and never from the room.
+const sonar_veins = [_]u8{ 12, 46, 84, 120, 150, 184, 214, 240 };
+
+/// How long a tap's ripple lives, in milliseconds. It expands to most of the dial and fades out.
+const ripple_life_ms: u32 = 950;
+
+/// The dial's centre and radius for a given screen. Shared by the layout and the touch test so the
+/// two can never drift -- a ripple must be born where the ring actually is.
+const SonarGeom = struct { cx: i32, cy: i32, r: i32 };
+fn sonarGeometry(size: Size) SonarGeom {
+    const cx = @divTrunc(size.w, 2);
+    const r = @min(@divTrunc(size.w * 40, 100), @divTrunc(size.h * 24, 100));
+    const cy = @max(r + 64, @divTrunc(size.h * 40, 100));
+    return .{ .cx = cx, .cy = cy, .r = r };
+}
+
 /// A soft dot of the disc sprite, centred on a point.
 fn softDot(out: *std.ArrayList(Draw), gpa: Allocator, x: i32, y: i32, radius: i32, color: Color) Allocator.Error!void {
     try out.append(gpa, .{ .sprite = .{ .x = x - radius, .y = y - radius, .w = radius * 2, .h = radius * 2, .color = color, .sprite = .disc } });
+}
+
+/// A ring sprite, centred, at a given radius.
+fn softRing(out: *std.ArrayList(Draw), gpa: Allocator, x: i32, y: i32, radius: i32, color: Color) Allocator.Error!void {
+    try out.append(gpa, .{ .sprite = .{ .x = x - radius, .y = y - radius, .w = radius * 2, .h = radius * 2, .color = color, .sprite = .ring } });
 }
 
 /// CORE. The sonar, a pure function of the clock and ONE bit: is this cell live?
@@ -718,27 +770,52 @@ fn softDot(out: *std.ArrayList(Draw), gpa: Allocator, x: i32, y: i32, radius: i3
 /// else you see moving is the clock.
 fn drawSonar(state: State, cx: i32, cy: i32, r: i32, live: bool, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
     const t = state.now_ms;
-    const tint: Color = if (live) .wound else .serum;
 
-    // A faint body under the dial, so the rings sit on something rather than on the bare void.
-    try softDot(out, gpa, cx, cy, r, dim(if (live) .clot else .carrion, 150));
+    // Blood in quiet, brighter blood when live. Quiet is red but RESTRAINED -- the full bloom is the
+    // live signal, and it needs somewhere to escalate to.
+    const tint: Color = if (live) .blood_glow else .wound;
 
-    // THE BLOOM. Live only: a diffuse red haze that breathes. Presence, never position.
+    // A pool of dark blood under the dial, so the instrument sits in something, not on the void.
+    try softDot(out, gpa, cx, cy, r, dim(if (live) .clot else .scab, if (live) 220 else 180));
+
+    // THE HEART. A soft red glow at the centre that breathes like a slow pulse. This is what makes
+    // the dial ALIVE in quiet instead of a dead circle -- it never stops beating. It quickens and
+    // flushes brighter when the room goes live.
+    const heart: u8 = pulse(t, if (live) 850 else 2000, if (live) 70 else 30, if (live) 165 else 82);
+    try softDot(out, gpa, cx, cy, @divTrunc(r * 6, 10), dim(if (live) .blood_glow else .wound, heart));
+
+    // THE BLOOM. Live only: a diffuse red haze filling the whole ring. Presence, never position.
     if (live) {
-        const haze: u8 = pulse(t, 1500, 26, 78);
-        try softDot(out, gpa, cx, cy, r, dim(.wound, haze));
+        const haze: u8 = pulse(t, 1300, 44, 108);
+        try softDot(out, gpa, cx, cy, r, dim(.blood, haze));
     }
 
-    // The range rings, four of them, fainter as they go out.
+    // INFECTION VEINS. Tendrils snaking outward from the centre, breathing. Drawn behind the rings,
+    // dark and organic -- a texture under the glass, not a focus.
+    const vein_breath: i32 = pulse(t, 3200, if (live) 46 else 22, if (live) 104 else 52);
+    for (sonar_veins, 0..) |base, vi| {
+        var k: i32 = 2;
+        while (k <= 15) : (k += 1) {
+            const rr = @divTrunc(r * k, 15);
+            // The tendril snakes: its angle wobbles as it reaches out, each vein a little different.
+            const seed: u8 = @intCast((@as(u32, @intCast(k)) * 9 + @as(u32, @intCast(vi)) * 20) & 255);
+            const wob: i32 = @divTrunc(sinQ12(seed) * 10, sonar_one);
+            const ang = base +% @as(u8, @truncate(@as(u32, @bitCast(wob))));
+            const fade: u8 = @intCast(@max(0, vein_breath - k * 2)); // brightest near the heart
+            try softDot(out, gpa, polarX(cx, rr, ang), polarY(cy, rr, ang), 1, dim(.blood_deep, fade));
+        }
+    }
+
+    // The range rings, redder and far more present than before -- the instrument has to READ.
     var i: i32 = 1;
     while (i <= 4) : (i += 1) {
         const rr = @divTrunc(r * i, 4);
-        const a: u8 = @intCast(@max(0, 46 - i * 7) + @as(i32, if (live) 14 else 0));
-        try out.append(gpa, .{ .sprite = .{ .x = cx - rr, .y = cy - rr, .w = rr * 2, .h = rr * 2, .color = dim(tint, a), .sprite = .ring } });
+        const a: u8 = @intCast(@max(20, 120 - i * 16) + @as(i32, if (live) 45 else 0));
+        try softRing(out, gpa, cx, cy, rr, dim(tint, a));
     }
 
     // The reticle: a crosshair through the centre. Axis-aligned, so it is a crisp line, not dots.
-    const cross = dim(tint, if (live) 40 else 26);
+    const cross = dim(tint, if (live) 75 else 46);
     try out.append(gpa, .{ .rect = .{ .x = cx - r, .y = cy, .w = r * 2, .h = 1, .color = cross } });
     try out.append(gpa, .{ .rect = .{ .x = cx, .y = cy - r, .w = 1, .h = r * 2, .color = cross } });
 
@@ -747,19 +824,20 @@ fn drawSonar(state: State, cx: i32, cy: i32, r: i32, live: bool, out: *std.Array
     const step_ms = if (live) sweep_step_live_ms else sweep_step_quiet_ms;
     const sweep: u8 = @truncate(t / step_ms);
     var j: u8 = 0;
-    while (j < 14) : (j += 1) {
+    while (j < 16) : (j += 1) {
         const ang = sweep -% (j *% 2);
-        const fade: i32 = @max(0, 130 - @as(i32, j) * 11);
+        const fade: i32 = @max(0, 205 - @as(i32, j) * 13);
         if (fade == 0) continue;
         const alpha: u8 = @intCast(fade);
         var k: i32 = 1;
-        while (k <= 8) : (k += 1) {
-            const rr = @divTrunc(r * k, 8);
-            try softDot(out, gpa, polarX(cx, rr, ang), polarY(cy, rr, ang), 2, dim(tint, alpha));
+        while (k <= 9) : (k += 1) {
+            const rr = @divTrunc(r * k, 9);
+            try softDot(out, gpa, polarX(cx, rr, ang), polarY(cy, rr, ang), if (j == 0) 2 else 1, dim(tint, alpha));
         }
     }
 
     // THE MOTES, drifting, and flaring as the sweep passes over them. Decoration -- see the note.
+    // A third of them run hot, a brighter blood, so the field is not a flat wash.
     for (sonar_motes, 0..) |m, mi| {
         const spin: u8 = @truncate(t / (70 + @as(u32, @intCast(mi)) * 9));
         const ang = if (mi & 1 == 0) m.angle +% spin else m.angle -% spin;
@@ -771,43 +849,58 @@ fn drawSonar(state: State, cx: i32, cy: i32, r: i32, live: bool, out: *std.Array
         const gap: u8 = sweep -% ang;
         const flare: i32 = if (gap < 40) @divTrunc((40 - @as(i32, gap)) * 200, 40) else 0;
 
-        const alpha: u8 = @intCast(@min(255, 34 + flare));
-        try softDot(out, gpa, polarX(cx, rr, ang), polarY(cy, rr, ang), m.size + @divTrunc(flare, 90), dim(tint, alpha));
+        const alpha: u8 = @intCast(@min(255, 55 + flare));
+        const mote_tint: Color = if (mi % 3 == 0) .blood_glow else tint;
+        try softDot(out, gpa, polarX(cx, rr, ang), polarY(cy, rr, ang), m.size + @divTrunc(flare, 80), dim(mote_tint, alpha));
     }
 
-    // THE CENTRE: a pip that breathes. Faster and hotter when the room is live.
-    const beat: u8 = pulse(t, if (live) 620 else 1800, 90, 230);
-    try softDot(out, gpa, cx, cy, 2 + @divTrunc(@as(i32, beat), 120), dim(if (live) .wound else .smoke, beat));
+    // THE RIPPLES the finger left. A ring expands from each recent tap and fades as it grows -- the
+    // instrument answering a touch. Purely the player's own input on the clock (I2, I3).
+    for (state.ripples) |rp| {
+        if (rp.born_ms == 0) continue;
+        const age = t -| rp.born_ms;
+        if (age >= ripple_life_ms) continue;
+        const age_i: i32 = @intCast(age);
+        const grow = @divTrunc(age_i * @divTrunc(r * 7, 10), @as(i32, @intCast(ripple_life_ms)));
+        if (grow < 4) continue;
+        const a: u8 = @intCast(@max(0, 210 - @divTrunc(age_i * 210, @as(i32, @intCast(ripple_life_ms)))));
+        try softRing(out, gpa, rp.x, rp.y, grow, dim(.blood_glow, a));
+    }
+
+    // THE CENTRE PIP that breathes. Hotter and faster when the room is live.
+    const pipbeat: u8 = pulse(t, if (live) 500 else 1500, 120, 240);
+    try softDot(out, gpa, cx, cy, 3 + @divTrunc(@as(i32, pipbeat), 110), dim(if (live) .blood_glow else .wound, pipbeat));
 }
 
 fn drawQuiet(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
     // Header. The faction, and one day a tenure beside it (EXPERIENCE_DESIGN §3 -- it needs a field
     // on the wire that does not exist yet, so it waits).
-    try out.append(gpa, .{ .text = .{ .x = pad, .y = 40, .text = factionLabel(state.faction), .color = .dust, .weight = .label } });
+    try out.append(gpa, .{ .text = .{ .x = pad, .y = 40, .text = factionLabel(state.faction), .color = .smoke, .weight = .label } });
 
-    // THE DIAL. Centred, as wide as the narrower of a width- and a height-bound so it never spills
-    // into the header or the legend on a short screen.
-    const cx = @divTrunc(size.w, 2);
-    const r = @min(@divTrunc(size.w * 40, 100), @divTrunc(size.h * 24, 100));
-    const cy = @max(r + 64, @divTrunc(size.h * 40, 100));
+    // THE DIAL. Geometry shared with the touch test, so a ripple is born where the ring is drawn.
+    const g = sonarGeometry(size);
+    const cx = g.cx;
+    const cy = g.cy;
+    const r = g.r;
 
     try drawSonar(state, cx, cy, r, false, out, gpa);
 
-    // The reading, centred in the dial. One word. "QUIET" is shown identically for an empty field,
-    // a sub-quorum cell, and a quiet one above quorum -- which is the whole of I3 on the glass: the
-    // three are indistinguishable because the phone is told nothing that could tell them apart.
-    try out.append(gpa, .{ .text = .{ .x = cx, .y = cy - 9, .text = "QUIET", .color = .smoke, .weight = .label, .alignment = .center } });
+    // The reading, centred in the dial. One word, bright enough to read. "QUIET" is shown identically
+    // for an empty field, a sub-quorum cell, and a quiet one above quorum -- which is the whole of I3
+    // on the glass: the three are indistinguishable because the phone is told nothing that could tell
+    // them apart.
+    try out.append(gpa, .{ .text = .{ .x = cx, .y = cy - 9, .text = "QUIET", .color = .bone, .weight = .label, .alignment = .center } });
 
     // The legend, below the dial. Number-free, on purpose: a digit on this screen is how a count
     // could ever leak (see the test). Condition is a word; nothing here is measured.
     const legend_y = @min(cy + r + 40, size.h - 150);
-    try out.append(gpa, .{ .text = .{ .x = pad, .y = legend_y, .text = "CONDITION", .color = .grave, .weight = .label } });
-    try out.append(gpa, .{ .text = .{ .x = size.w - pad, .y = legend_y, .text = conditionWord(state.hp), .color = .smoke, .weight = .body, .alignment = .right } });
+    try out.append(gpa, .{ .text = .{ .x = pad, .y = legend_y, .text = "CONDITION", .color = .dust, .weight = .label } });
+    try out.append(gpa, .{ .text = .{ .x = size.w - pad, .y = legend_y, .text = conditionWord(state.hp), .color = .bone, .weight = .body, .alignment = .right } });
 
     // The dread copy: mood, never occupancy. It says nothing about who is or is not in the room
-    // (I3) -- only that the quiet is temporary.
-    try out.append(gpa, .{ .text = .{ .x = cx, .y = size.h - 96, .text = "The room is quiet.", .color = .grave, .weight = .body, .alignment = .center } });
-    try out.append(gpa, .{ .text = .{ .x = cx, .y = size.h - 70, .text = "It won't stay that way.", .color = .grave, .weight = .body, .alignment = .center } });
+    // (I3) -- only that the quiet is temporary. Bright enough to actually read.
+    try out.append(gpa, .{ .text = .{ .x = cx, .y = size.h - 96, .text = "The room is quiet.", .color = .smoke, .weight = .body, .alignment = .center } });
+    try out.append(gpa, .{ .text = .{ .x = cx, .y = size.h - 70, .text = "It won't stay that way.", .color = .smoke, .weight = .body, .alignment = .center } });
 
     try drawCreditsLink(size, out, gpa);
     try drawDiagnostic(state, size, out, gpa);
