@@ -599,6 +599,16 @@ fn idle(io: Io, milliseconds: i64) void {
     io.sleep(Io.Duration.fromMilliseconds(milliseconds), .awake) catch {};
 }
 
+/// Which screens are alive and must be redrawn frame after frame, and which are still images that
+/// wait for news. The boot sequence animates for its four seconds; the sonar animates for as long
+/// as it is on the glass. Everything else changes only when the state does.
+fn animates(screen: ui.Screen) bool {
+    return switch (screen) {
+        .boot, .quiet => true,
+        .choose_side, .live, .credits => false,
+    };
+}
+
 fn render() void {
     var threaded: Io.Threaded = .init(std.heap.smp_allocator, .{});
     defer threaded.deinit();
@@ -834,13 +844,18 @@ fn render() void {
 
         present(&surface, draws.items, state, &engine, &atlas, &verts, gpa);
 
-        // THE BOOT SEQUENCE IS THE ONE THING IN THIS GAME THAT ANIMATES, so it is the one thing
-        // that redraws without being asked. It lasts about four seconds, once, at startup.
+        // WHAT ANIMATES REDRAWS WITHOUT BEING ASKED; EVERYTHING ELSE IS A STILL IMAGE.
         //
-        // Everything else in the game is a still image between thirty-second ticks, and it is not
-        // redrawn until something changes. That is the difference between an animation and a
-        // battery leak, and it is why this line is a condition rather than a `true` (G5).
-        dirty = state.screen == .boot;
+        // The boot sequence animates for its four seconds. The sonar animates for as long as a
+        // player is looking at it -- it is a living instrument, a slow sweep and drifting motes, and
+        // a still frame of it is a dead app. Both keep this frame `dirty` so the loop draws the next
+        // one.
+        //
+        // This is NOT the background-battery story: the loop `continue`s above, before it ever gets
+        // here, whenever `!host.awake` -- screen off, pocket, backgrounded. So this only ever spins
+        // the compositor while the screen is ON and in a hand, throttled to vsync by the buffer
+        // swap. The measured 0.009%/8h is a backgrounded number and this line cannot touch it (G5).
+        dirty = animates(state.screen);
     }
 }
 

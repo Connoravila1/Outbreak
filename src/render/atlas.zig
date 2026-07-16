@@ -62,7 +62,7 @@ pub const Atlas = struct {
     rects: std.AutoHashMapUnmanaged(u64, Rect) = .empty,
 
     /// The procedural shapes, baked once at init. Indexed by `ui.Sprite`.
-    sprites: [2]Rect = @splat(.{ .x = 0, .y = 0, .w = 0, .h = 0, .advance = 0, .bear_x = 0, .bear_y = 0 }),
+    sprites: [3]Rect = @splat(.{ .x = 0, .y = 0, .w = 0, .h = 0, .advance = 0, .bear_x = 0, .bear_y = 0 }),
 
     /// The bitmap changed and the GPU has an old copy. The shell re-uploads and clears this.
     /// Starts true: the white texel alone is a change worth uploading.
@@ -101,12 +101,14 @@ pub fn init(gpa: Allocator) Error!Atlas {
     // it only needed something in the atlas to point at.
     atlas.sprites[@intFromEnum(ui.Sprite.disc)] = try bake(&atlas, disc_px, discCoverage);
     atlas.sprites[@intFromEnum(ui.Sprite.vignette)] = try bake(&atlas, vignette_px, vignetteCoverage);
+    atlas.sprites[@intFromEnum(ui.Sprite.ring)] = try bake(&atlas, ring_px, annulusCoverage);
 
     return atlas;
 }
 
 const disc_px = 64;
 const vignette_px = 128;
+const ring_px = 128;
 
 /// Opaque at the centre, gone at the rim. Smoothstep rather than linear, because a linear falloff
 /// has a visible hard edge where it reaches zero and reads as a circle rather than a glow.
@@ -124,6 +126,21 @@ fn vignetteCoverage(dx: f32, dy: f32) u8 {
     const r = @sqrt(dx * dx + dy * dy);
     if (r >= 1.0) return 255;
     const smooth = r * r * (3.0 - 2.0 * r);
+    return @intFromFloat(@round(smooth * 255.0));
+}
+
+/// A soft annulus: a thin bright ring near the rim, nothing inside it and nothing beyond. Smoothed
+/// on both edges so it reads as a ring of light rather than a hard circle. The sonar's range rings
+/// are this one shape, tinted and scaled to each radius (the bright band sits at ~0.92 of the
+/// sprite's radius, so a sprite drawn at radius `rr` puts its ring at ~0.92·rr).
+fn annulusCoverage(dx: f32, dy: f32) u8 {
+    const r = @sqrt(dx * dx + dy * dy);
+    const r0: f32 = 0.92;
+    const half_w: f32 = 0.09;
+    const d = @abs(r - r0);
+    if (d >= half_w) return 0;
+    const t = 1.0 - d / half_w;
+    const smooth = t * t * (3.0 - 2.0 * t);
     return @intFromFloat(@round(smooth * 255.0));
 }
 
@@ -400,6 +417,21 @@ test "the procedural sprites are baked, and they are actually gradients" {
     const vig_corner = at(&atlas, vig.x, vig.y);
     try testing.expect(vig_centre < 5);
     try testing.expectEqual(@as(u8, 255), vig_corner);
+
+    // The ring: nothing at the centre, nothing at the corner, a bright band in between. If either
+    // the hole or the rim is filled, it is a disc, not a ring, and the sonar's range circles become
+    // four solid blobs.
+    const rng = spriteRect(&atlas, .ring);
+    try testing.expectEqual(@as(u16, ring_px), rng.w);
+    const rng_centre = at(&atlas, rng.x + ring_px / 2, rng.y + ring_px / 2);
+    const rng_corner = at(&atlas, rng.x, rng.y);
+    try testing.expect(rng_centre < 5);
+    try testing.expectEqual(@as(u8, 0), rng_corner);
+    // The band itself: a horizontal scan from the centre outward crosses ink somewhere near the rim.
+    var band_max: u8 = 0;
+    var col: u32 = ring_px / 2;
+    while (col < ring_px) : (col += 1) band_max = @max(band_max, at(&atlas, rng.x + col, rng.y + ring_px / 2));
+    try testing.expect(band_max > 200);
 
     // Neither landed on the white texel that every rectangle in the game samples.
     try testing.expect(disc.x >= white_px or disc.y >= white_px);

@@ -93,6 +93,11 @@ pub const Sprite = enum {
     /// The inverse: a hole in the middle, opaque at the edges. Scaled up over the screen and
     /// tinted with the background, it is a circular wipe that opens outward.
     vignette,
+    /// A soft annulus -- a thin bright ring with nothing inside or out. The sonar's range rings are
+    /// this shape, scaled to each radius. A rectangle cannot be a circle and the renderer cannot
+    /// rotate a quad, so a ring that reads as a ring has to come from the atlas, exactly as the
+    /// disc does.
+    ring,
 };
 
 pub const Weight = enum(u8) { label, body, heading, alarm, wordmark };
@@ -149,6 +154,15 @@ pub const State = struct {
     /// The tap does not end the boot screen; it BEGINS THE ENDING OF IT. `advance` finishes the
     /// job once the animation has actually played.
     leaving_ms: ?u32 = null,
+
+    /// MILLISECONDS SINCE THE APP OPENED -- the general clock, updated every frame, on every screen.
+    ///
+    /// `boot_ms` above is the same number, but it stops advancing the moment the boot screen is
+    /// gone. The sonar is a living instrument on the screen a player stares at for the other 98% of
+    /// the time, so it needs a clock that keeps ticking. Same trick as the tick and the boot
+    /// sequence: the core never asks the time, it is handed this (B3, B7). Every animation driven by
+    /// it is therefore a pure function of a single number, testable at any instant with no phone.
+    now_ms: u32 = 0,
 
     /// Chosen once, permanently. Null until they choose.
     faction: ?Faction = null,
@@ -334,6 +348,11 @@ const boot_exit_ms: u32 = 420;
 /// shell calls this every frame and the state machine advances itself.
 pub fn advance(state: State, ms: u32) State {
     var next = state;
+
+    // THE GENERAL CLOCK, always. Everything animated -- the sonar's sweep, its drifting motes, the
+    // breathing pip -- reads this and nothing else. It is set on every screen so the instrument
+    // keeps living when the boot sequence is long gone.
+    next.now_ms = ms;
 
     if (state.screen == .boot) {
         next.boot_ms = ms;
@@ -584,20 +603,211 @@ fn drawFaction(
     try out.append(gpa, .{ .text = .{ .x = rect.x + 16, .y = rect.y + 52, .text = blurb, .color = if (faction == .zombie) .serum else .dust, .weight = .body } });
 }
 
+// ============================================================================ the sonar
+//
+// THE HERO OF THE CENTRAL SCREEN, and the answer to the hardest problem in this genre: how do you
+// make WAITING fun? The idle screen is what a player stares at ~98% of the time, and "Nothing
+// here." was an absence to apologise for. The sonar is a living instrument to rest the eye on --
+// a slow sweep, range rings, motes drifting in the fog, a pulse at the centre like a held breath.
+//
+// It is dressed as submarine sonar, and it is deliberately NOT one. A real sonar paints a contact
+// at a bearing, and a bearing is the first step to a name (I1, I2). So we keep the instrument and
+// cut the wire to reality: the motes are pure DECORATION, a function of the clock and nothing
+// else. They are not people. Nothing on this dial is read from the room, no count, no direction.
+// When the cell goes live the dial BLOOMS -- a diffuse red haze, never a blip at a bearing -- which
+// says "something is HERE" and never "there, that way." Diffuse presence, never position, exactly
+// the game's own feeling. (EXPERIENCE_DESIGN §2.)
+//
+// EVERY COORDINATE HERE IS AN INTEGER, and there is no trig function in sight, because this is a
+// core file and a core file holds no float (B6). Rotation comes from a hand-written fixed-point
+// sine table -- plain integer data, the way the whole core is plain data. The renderer draws only
+// axis-aligned quads and cannot spin one, so the sweep is a fan of dots placed by that table, and
+// a ring is a shape baked into the atlas. The constraint and the aesthetic agreed, again.
+
+/// Fixed-point sine, Q12: one full turn in 256 steps, each value sin(θ)·4096 rounded. Cosine is the
+/// same table read a quarter-turn (64 steps) ahead. Generated once and pasted as data -- there is
+/// no `@sin` in a core file, and a float would not survive the guard if there were (B6).
+const sonar_one: i32 = 4096;
+const sonar_sin = [256]i32{
+    0,     101,   201,   301,   401,   501,   601,   700,
+    799,   897,   995,   1092,  1189,  1285,  1380,  1474,
+    1567,  1660,  1751,  1842,  1931,  2019,  2106,  2191,
+    2276,  2359,  2440,  2520,  2598,  2675,  2751,  2824,
+    2896,  2967,  3035,  3102,  3166,  3229,  3290,  3349,
+    3406,  3461,  3513,  3564,  3612,  3659,  3703,  3745,
+    3784,  3822,  3857,  3889,  3920,  3948,  3973,  3996,
+    4017,  4036,  4052,  4065,  4076,  4085,  4091,  4095,
+    4096,  4095,  4091,  4085,  4076,  4065,  4052,  4036,
+    4017,  3996,  3973,  3948,  3920,  3889,  3857,  3822,
+    3784,  3745,  3703,  3659,  3612,  3564,  3513,  3461,
+    3406,  3349,  3290,  3229,  3166,  3102,  3035,  2967,
+    2896,  2824,  2751,  2675,  2598,  2520,  2440,  2359,
+    2276,  2191,  2106,  2019,  1931,  1842,  1751,  1660,
+    1567,  1474,  1380,  1285,  1189,  1092,  995,   897,
+    799,   700,   601,   501,   401,   301,   201,   101,
+    0,     -101,  -201,  -301,  -401,  -501,  -601,  -700,
+    -799,  -897,  -995,  -1092, -1189, -1285, -1380, -1474,
+    -1567, -1660, -1751, -1842, -1931, -2019, -2106, -2191,
+    -2276, -2359, -2440, -2520, -2598, -2675, -2751, -2824,
+    -2896, -2967, -3035, -3102, -3166, -3229, -3290, -3349,
+    -3406, -3461, -3513, -3564, -3612, -3659, -3703, -3745,
+    -3784, -3822, -3857, -3889, -3920, -3948, -3973, -3996,
+    -4017, -4036, -4052, -4065, -4076, -4085, -4091, -4095,
+    -4096, -4095, -4091, -4085, -4076, -4065, -4052, -4036,
+    -4017, -3996, -3973, -3948, -3920, -3889, -3857, -3822,
+    -3784, -3745, -3703, -3659, -3612, -3564, -3513, -3461,
+    -3406, -3349, -3290, -3229, -3166, -3102, -3035, -2967,
+    -2896, -2824, -2751, -2675, -2598, -2520, -2440, -2359,
+    -2276, -2191, -2106, -2019, -1931, -1842, -1751, -1660,
+    -1567, -1474, -1380, -1285, -1189, -1092, -995,  -897,
+    -799,  -700,  -601,  -501,  -401,  -301,  -201,  -101,
+};
+
+fn sinQ12(a: u8) i32 {
+    return sonar_sin[a];
+}
+fn cosQ12(a: u8) i32 {
+    return sonar_sin[a +% 64];
+}
+
+/// A point on the dial: `a` is a 256th of a turn, `r` a radius in the core's integer pixels.
+fn polarX(cx: i32, r: i32, a: u8) i32 {
+    return cx + @divTrunc(r * cosQ12(a), sonar_one);
+}
+fn polarY(cy: i32, r: i32, a: u8) i32 {
+    return cy + @divTrunc(r * sinQ12(a), sonar_one);
+}
+
+/// A drifting speck of light on the dial. It is NOT a person and NOT a place -- it is decoration,
+/// seeded once and moved by the clock, so the field is alive without ever reading the room (I2, I3).
+const Mote = struct { angle: u8, r_permille: i32, size: i32, bob_period: u32, bob_phase: u32 };
+const sonar_motes = [_]Mote{
+    .{ .angle = 165, .r_permille = 454, .size = 2, .bob_period = 2797, .bob_phase = 5332 },
+    .{ .angle = 37, .r_permille = 848, .size = 1, .bob_period = 4987, .bob_phase = 2995 },
+    .{ .angle = 29, .r_permille = 819, .size = 1, .bob_period = 2952, .bob_phase = 307 },
+    .{ .angle = 222, .r_permille = 728, .size = 1, .bob_period = 2971, .bob_phase = 1971 },
+    .{ .angle = 217, .r_permille = 360, .size = 3, .bob_period = 3514, .bob_phase = 1014 },
+    .{ .angle = 31, .r_permille = 890, .size = 3, .bob_period = 2803, .bob_phase = 3249 },
+    .{ .angle = 113, .r_permille = 347, .size = 3, .bob_period = 3786, .bob_phase = 1090 },
+    .{ .angle = 214, .r_permille = 447, .size = 3, .bob_period = 4938, .bob_phase = 964 },
+    .{ .angle = 157, .r_permille = 873, .size = 1, .bob_period = 4982, .bob_phase = 844 },
+    .{ .angle = 96, .r_permille = 681, .size = 1, .bob_period = 2857, .bob_phase = 4487 },
+    .{ .angle = 30, .r_permille = 510, .size = 2, .bob_period = 4777, .bob_phase = 5573 },
+    .{ .angle = 218, .r_permille = 621, .size = 2, .bob_period = 4456, .bob_phase = 4796 },
+    .{ .angle = 185, .r_permille = 606, .size = 1, .bob_period = 3599, .bob_phase = 1472 },
+    .{ .angle = 41, .r_permille = 888, .size = 2, .bob_period = 4627, .bob_phase = 4302 },
+    .{ .angle = 175, .r_permille = 759, .size = 2, .bob_period = 2899, .bob_phase = 4988 },
+    .{ .angle = 60, .r_permille = 824, .size = 2, .bob_period = 4001, .bob_phase = 1351 },
+};
+
+/// How long the sweep takes to come round, as milliseconds per 256th of a turn. Quiet is slow and
+/// unhurried; live quickens it, the way a pulse quickens.
+const sweep_step_quiet_ms: u32 = 27; // ~7s a revolution
+const sweep_step_live_ms: u32 = 14; // ~3.5s
+
+/// A soft dot of the disc sprite, centred on a point.
+fn softDot(out: *std.ArrayList(Draw), gpa: Allocator, x: i32, y: i32, radius: i32, color: Color) Allocator.Error!void {
+    try out.append(gpa, .{ .sprite = .{ .x = x - radius, .y = y - radius, .w = radius * 2, .h = radius * 2, .color = color, .sprite = .disc } });
+}
+
+/// CORE. The sonar, a pure function of the clock and ONE bit: is this cell live?
+///
+/// `live` is the only thing this instrument learns about the world outside the phone, and it is a
+/// single bit -- the very same bit the game already shows as "THIS CELL IS LIVE." It never reads
+/// the crowd, a count, a direction, or anything that could resolve toward who or where. Everything
+/// else you see moving is the clock.
+fn drawSonar(state: State, cx: i32, cy: i32, r: i32, live: bool, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
+    const t = state.now_ms;
+    const tint: Color = if (live) .wound else .serum;
+
+    // A faint body under the dial, so the rings sit on something rather than on the bare void.
+    try softDot(out, gpa, cx, cy, r, dim(if (live) .clot else .carrion, 150));
+
+    // THE BLOOM. Live only: a diffuse red haze that breathes. Presence, never position.
+    if (live) {
+        const haze: u8 = pulse(t, 1500, 26, 78);
+        try softDot(out, gpa, cx, cy, r, dim(.wound, haze));
+    }
+
+    // The range rings, four of them, fainter as they go out.
+    var i: i32 = 1;
+    while (i <= 4) : (i += 1) {
+        const rr = @divTrunc(r * i, 4);
+        const a: u8 = @intCast(@max(0, 46 - i * 7) + @as(i32, if (live) 14 else 0));
+        try out.append(gpa, .{ .sprite = .{ .x = cx - rr, .y = cy - rr, .w = rr * 2, .h = rr * 2, .color = dim(tint, a), .sprite = .ring } });
+    }
+
+    // The reticle: a crosshair through the centre. Axis-aligned, so it is a crisp line, not dots.
+    const cross = dim(tint, if (live) 40 else 26);
+    try out.append(gpa, .{ .rect = .{ .x = cx - r, .y = cy, .w = r * 2, .h = 1, .color = cross } });
+    try out.append(gpa, .{ .rect = .{ .x = cx, .y = cy - r, .w = 1, .h = r * 2, .color = cross } });
+
+    // THE SWEEP: a fan of dots at the current angle, with a fading trail behind the way it turns.
+    // No rotated quad exists in this renderer, so the arm is drawn each frame, not turned.
+    const step_ms = if (live) sweep_step_live_ms else sweep_step_quiet_ms;
+    const sweep: u8 = @truncate(t / step_ms);
+    var j: u8 = 0;
+    while (j < 14) : (j += 1) {
+        const ang = sweep -% (j *% 2);
+        const fade: i32 = @max(0, 130 - @as(i32, j) * 11);
+        if (fade == 0) continue;
+        const alpha: u8 = @intCast(fade);
+        var k: i32 = 1;
+        while (k <= 8) : (k += 1) {
+            const rr = @divTrunc(r * k, 8);
+            try softDot(out, gpa, polarX(cx, rr, ang), polarY(cy, rr, ang), 2, dim(tint, alpha));
+        }
+    }
+
+    // THE MOTES, drifting, and flaring as the sweep passes over them. Decoration -- see the note.
+    for (sonar_motes, 0..) |m, mi| {
+        const spin: u8 = @truncate(t / (70 + @as(u32, @intCast(mi)) * 9));
+        const ang = if (mi & 1 == 0) m.angle +% spin else m.angle -% spin;
+
+        const rr = @divTrunc(r * m.r_permille, 1000) + wander(t, m.bob_period, 3, m.bob_phase);
+
+        // How recently did the sweep pass this mote? A small angular gap behind the sweep is a
+        // fresh flare, decaying as the sweep moves on.
+        const gap: u8 = sweep -% ang;
+        const flare: i32 = if (gap < 40) @divTrunc((40 - @as(i32, gap)) * 200, 40) else 0;
+
+        const alpha: u8 = @intCast(@min(255, 34 + flare));
+        try softDot(out, gpa, polarX(cx, rr, ang), polarY(cy, rr, ang), m.size + @divTrunc(flare, 90), dim(tint, alpha));
+    }
+
+    // THE CENTRE: a pip that breathes. Faster and hotter when the room is live.
+    const beat: u8 = pulse(t, if (live) 620 else 1800, 90, 230);
+    try softDot(out, gpa, cx, cy, 2 + @divTrunc(@as(i32, beat), 120), dim(if (live) .wound else .smoke, beat));
+}
+
 fn drawQuiet(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
+    // Header. The faction, and one day a tenure beside it (EXPERIENCE_DESIGN §3 -- it needs a field
+    // on the wire that does not exist yet, so it waits).
     try out.append(gpa, .{ .text = .{ .x = pad, .y = 40, .text = factionLabel(state.faction), .color = .dust, .weight = .label } });
 
-    // The ring, and the word. This is what the game says almost all of the time, and it is the
-    // most important screen in the product: NOTHING HERE.
-    const mid_y = @divTrunc(size.h, 2);
-    const ring: i32 = 96;
-    try out.append(gpa, .{ .rect = .{ .x = @divTrunc(size.w - ring, 2), .y = mid_y - ring, .w = ring, .h = ring, .color = .ash } });
-    try out.append(gpa, .{ .text = .{ .x = @divTrunc(size.w, 2) - 48, .y = mid_y + 24, .text = "Nothing here.", .color = .dust, .weight = .body } });
+    // THE DIAL. Centred, as wide as the narrower of a width- and a height-bound so it never spills
+    // into the header or the legend on a short screen.
+    const cx = @divTrunc(size.w, 2);
+    const r = @min(@divTrunc(size.w * 40, 100), @divTrunc(size.h * 24, 100));
+    const cy = @max(r + 64, @divTrunc(size.h * 40, 100));
 
-    try out.append(gpa, .{ .text = .{ .x = pad, .y = size.h - 140, .text = "CONDITION", .color = .grave, .weight = .label } });
-    try out.append(gpa, .{ .text = .{ .x = size.w - pad - 80, .y = size.h - 140, .text = conditionWord(state.hp), .color = .smoke, .weight = .body } });
+    try drawSonar(state, cx, cy, r, false, out, gpa);
 
-    try out.append(gpa, .{ .text = .{ .x = pad, .y = size.h - 110, .text = "LEVEL", .color = .grave, .weight = .label } });
+    // The reading, centred in the dial. One word. "QUIET" is shown identically for an empty field,
+    // a sub-quorum cell, and a quiet one above quorum -- which is the whole of I3 on the glass: the
+    // three are indistinguishable because the phone is told nothing that could tell them apart.
+    try out.append(gpa, .{ .text = .{ .x = cx, .y = cy - 9, .text = "QUIET", .color = .smoke, .weight = .label, .alignment = .center } });
+
+    // The legend, below the dial. Number-free, on purpose: a digit on this screen is how a count
+    // could ever leak (see the test). Condition is a word; nothing here is measured.
+    const legend_y = @min(cy + r + 40, size.h - 150);
+    try out.append(gpa, .{ .text = .{ .x = pad, .y = legend_y, .text = "CONDITION", .color = .grave, .weight = .label } });
+    try out.append(gpa, .{ .text = .{ .x = size.w - pad, .y = legend_y, .text = conditionWord(state.hp), .color = .smoke, .weight = .body, .alignment = .right } });
+
+    // The dread copy: mood, never occupancy. It says nothing about who is or is not in the room
+    // (I3) -- only that the quiet is temporary.
+    try out.append(gpa, .{ .text = .{ .x = cx, .y = size.h - 96, .text = "The room is quiet.", .color = .grave, .weight = .body, .alignment = .center } });
+    try out.append(gpa, .{ .text = .{ .x = cx, .y = size.h - 70, .text = "It won't stay that way.", .color = .grave, .weight = .body, .alignment = .center } });
 
     try drawCreditsLink(size, out, gpa);
     try drawDiagnostic(state, size, out, gpa);
@@ -1460,17 +1670,89 @@ test "the draw list says nothing the state did not" {
     try draw(state, size, .{}, &out, gpa);
 
     // Every string on the screen came from the state or from the copy above. There is no cell in
-    // this list, no coordinate, no count, and no name -- because there is none in the state.
-    var found_nothing_here = false;
+    // this list, no coordinate, no count, and no name -- because there is none in the state. And
+    // NOT ONE DIGIT: a number on the quiet screen is the single most dangerous thing it could show,
+    // because a count is how a player learns who (I3, I5). The sonar is drawn without one.
+    var found_reading = false;
     for (out.items) |item| switch (item) {
         .text => |t| {
-            if (std.mem.eql(u8, t.text, "Nothing here.")) found_nothing_here = true;
+            if (std.mem.eql(u8, t.text, "QUIET")) found_reading = true;
             for (t.text) |char| try testing.expect(!std.ascii.isDigit(char));
         },
         .rect, .sprite => {},
     };
 
-    try testing.expect(found_nothing_here);
+    try testing.expect(found_reading);
+}
+
+test "THE SONAR READS NOTHING FROM THE ROOM: the quiet dial is identical whatever the crowd" {
+    // I2, I3, I5, at the instrument. The sonar is a mood dial driven by the clock and one bit --
+    // is this cell live? On the quiet screen there is no live bit, and the crowd is a value the
+    // dial is not allowed to see. So the ENTIRE draw list -- every sprite, every mote, every dot of
+    // the sweep -- must be byte-identical whether the room holds a few or thousands. If a single
+    // mote ever drifted with the crowd, this fails, which is exactly what it is here to do.
+    const gpa = testing.allocator;
+    const size: Size = .{ .w = 412, .h = 900 };
+
+    var few: std.ArrayList(Draw) = .empty;
+    defer few.deinit(gpa);
+    var many: std.ArrayList(Draw) = .empty;
+    defer many.deinit(gpa);
+
+    // A frozen instant, so the clock is not the variable -- only the crowd is. `told` with no
+    // damage keeps the screen quiet but stashes the crowd band in the state, which is the whole
+    // point: the crowd is IN the state and the sonar still must not read it.
+    const base: State = .{ .screen = .quiet, .faction = .zombie, .now_ms = 4321 };
+    try draw(told(base, 100, 1, 0, 0, .even, .a_few), size, .{}, &few, gpa);
+    try draw(told(base, 100, 1, 0, 0, .even, .thousands), size, .{}, &many, gpa);
+
+    try testing.expectEqual(few.items.len, many.items.len);
+    for (few.items, many.items) |a, b| {
+        try testing.expect(std.meta.eql(a, b));
+    }
+    // And it actually drew the instrument, not an empty list -- a vacuous pass would be worse than
+    // a failure, because it would look like proof.
+    try testing.expect(few.items.len > 50);
+}
+
+test "THE SONAR IS A PURE FUNCTION OF THE CLOCK: the same millisecond draws the same dial" {
+    // The same guarantee the tick and the boot sequence have (B7, B8). Ask for millisecond 9000
+    // twice and get byte-identical frames; ask for a different one and get a different frame,
+    // because a still sonar is a dead app.
+    const gpa = testing.allocator;
+    const size: Size = .{ .w = 412, .h = 900 };
+
+    var a: std.ArrayList(Draw) = .empty;
+    defer a.deinit(gpa);
+    var b: std.ArrayList(Draw) = .empty;
+    defer b.deinit(gpa);
+    var c: std.ArrayList(Draw) = .empty;
+    defer c.deinit(gpa);
+
+    const at = struct {
+        fn frame(ms: u32, out: *std.ArrayList(Draw), sz: Size, g: Allocator) !void {
+            try draw(.{ .screen = .quiet, .faction = .human, .now_ms = ms }, sz, .{}, out, g);
+        }
+    }.frame;
+
+    try at(9000, &a, size, gpa);
+    try at(9000, &b, size, gpa);
+    try at(9600, &c, size, gpa);
+
+    // Same instant, same frame.
+    try testing.expectEqual(a.items.len, b.items.len);
+    for (a.items, b.items) |x, y| try testing.expect(std.meta.eql(x, y));
+
+    // A later instant has moved the sweep and the motes, so something differs.
+    var differs = false;
+    if (a.items.len != c.items.len) {
+        differs = true;
+    } else {
+        for (a.items, c.items) |x, y| {
+            if (!std.meta.eql(x, y)) differs = true;
+        }
+    }
+    try testing.expect(differs);
 }
 
 test "THE CREDIT IS REACHABLE, AND IT NAMES THE PEOPLE" {
@@ -2054,10 +2336,12 @@ test "THE DIAGNOSTIC READOUT IS ABSENT BY DEFAULT AND ONLY SPEAKS OF THIS PHONE"
     var out: std.ArrayList(Draw) = .empty;
     defer out.deinit(gpa);
 
-    // No diagnostic -> nothing on the quiet screen mentions a room.
+    // No diagnostic -> the readout is not drawn. The readout is the string "room {hex}", so it is
+    // detected by a text that STARTS WITH "room " -- not by the word "room" appearing anywhere, or
+    // the dread copy "The room is quiet." would trip a diagnostic detector by writing plain English.
     try draw(.{ .screen = .quiet, .faction = .human }, size, .{}, &out, gpa);
     for (out.items) |item| switch (item) {
-        .text => |t| try testing.expect(std.mem.indexOf(u8, t.text, "room") == null),
+        .text => |t| try testing.expect(!std.mem.startsWith(u8, t.text, "room ")),
         else => {},
     };
 
@@ -2074,7 +2358,7 @@ test "THE DIAGNOSTIC READOUT IS ABSENT BY DEFAULT AND ONLY SPEAKS OF THIS PHONE"
 
     var saw_room = false;
     for (out.items) |item| switch (item) {
-        .text => |t| if (std.mem.indexOf(u8, t.text, "room") != null) {
+        .text => |t| if (std.mem.startsWith(u8, t.text, "room ")) {
             saw_room = true;
         },
         else => {},
