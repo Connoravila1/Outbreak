@@ -692,7 +692,7 @@ fn render() void {
             // is nothing to report before the player is in the game.
             if (client_thread == null) {
                 if (host.state.faction) |faction| {
-                    client_thread = std.Thread.spawn(.{}, client.run, .{ gpa, faction }) catch null;
+                    client_thread = std.Thread.spawn(.{}, client.run, .{ gpa, faction, &radio }) catch null;
                 }
             }
 

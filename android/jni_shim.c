@@ -118,9 +118,15 @@ int jnishim_has_location_permission(JNIEnv *env, jobject activity) {
     return granted;
 }
 
-/// Ask for it. Fire and forget -- the result arrives as a callback we do not have a class for, so
-/// we simply keep checking `jnishim_has_location_permission` until it says yes or the player says
-/// no. Polling a boolean once a second is not a cost worth building a second Java class over.
+/// Ask for the permissions the game needs. Fire and forget -- the result arrives as a callback we
+/// do not have a class for, so we simply keep checking `jnishim_has_location_permission` until it
+/// says yes or the player says no. Polling a boolean once a second is not a cost worth building a
+/// second Java class over.
+///
+/// TWO permissions, asked in one sequence: ACCESS_FINE_LOCATION (the room) and POST_NOTIFICATIONS
+/// (the combat alert, M.8). The latter is only meaningful on Android 13+; on older versions the OS
+/// treats it as already granted, so requesting it unconditionally is harmless. Location is the one
+/// the game gates on; if notifications are refused the game still plays, just without the alert.
 void jnishim_request_location_permission(JNIEnv *env, jobject activity) {
     jclass activity_class = (*env)->GetObjectClass(env, activity);
     if (cleared(env, "activity class") || activity_class == NULL) return;
@@ -133,14 +139,17 @@ void jnishim_request_location_permission(JNIEnv *env, jobject activity) {
     }
 
     jclass string_class = (*env)->FindClass(env, "java/lang/String");
-    jobjectArray perms = (*env)->NewObjectArray(env, 1, string_class, NULL);
+    jobjectArray perms = (*env)->NewObjectArray(env, 2, string_class, NULL);
     jstring fine = (*env)->NewStringUTF(env, "android.permission.ACCESS_FINE_LOCATION");
+    jstring notif = (*env)->NewStringUTF(env, "android.permission.POST_NOTIFICATIONS");
     (*env)->SetObjectArrayElement(env, perms, 0, fine);
+    (*env)->SetObjectArrayElement(env, perms, 1, notif);
 
     (*env)->CallVoidMethod(env, activity, request, perms, 1);
     cleared(env, "requestPermissions");
 
     (*env)->DeleteLocalRef(env, fine);
+    (*env)->DeleteLocalRef(env, notif);
     (*env)->DeleteLocalRef(env, perms);
     (*env)->DeleteLocalRef(env, string_class);
     (*env)->DeleteLocalRef(env, activity_class);
@@ -248,6 +257,51 @@ void jnishim_set_gps_active(JNIEnv *env, jobject activity, int active) {
     } else {
         (*env)->CallObjectMethod(env, activity, start_fgs, intent);
         cleared(env, "startForegroundService (set_gps)");
+    }
+
+    (*env)->DeleteLocalRef(env, intent);
+    (*env)->DeleteLocalRef(env, service_class);
+    (*env)->DeleteLocalRef(env, intent_class);
+    (*env)->DeleteLocalRef(env, activity_class);
+}
+
+/// Raise or clear the "your cell is live" combat alert. `band >= 0` raises it with that crowd band;
+/// `band < 0` clears it. Like set_gps, this delivers a command Intent to the running service, which
+/// posts (or cancels) the notification. The band is a CATEGORICAL index, never a count.
+void jnishim_combat_alert(JNIEnv *env, jobject activity, int band) {
+    jclass activity_class = (*env)->GetObjectClass(env, activity);
+
+    jclass intent_class = (*env)->FindClass(env, "android/content/Intent");
+    if (cleared(env, "Intent class (combat)") || intent_class == NULL) return;
+
+    jclass service_class = find_app_class(env, activity, "com.outbreak.game.OutbreakService");
+    if (service_class == NULL) return;
+
+    jmethodID intent_ctor = (*env)->GetMethodID(
+        env, intent_class, "<init>", "(Landroid/content/Context;Ljava/lang/Class;)V");
+    jobject intent = (*env)->NewObject(env, intent_class, intent_ctor, activity, service_class);
+    if (cleared(env, "new Intent (combat)") || intent == NULL) return;
+
+    // intent.putExtra("combat_band", (int) band)
+    jmethodID put_extra = (*env)->GetMethodID(
+        env, intent_class, "putExtra", "(Ljava/lang/String;I)Landroid/content/Intent;");
+    jstring key = (*env)->NewStringUTF(env, "combat_band");
+    (*env)->CallObjectMethod(env, intent, put_extra, key, (jint)band);
+    cleared(env, "putExtra combat_band");
+    (*env)->DeleteLocalRef(env, key);
+
+    jmethodID start_fgs = (*env)->GetMethodID(
+        env, activity_class, "startForegroundService", "(Landroid/content/Intent;)Landroid/content/ComponentName;");
+    if (cleared(env, "startForegroundService id (combat)") || start_fgs == NULL) {
+        jmethodID start = (*env)->GetMethodID(
+            env, activity_class, "startService", "(Landroid/content/Intent;)Landroid/content/ComponentName;");
+        if (start != NULL) {
+            (*env)->CallObjectMethod(env, activity, start, intent);
+            cleared(env, "startService (combat)");
+        }
+    } else {
+        (*env)->CallObjectMethod(env, activity, start_fgs, intent);
+        cleared(env, "startForegroundService (combat)");
     }
 
     (*env)->DeleteLocalRef(env, intent);

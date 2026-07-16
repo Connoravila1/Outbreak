@@ -66,6 +66,10 @@ extern fn jnishim_stop_service(env: ?*anyopaque, activity: ?*anyopaque) void;
 /// GPS subscription is toggled. This is how the governor sleeps the radio while the room is settled.
 extern fn jnishim_set_gps_active(env: ?*anyopaque, activity: ?*anyopaque, active: c_int) void;
 
+/// Raise (band >= 0, a crowd BAND) or clear (band < 0) the "your cell is live" combat alert (M.8).
+/// A categorical index crosses here -- never a count, a who, or a where.
+extern fn jnishim_combat_alert(env: ?*anyopaque, activity: ?*anyopaque, band: c_int) void;
+
 // ============================================================================ what survives
 
 /// The room we are in. A `u64` cell id, and NOTHING ELSE.
@@ -286,6 +290,15 @@ pub fn setGpsActive(radio: *Radio, active: bool) void {
 
     const env = jnishim_attach(radio.vm) orelse return;
     jnishim_set_gps_active(env, radio.activity, @intFromBool(active));
+}
+
+/// Raise the combat alert with a crowd `band` (>= 0), or clear it (band < 0). M.8: the categorical
+/// "your cell is live" notification. A no-op if the service was never started.
+pub fn combatAlert(radio: *Radio, band: i32) void {
+    if (!radio.running) return;
+
+    const env = jnishim_attach(radio.vm) orelse return;
+    jnishim_combat_alert(env, radio.activity, @intCast(band));
 }
 
 const testing = std.testing;

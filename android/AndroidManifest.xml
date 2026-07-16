@@ -44,6 +44,12 @@
          fixed-size tell. It never sends a coordinate — the coordinate died in location.zig. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- The combat alert (M.8). On Android 13+ posting a notification requires this runtime
+         permission; without it the "your cell is live" alert is silently dropped (the ongoing
+         foreground-service notification is exempt, which is why the bug hides until you look).
+         The notification carries a categorical crowd band only — never a count, a who, or a where. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <!-- The GPS hardware is required. A phone without it cannot know which room it is in. -->
     <uses-feature android:name="android.hardware.location.gps" android:required="true" />
 

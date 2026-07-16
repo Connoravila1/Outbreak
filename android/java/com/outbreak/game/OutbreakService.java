@@ -89,12 +89,25 @@ public final class OutbreakService extends Service implements LocationListener {
     private static final String CHANNEL_ID = "outbreak_location";
     private static final int NOTIFICATION_ID = 1;
 
+    /** THE SECOND, EVENT-DRIVEN notification: "your cell is live." Separate channel and id from the
+        persistent location one on purpose. The location notification (above) is static and SILENT
+        (I3 -- a notification that changed with your cell would leak, through when it changed, the
+        sub-quorum count quorum silence protects). THIS one is the deliberate, designed "you are
+        under attack" alert (M.8): it fires, it can make a sound, and it carries a CATEGORICAL tell
+        only -- a crowd band, never a count, a who, or a where. */
+    private static final String COMBAT_CHANNEL_ID = "outbreak_combat";
+    private static final int COMBAT_NOTIFICATION_ID = 2;
+
     /** Milliseconds between fixes, handed in by the shell via the start Intent. */
     public static final String EXTRA_INTERVAL_MS = "interval_ms";
 
     /** A command from the governor: resume (true) or pause (false) GPS updates. Its PRESENCE marks
         an Intent as a command rather than the initial start. */
     public static final String EXTRA_GPS_ACTIVE = "gps_active";
+
+    /** A command from the client: raise the combat alert with this crowd BAND (>= 0), or clear it
+        (a negative value). Coalesced by the client -- one raise per fight, not one per tick. */
+    public static final String EXTRA_COMBAT_BAND = "combat_band";
 
     private LocationManager manager;
 
@@ -133,10 +146,14 @@ public final class OutbreakService extends Service implements LocationListener {
             };
         }
 
-        // TWO KINDS OF Intent land here. A command from the governor carries `gps_active` and only
-        // toggles the radio. The initial start (no such extra) sets the interval, turns GPS on to
-        // find the room, and arms the motion trigger.
-        if (intent != null && intent.hasExtra(EXTRA_GPS_ACTIVE)) {
+        // THREE KINDS of Intent land here. A COMBAT command carries `combat_band` and only raises or
+        // clears the "your cell is live" alert. A GPS command carries `gps_active` and only toggles
+        // the radio. The initial start (neither extra) sets the interval, turns GPS on to find the
+        // room, and arms the motion trigger.
+        if (intent != null && intent.hasExtra(EXTRA_COMBAT_BAND)) {
+            int band = intent.getIntExtra(EXTRA_COMBAT_BAND, -1);
+            if (band >= 0) showCombatAlert(band); else clearCombatAlert();
+        } else if (intent != null && intent.hasExtra(EXTRA_GPS_ACTIVE)) {
             setGps(intent.getBooleanExtra(EXTRA_GPS_ACTIVE, true));
         } else {
             if (intent != null) intervalMs = intent.getLongExtra(EXTRA_INTERVAL_MS, 30000);
@@ -226,6 +243,55 @@ public final class OutbreakService extends Service implements LocationListener {
                 .setContentIntent(tap)
                 .setOngoing(true)
                 .build();
+    }
+
+    /** Raise (or update) the "your cell is live" alert. CATEGORICAL only -- a crowd band, never a
+        count, a who, or a where. High-importance so it actually alerts, unlike the silent location
+        notification. Wording is PROVISIONAL (a design/experience call). */
+    private void showCombatAlert(int band) {
+        NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel ch = new NotificationChannel(
+                    COMBAT_CHANNEL_ID, "Under attack", NotificationManager.IMPORTANCE_HIGH);
+            ch.setDescription("Alerts you when your cell goes live.");
+            nm.createNotificationChannel(ch);
+        }
+
+        Intent launch = getPackageManager().getLaunchIntentForPackage(getPackageName());
+        PendingIntent tap = PendingIntent.getActivity(this, 0, launch, PendingIntent.FLAG_IMMUTABLE);
+        int icon = getResources().getIdentifier("ic_notify", "drawable", getPackageName());
+
+        Notification.Builder b = (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                ? new Notification.Builder(this, COMBAT_CHANNEL_ID)
+                : new Notification.Builder(this);
+
+        nm.notify(COMBAT_NOTIFICATION_ID, b
+                .setContentTitle("This cell is live")
+                .setContentText(crowdLine(band))
+                .setSmallIcon(icon)
+                .setContentIntent(tap)
+                .setAutoCancel(true)
+                .build());
+    }
+
+    /** The fight is over, or you left the room. Take the alert down. */
+    private void clearCombatAlert() {
+        NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        nm.cancel(COMBAT_NOTIFICATION_ID);
+    }
+
+    /** A crowd SIZE band -> a CATEGORICAL line. The bands are a_few / dozens / scores / hundreds /
+        thousands (combat.zig); this describes SIZE only, never a count, a who, a where, or the
+        balance of the fight (that is the momentum band, a separate tell). The lowest band carries
+        NO NUMBER, by design. PROVISIONAL wording -- the final voice is a design call. */
+    private static String crowdLine(int band) {
+        switch (band) {
+            case 0:  return "You are not alone here.";   // a_few -- deliberately no number
+            case 1:  return "A crowd has gathered.";     // dozens
+            case 2:  return "The room is packed.";       // scores
+            case 3:  return "You are among a throng.";   // hundreds
+            default: return "You are lost in a multitude."; // thousands
+        }
     }
 
     @Override

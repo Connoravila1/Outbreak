@@ -74,7 +74,7 @@ pub fn stop() void {
 /// Failure to connect is not an error. It is a phone that cannot reach the server right now, which
 /// for an ambient game is ordinary: the world resolves whether or not any one phone is listening,
 /// and the next attempt reconnects.
-pub fn run(gpa: std.mem.Allocator, faction: Faction) void {
+pub fn run(gpa: std.mem.Allocator, faction: Faction, radio: *location.Radio) void {
     should_run.store(true, .release);
 
     var threaded: Io.Threaded = .init(gpa, .{});
@@ -82,7 +82,7 @@ pub fn run(gpa: std.mem.Allocator, faction: Faction) void {
     const io = threaded.io();
 
     while (should_run.load(.acquire)) {
-        session(io, faction) catch {};
+        session(io, faction, radio) catch {};
         connected.store(false, .release);
 
         // A dropped connection is not a crash. Wait a moment and try again. Backoff is one line;
@@ -96,7 +96,7 @@ pub fn run(gpa: std.mem.Allocator, faction: Faction) void {
 /// Each TCP connection gets exactly ONE Hello, so login-or-register is up to two opens: try to
 /// register the dev account; if the server refuses (it already exists), reopen and log in. The
 /// connection that succeeds is the one we keep and report on.
-fn session(io: Io, faction: Faction) !void {
+fn session(io: Io, faction: Faction, radio: *location.Radio) !void {
     var address = try net.IpAddress.parse(host, port);
 
     var stream = try address.connect(io, .{ .mode = .stream });
@@ -120,6 +120,13 @@ fn session(io: Io, faction: Faction) !void {
     var reader = stream.reader(io, &read_buffer);
     var writer = stream.writer(io, &write_buffer);
 
+    // THE COMBAT ALERT, COALESCED (M.8). One raise per fight, not one per tick: raise on the first
+    // tick that carries damage, clear after the fight has been quiet for a couple of ticks. The band
+    // is categorical (the crowd band), never a count. This is the whole of the coalescing the
+    // notification needs -- the timing is the tick's, and the content is the server's safe tell.
+    var alerting = false;
+    var quiet_ticks: u32 = 0;
+
     var response_bytes: [protocol.response_size]u8 = undefined;
     while (should_run.load(.acquire)) {
         // ROOM UP. Whatever `location.zig` last quantized. Zero -- no fix yet -- is a room the
@@ -140,6 +147,20 @@ fn session(io: Io, faction: Faction) !void {
 
         latest = response;
         have_response.store(true, .release);
+
+        if (response.damage > 0) {
+            quiet_ticks = 0;
+            if (!alerting) {
+                location.combatAlert(radio, @as(i32, @intFromEnum(response.crowd)));
+                alerting = true;
+            }
+        } else if (alerting) {
+            quiet_ticks += 1;
+            if (quiet_ticks >= 2) {
+                location.combatAlert(radio, -1); // the fight is over -- take the alert down
+                alerting = false;
+            }
+        }
     }
 }
 
