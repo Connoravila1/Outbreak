@@ -6,6 +6,7 @@ zig-out/
 /THE_RULESET.md
 /DESIGN_PHILOSOPHY.md
 /GAME_DESIGN.md
+/EXPERIENCE_DESIGN.md
 /ROADMAP.md
 *.docx
 
@@ -15,3 +16,5 @@ zig-out/
 /To_compile_zig
 /Zig_References
 /outbreak-prototype.html
+/outbreak-sonar-mock.html
+/BATTERY_MEASUREMENT.md
