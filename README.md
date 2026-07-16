@@ -10,7 +10,7 @@ A mobile game where you choose a faction, human or zombie, held permanent for th
 
 Phase 0 is complete (10k synthetic players through a simulated week, deterministic replay, zero leaks). Phases 1–2 are done: the world persists to disk and restarts identically, and byte- and time-identical silence is proven over a real TCP socket.
 
-**Phase 3 (the phone) is well underway, and running on real hardware.** The Android host, the GLES renderer, the glyph engine, the boot sequence, GPS, a background foreground-service, and the client socket all work on a device. A real GPS fix becomes a room and the coordinate dies in one function; the phone connects to the server, reports its room, and receives the tell; and networked combat resolves across the wire. The cell size (O3) has been measured in the field. Still owed for the phase: the 8-hour battery number on real hardware, combat push notifications, and a real registration flow.
+**Phase 3 (the phone) is running on real hardware, and its exit criterion — the battery number — has been met.** The Android host, the GLES renderer, the glyph engine, the boot sequence, GPS, a background foreground-service, and the client socket all work on a device. A real GPS fix becomes a room and the coordinate dies in one function; the phone connects to the server, reports its room, and receives the tell; and networked combat resolves across the wire. The GPS now sleeps once your room settles and wakes when you move. The cell size (O3) has been measured in the field, the 8-hour battery number has been taken on real hardware (below), and the phone raises a categorical *"your cell is live"* notification the moment a fight begins — a crowd band and nothing else. Still owed for the phase: a real registration flow.
 
 ## Build
 
@@ -81,15 +81,9 @@ The C ABI is `include/outbreak.h`. **Ten functions.** What is absent is the poin
 
 ## Battery
 
-**From ~10% of a phone battery every 8 hours to a projected 0.50%** — about 20×, and not one line of it was an optimization in the usual sense. It came from asking the GPS for a fix less often, and from holding the socket open only while a fight is live.
+**From ~10% of a phone battery every 8 hours to a measured 0.009%** — and not one line of it was an optimization in the usual sense. It came from asking the GPS for a fix less often, and from noticing that a phone that has not moved has not changed rooms.
 
-The number is a projection, not a measurement. It is measured on real hardware, over eight hours, or it does not count.
-
-| | Inherited spec | Now |
-|---|---|---|
-| GPS fixes / day | 17,280 | **304** |
-| Network sends / day | 2,880 | **16** |
-| Socket held open | all day | **12.5 min** |
+It used to say *projected 0.50%*, and that a projection does not count until it is measured on real hardware over eight real hours. So it was: **Pixel 10 Pro, screen off, still, eight hours — the app drew 0.472 mAh, with the GPS awake for four and a half minutes the whole night.** About 0.009% of the battery. The exit criterion is *under 5%*; the design clears it by roughly 550×.
 
 The reduction came from noticing that the game never wanted the data. It doesn't follow you — it only learns which room you're in, and only when you stop. **The thing that makes it private is the thing that makes it cheap.**
 
