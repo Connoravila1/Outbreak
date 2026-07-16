@@ -197,6 +197,21 @@ const Host = struct {
     /// Visible. When false we do not draw at all -- and we do not burn battery pretending to.
     awake: std.atomic.Value(bool) = .init(false),
 
+    /// A GENERATION COUNTER THE BACKGROUND THREADS SLEEP AGAINST, so teardown does not have to wait
+    /// out a full cadence.
+    ///
+    /// The governor's job is to look at the radio every thirty seconds; between looks it sleeps
+    /// deeply, and that deep sleep is the whole battery story (G5). But it is JOINED when the
+    /// activity is destroyed, and a thread joined mid-sleep stalls the OS thread for up to thirty
+    /// seconds -- past Android's destroy timeout, so the next launch sits on a blank splash for
+    /// fifteen seconds waiting for the old instance to let go. That is the bug this fixes.
+    ///
+    /// So the thread does not `sleep(30s)`; it waits on THIS counter with a thirty-second timeout,
+    /// on the `.awake` clock, so a suspended phone still costs nothing. `bumpWake` increments it and
+    /// wakes the waiter, and shutdown returns in microseconds instead of seconds. The steady-state
+    /// deep sleep is byte-for-byte the same wait it always was.
+    wake: std.atomic.Value(u32) = .init(0),
+
     /// THE GAME. The whole of what the phone knows (ui.zig).
     state: ui.State = .{},
 
@@ -408,7 +423,9 @@ fn governorLoop() void {
         const action = gov.step(reading, gov.policy.base_seconds, moved, false);
         location.setGpsActive(&radio, action.gps_on);
 
-        idle(io, cadence_ms);
+        // NOT `idle`. This thread is joined on destroy, and a plain thirty-second sleep would stall
+        // the teardown past Android's timeout. This wakes the instant `bumpWake` fires.
+        idleOrWake(io, cadence_ms);
     }
 }
 
@@ -433,11 +450,21 @@ fn onResume(_: *ANativeActivity) callconv(.c) void {
 }
 
 fn onDestroy(_: *ANativeActivity) callconv(.c) void {
+    var threaded: Io.Threaded = .init(std.heap.smp_allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
     // THE RADIO GOES OFF FIRST. A location callback firing into a torn-down process is a crash,
     // and a radio left on after the app is gone is the battery bug that gets you uninstalled.
     location.stop(&radio);
 
     host.running.store(false, .release);
+
+    // WAKE THE GOVERNOR OUT OF ITS THIRTY-SECOND SLEEP. Without this, joining it below waits out the
+    // full cadence, the OS thread stalls past the destroy timeout, and the next launch stares at a
+    // blank splash for fifteen seconds. `running` is already false, so a woken thread exits at once.
+    bumpWake(io);
+
     if (render_thread) |thread| {
         thread.join();
         render_thread = null;
@@ -597,6 +624,28 @@ const no_window_ms: i64 = 20;
 /// afterwards, so the worst a failure can do is spin one iteration early (E4).
 fn idle(io: Io, milliseconds: i64) void {
     io.sleep(Io.Duration.fromMilliseconds(milliseconds), .awake) catch {};
+}
+
+/// Sleep up to `milliseconds`, but wake the INSTANT teardown is signalled (`bumpWake`).
+///
+/// This is `idle` for the background threads that get joined on destroy. It waits on `host.wake`
+/// with a timeout on the `.awake` clock -- so a suspended phone still pays nothing (G5), and the
+/// steady-state deep sleep is identical to the plain `idle` it replaces -- but a shutdown returns
+/// it in microseconds instead of stalling the OS thread for a whole cadence. `futexWaitTimeout`
+/// returns on the timeout, on a wake, or spuriously; the caller re-checks `host.running`, so it
+/// does not matter which, and only a cancel is an error worth swallowing.
+fn idleOrWake(io: Io, milliseconds: i64) void {
+    const gen = host.wake.load(.acquire);
+    io.futexWaitTimeout(u32, &host.wake.raw, gen, .{ .duration = .{
+        .raw = Io.Duration.fromMilliseconds(milliseconds),
+        .clock = .awake,
+    } }) catch {};
+}
+
+/// Wake every thread parked in `idleOrWake`. Called once, at teardown, after `running` is cleared.
+fn bumpWake(io: Io) void {
+    _ = host.wake.fetchAdd(1, .release);
+    io.futexWake(u32, &host.wake.raw, std.math.maxInt(u32));
 }
 
 /// Which screens are alive and must be redrawn frame after frame, and which are still images that
