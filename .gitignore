@@ -3,6 +3,7 @@ zig-out/
 .zig-cache/
 
 # Local-only: design and governing documents. Not published.
+/OPENING.md
 /THE_RULESET.md
 /DESIGN_PHILOSOPHY.md
 /GAME_DESIGN.md

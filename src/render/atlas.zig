@@ -62,7 +62,7 @@ pub const Atlas = struct {
     rects: std.AutoHashMapUnmanaged(u64, Rect) = .empty,
 
     /// The procedural shapes, baked once at init. Indexed by `ui.Sprite`.
-    sprites: [3]Rect = @splat(.{ .x = 0, .y = 0, .w = 0, .h = 0, .advance = 0, .bear_x = 0, .bear_y = 0 }),
+    sprites: [4]Rect = @splat(.{ .x = 0, .y = 0, .w = 0, .h = 0, .advance = 0, .bear_x = 0, .bear_y = 0 }),
 
     /// The bitmap changed and the GPU has an old copy. The shell re-uploads and clears this.
     /// Starts true: the white texel alone is a change worth uploading.
@@ -102,6 +102,7 @@ pub fn init(gpa: Allocator) Error!Atlas {
     atlas.sprites[@intFromEnum(ui.Sprite.disc)] = try bake(&atlas, disc_px, discCoverage);
     atlas.sprites[@intFromEnum(ui.Sprite.vignette)] = try bake(&atlas, vignette_px, vignetteCoverage);
     atlas.sprites[@intFromEnum(ui.Sprite.ring)] = try bake(&atlas, ring_px, annulusCoverage);
+    atlas.sprites[@intFromEnum(ui.Sprite.beam)] = try bake(&atlas, beam_px, beamCoverage);
 
     return atlas;
 }
@@ -109,6 +110,7 @@ pub fn init(gpa: Allocator) Error!Atlas {
 const disc_px = 64;
 const vignette_px = 128;
 const ring_px = 128;
+const beam_px = 128;
 
 /// Opaque at the centre, gone at the rim. Smoothstep rather than linear, because a linear falloff
 /// has a visible hard edge where it reaches zero and reads as a circle rather than a glow.
@@ -142,6 +144,29 @@ fn annulusCoverage(dx: f32, dy: f32) u8 {
     const t = 1.0 - d / half_w;
     const smooth = t * t * (3.0 - 2.0 * t);
     return @intFromFloat(@round(smooth * 255.0));
+}
+
+/// A RADAR SWEEP ARM, baked pointing along +x, with a glowing wake trailing behind it and nothing
+/// ahead. The renderer rotates the whole quad to aim it, so this one bitmap is every angle of the
+/// sweep. Brightest along the arm, fading around the wake and out at the rim -- a comet of light.
+fn beamCoverage(dx: f32, dy: f32) u8 {
+    const r = @sqrt(dx * dx + dy * dy);
+    if (r >= 1.0 or r < 0.06) return 0;
+
+    // The arm sits at angle 0 (+x); the wake trails to negative angles. Ahead of the arm is dark.
+    const ang = std.math.atan2(dy, dx); // -pi .. pi
+    const lead: f32 = 0.05;
+    const wake: f32 = 2.1; // how far the afterglow trails, in radians
+    if (ang > lead or ang < -wake) return 0;
+
+    // 1 along the arm, 0 at the tail of the wake; cubed for a sharp comet head.
+    const along = if (ang >= 0.0) 1.0 else 1.0 - (-ang) / wake;
+    const glow = along * along * along;
+
+    // Soft inner cutoff, brighter toward the rim, fading in the last sliver at the edge.
+    const radial = if (r > 0.94) (1.0 - r) / 0.06 else 0.35 + 0.65 * r;
+
+    return @intFromFloat(@max(0.0, @min(255.0, glow * radial * 255.0)));
 }
 
 /// Write a procedurally generated square of coverage into the atlas and return where it landed.

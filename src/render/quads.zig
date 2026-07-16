@@ -169,20 +169,62 @@ pub fn build(
 
             const x = px(it.x, scale) + origin.x;
             const y = px(it.y, scale) + origin.y;
+            const w = px(it.x + it.w, scale) - px(it.x, scale);
+            const h = px(it.y + it.h, scale) - px(it.y, scale);
 
-            try pushQuad(
-                out,
-                gpa,
-                x,
-                y,
-                px(it.x + it.w, scale) - px(it.x, scale),
-                px(it.y + it.h, scale) - px(it.y, scale),
-                .{ left, top },
-                .{ right, bottom },
-                rgba(it.color),
-            );
+            if (it.angle == 0) {
+                try pushQuad(out, gpa, x, y, w, h, .{ left, top }, .{ right, bottom }, rgba(it.color));
+            } else {
+                // THE SHELL TURNS THE QUAD. The core named an angle -- a 65536th of a turn -- and
+                // here it becomes radians and rotates the four corners about the sprite's centre.
+                // The trig lives in the shell, never the core (B6). The uv is untouched: we spin the
+                // geometry the texture is stretched over, not the lookup into the texture.
+                const theta = @as(f32, @floatFromInt(it.angle)) / 65536.0 * std.math.tau;
+                try pushQuadRotated(out, gpa, x + w * 0.5, y + h * 0.5, w * 0.5, h * 0.5, @cos(theta), @sin(theta), .{ left, top }, .{ right, bottom }, rgba(it.color));
+            }
         },
     };
+}
+
+/// One quad, rotated about its centre by (cos, sin). Same winding and uv layout as `pushQuad`; only
+/// the corner positions differ, so the rotated sweep samples its atlas shape exactly as an
+/// unrotated sprite would.
+fn pushQuadRotated(
+    out: *std.ArrayList(Vertex),
+    gpa: Allocator,
+    cx: f32,
+    cy: f32,
+    hw: f32,
+    hh: f32,
+    co: f32,
+    si: f32,
+    uv0: [2]f32,
+    uv1: [2]f32,
+    colour: [4]f32,
+) Allocator.Error!void {
+    // Local corners, clockwise from top-left, then rotated and offset to the centre.
+    const lx = [4]f32{ -hw, hw, hw, -hw };
+    const ly = [4]f32{ -hh, -hh, hh, hh };
+    var corner: [4][2]f32 = undefined;
+    for (0..4) |i| {
+        corner[i] = .{ cx + lx[i] * co - ly[i] * si, cy + lx[i] * si + ly[i] * co };
+    }
+    const uv = [4][2]f32{ .{ uv0[0], uv0[1] }, .{ uv1[0], uv0[1] }, .{ uv1[0], uv1[1] }, .{ uv0[0], uv1[1] } };
+    const order = [vertices_per_quad]usize{ 0, 1, 2, 0, 2, 3 };
+
+    try out.ensureUnusedCapacity(gpa, vertices_per_quad);
+    for (order) |i| {
+        out.appendAssumeCapacity(.{
+            .x = corner[i][0],
+            .y = corner[i][1],
+            .u = uv[i][0],
+            .v = uv[i][1],
+            .r = colour[0],
+            .g = colour[1],
+            .b = colour[2],
+            .a = colour[3],
+        });
+    }
 }
 
 /// WHERE THE SAFE AREA STARTS, in physical pixels.
@@ -737,4 +779,64 @@ test "the real screens rasterise, the background is first, and every screen has 
         const quads = rig.verts.items.len / vertices_per_quad;
         try testing.expect(quads > rects);
     }
+}
+
+test "a rotated sprite turns the quad: a wide beam becomes tall at a quarter turn" {
+    // The renderer rotation the smooth sonar sweep depends on. The core cannot turn a quad (no
+    // floats, B6); the shell does, and this pins the arithmetic. A 40x10 sprite rotated a quarter
+    // turn about its centre must come out ~10 wide and ~40 tall -- width and height swapped.
+    const gpa = testing.allocator;
+
+    var rig = try Rig.init(gpa);
+    defer rig.deinit(gpa);
+
+    const bbox = struct {
+        fn wh(v: []const Vertex) [2]f32 {
+            var minx: f32 = 1e9;
+            var miny: f32 = 1e9;
+            var maxx: f32 = -1e9;
+            var maxy: f32 = -1e9;
+            for (v) |vt| {
+                minx = @min(minx, vt.x);
+                miny = @min(miny, vt.y);
+                maxx = @max(maxx, vt.x);
+                maxy = @max(maxy, vt.y);
+            }
+            return .{ maxx - minx, maxy - miny };
+        }
+    }.wh;
+
+    const flat = [_]ui.Draw{.{ .sprite = .{ .x = 0, .y = 0, .w = 40, .h = 10, .color = .bone, .sprite = .beam } }};
+    try build(&flat, &rig.engine, &rig.atlas, 1.0, .{}, &rig.verts, gpa);
+    const unrotated = bbox(rig.verts.items);
+
+    var rot: std.ArrayList(Vertex) = .empty;
+    defer rot.deinit(gpa);
+    const turned = [_]ui.Draw{.{ .sprite = .{ .x = 0, .y = 0, .w = 40, .h = 10, .color = .bone, .sprite = .beam, .angle = 16384 } }};
+    try build(&turned, &rig.engine, &rig.atlas, 1.0, .{}, &rot, gpa);
+    const rotated = bbox(rot.items);
+
+    try testing.expectEqual(@as(usize, vertices_per_quad), rot.items.len);
+    // A quarter turn swaps the extents.
+    try testing.expectApproxEqAbs(unrotated[0], rotated[1], 1.0);
+    try testing.expectApproxEqAbs(unrotated[1], rotated[0], 1.0);
+    // And it is genuinely turned, not merely the same box: the rotated width is much less than flat.
+    try testing.expect(rotated[0] < unrotated[0] - 5.0);
+}
+
+test "angle zero takes the fast axis-aligned path, unchanged from a plain sprite" {
+    const gpa = testing.allocator;
+
+    var rig = try Rig.init(gpa);
+    defer rig.deinit(gpa);
+
+    const a = [_]ui.Draw{.{ .sprite = .{ .x = 5, .y = 7, .w = 30, .h = 20, .color = .bone, .sprite = .disc } }};
+    try build(&a, &rig.engine, &rig.atlas, 1.0, .{}, &rig.verts, gpa);
+
+    var b: std.ArrayList(Vertex) = .empty;
+    defer b.deinit(gpa);
+    const c = [_]ui.Draw{.{ .sprite = .{ .x = 5, .y = 7, .w = 30, .h = 20, .color = .bone, .sprite = .disc, .angle = 0 } }};
+    try build(&c, &rig.engine, &rig.atlas, 1.0, .{}, &b, gpa);
+
+    try testing.expectEqualSlices(Vertex, rig.verts.items, b.items);
 }
