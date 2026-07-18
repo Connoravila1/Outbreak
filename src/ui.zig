@@ -767,14 +767,19 @@ const sonar_veins = [_]u8{ 12, 46, 84, 120, 150, 184, 214, 240 };
 /// How long a tap's ripple lives, in milliseconds. It expands to most of the dial and fades out.
 const ripple_life_ms: u32 = 950;
 
-/// The dial's centre and radius for a given screen. Shared by the layout and the touch test so the
-/// two can never drift -- a ripple must be born where the ring actually is.
-const SonarGeom = struct { cx: i32, cy: i32, r: i32 };
+/// The console rectangle and the scope's centre and radius for a given screen. ONE definition,
+/// shared by the layout that draws the terminal and the touch handler that answers a tap -- so a
+/// ripple is always born where the flesh actually is, and the two can never drift.
+const SonarGeom = struct { cx: i32, cy: i32, r: i32, con_y: i32, con_h: i32 };
 fn sonarGeometry(size: Size) SonarGeom {
+    const cmd_h: i32 = 44;
+    const disp_y: i32 = 22 + cmd_h + 8;
+    const con_y: i32 = disp_y + 30 + 10;
+    const con_h: i32 = size.h - con_y - 148;
     const cx = @divTrunc(size.w, 2);
-    const r = @min(@divTrunc(size.w * 40, 100), @divTrunc(size.h * 24, 100));
-    const cy = @max(r + 64, @divTrunc(size.h * 40, 100));
-    return .{ .cx = cx, .cy = cy, .r = r };
+    const cy = con_y + @divTrunc(con_h, 2) + 8;
+    const r = @min(@divTrunc(size.w * 36, 100), @divTrunc(con_h * 38, 100));
+    return .{ .cx = cx, .cy = cy, .r = r, .con_y = con_y, .con_h = con_h };
 }
 
 /// A soft dot of the disc sprite, centred on a point.
@@ -864,76 +869,53 @@ const embers = [_]Ember{
 /// single bit -- the very same bit the game already shows as "THIS CELL IS LIVE." It never reads
 /// the crowd, a count, a direction, or anything that could resolve toward who or where. Everything
 /// else you see moving is the clock.
-fn drawWell(state: State, cx: i32, cy: i32, r: i32, live: bool, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
+/// THE SCOPE inside the console: infected flesh under a rotating scan. The whole thing is integer
+/// (B6); the one thing that must be smooth -- the sweep -- is a single baked `beam` sprite the SHELL
+/// turns by an angle the core hands it, so it rotates without stepping. `live` is the only bit it
+/// learns of the world outside (I3); everything else moving is the clock.
+fn drawScope(state: State, cx: i32, cy: i32, r: i32, live: bool, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
     const t = state.now_ms;
     const faction = state.faction;
-
-    // THE HEARTBEAT EVERYTHING OBEYS. Resting when quiet, racing when the room is live.
     const beat: i32 = heartbeat(t, if (live) 560 else 1150);
-
-    // When live, the infection has flooded the machine and everything runs red. Otherwise it is your
-    // faction's colour, with red always in the fog and creeping at the rim.
     const glow: Color = if (live) .blood_glow else factionGlow(faction);
     const bright: Color = if (live) .blood_glow else factionBright(faction);
-    const deep: Color = if (live) .blood_deep else factionDeep(faction);
 
-    // THE WELL BODY. A cold dark pool the rings fall into, lit faintly at the centre so the eye is
-    // pulled to the bottom of it.
-    try softDot(out, gpa, cx, cy, r, dim(if (live) .clot else .abyss, 225));
+    // FLESH -- a dark bloody membrane the scan looks through, breathing on the beat.
+    try softDot(out, gpa, cx, cy, r, dim(if (live) .clot else .scab, 220));
+    try softDot(out, gpa, cx, cy, @divTrunc(r * 7, 10), dim(.blood_deep, @intCast(28 + @divTrunc(beat, 8))));
 
-    // THE FOG. Big soft blooms, drifting, giving the void depth -- faction-tinted, with a red heat
-    // bloom or two always in it. The infection, alive in the cold.
-    const Fog = struct { fx: i32, fy: i32, rr: i32, col: Color, period: u32, phase: u32 };
-    const fog = [_]Fog{
-        .{ .fx = -30, .fy = -22, .rr = 8, .col = deep, .period = 17000, .phase = 0 },
-        .{ .fx = 34, .fy = 22, .rr = 7, .col = .blood_deep, .period = 21000, .phase = 4000 },
-        .{ .fx = 12, .fy = 30, .rr = 9, .col = deep, .period = 19000, .phase = 9000 },
-        .{ .fx = -28, .fy = 20, .rr = 6, .col = .blood_deep, .period = 23000, .phase = 15000 },
-    };
-    for (fog) |f| {
-        const dx = wander(t, f.period, 24, f.phase);
-        const dy = wander(t, f.period * 5 / 4, 18, f.phase + 3000);
-        const a: u8 = @intCast(16 + @divTrunc(beat, 12));
-        try softDot(out, gpa, cx + @divTrunc(r * f.fx, 100) + dx, cy + @divTrunc(r * f.fy, 100) + dy, @divTrunc(r * f.rr, 10), dim(f.col, a));
-    }
-
-    // THE DESCENT. Rings falling INWARD toward the pit -- born at the rim, shrinking to the centre,
-    // gone. The throat of the well, and it never stops. Faint and structural.
-    {
-        var k: i32 = 0;
-        while (k < 6) : (k += 1) {
-            const raw = (t / 26 + @as(u32, @intCast(k)) * 166) % 1000;
-            const phase: i32 = 1000 - @as(i32, @intCast(raw)); // 1000 (rim) -> 0 (pit)
-            const edge = @min(phase, 1000 - phase); // fade in and out, 0..500
-            const a: u8 = @intCast(@divTrunc(@min(edge, 260) * @as(i32, if (live) 72 else 48), 260));
-            try softRing(out, gpa, cx, cy, @divTrunc(r * phase, 1000), dim(deep, a));
+    // VEINS -- engorged tendrils reaching in from the rim, throbbing on the beat.
+    for (sonar_veins, 0..) |base, vi| {
+        var k: i32 = 2;
+        while (k <= 14) : (k += 1) {
+            const rr = @divTrunc(r * k, 14);
+            const seed: u8 = @intCast((@as(u32, @intCast(k)) * 9 + @as(u32, @intCast(vi)) * 20) & 255);
+            const wob: i32 = @divTrunc(sinQ12(seed) * 12, sonar_one);
+            const ang = base +% @as(u8, @truncate(@as(u32, @bitCast(wob))));
+            const fade: u8 = @intCast(@max(0, (28 + @divTrunc(beat, 5)) - k * 2));
+            try softDot(out, gpa, polarX(cx, rr, ang), polarY(cy, rr, ang), 1, dim(.blood_deep, fade));
         }
     }
 
-    // THE PULSE. Rings pushed OUTWARD from the heart, brightening with the beat -- the vital sign made
-    // spatial. This is the beat you can see leave your chest and reach the rim.
-    {
-        var k: i32 = 0;
-        while (k < 3) : (k += 1) {
-            const phase: i32 = @intCast((t / 4 + @as(u32, @intCast(k)) * 333) % 1000);
-            const reach = @divTrunc((1000 - phase) * beat, 255); // fades outward, flares on the beat
-            const a: u8 = @intCast(@divTrunc(reach * @as(i32, if (live) 150 else 105), 1000));
-            try softRing(out, gpa, cx, cy, @divTrunc(r * phase, 1000), dim(glow, a));
-        }
+    // RANGE RINGS.
+    var i: i32 = 1;
+    while (i <= 3) : (i += 1) {
+        try softRing(out, gpa, cx, cy, @divTrunc(r * i, 3), dim(glow, @intCast(@max(24, 92 - i * 20))));
     }
 
-    // THE HEART at the bottom of the well. A glow that swells on the beat, a bright chamber, and a
-    // hot nucleus inside it. This is you, and it is the pulse the whole screen keeps.
-    try softDot(out, gpa, cx, cy, @divTrunc(r * (30 + @divTrunc(beat, 6)), 100), dim(glow, @intCast(38 + @divTrunc(beat, 3))));
-    try softDot(out, gpa, cx, cy, @divTrunc(r, 7), dim(bright, @intCast(70 + @divTrunc(beat * 150, 255))));
-    try softDot(out, gpa, cx, cy, 4 + @divTrunc(beat, 90), dim(bright, @intCast(150 + @divTrunc(beat * 105, 255))));
+    // THE SWEEP -- one baked beam, turned by the shell at an angle the core hands it. A `u16` is far
+    // finer than the eye, so it sweeps smoothly rather than stepping the way a fan of dots did.
+    const angle: u16 = @truncate(t *% (if (live) @as(u32, 24) else 13));
+    try out.append(gpa, .{ .sprite = .{ .x = cx - r, .y = cy - r, .w = r * 2, .h = r * 2, .color = dim(glow, if (live) 155 else 115), .sprite = .beam, .angle = angle } });
 
-    // LIVE bloom: the whole well floods red and pounds with the racing beat.
-    if (live) {
-        try softDot(out, gpa, cx, cy, r, dim(.blood, @intCast(45 + @divTrunc(beat, 3))));
-    }
+    // THE HEART -- a wet beating wound at the centre, always red; it pumps the veins.
+    try softDot(out, gpa, cx, cy, @divTrunc(r * (24 + @divTrunc(beat, 7)), 100), dim(.wound, @intCast(40 + @divTrunc(beat, 3))));
+    try softDot(out, gpa, cx, cy, 3 + @divTrunc(beat, 90), dim(.blood_glow, @intCast(150 + @divTrunc(beat * 105, 255))));
 
-    // THE RIPPLES the finger left -- a pulse you sent into the well, expanding and fading.
+    // LIVE bloom -- the whole scope floods red and pounds with the racing beat.
+    if (live) try softDot(out, gpa, cx, cy, r, dim(.blood, @intCast(45 + @divTrunc(beat, 3))));
+
+    // THE RIPPLES the finger left -- a pulse you sent into the flesh, expanding and fading.
     for (state.ripples) |rp| {
         if (rp.born_ms == 0) continue;
         const age = t -| rp.born_ms;
@@ -946,65 +928,83 @@ fn drawWell(state: State, cx: i32, cy: i32, r: i32, live: bool, out: *std.ArrayL
     }
 }
 
+/// A framed console panel: dark fill, a hairline border in the faction's dim, and corner brackets.
+/// This is the chrome that makes the screen read as a salvaged instrument, not text on black.
+fn panel(out: *std.ArrayList(Draw), gpa: Allocator, x: i32, y: i32, w: i32, h: i32, edge: Color, accent: Color) Allocator.Error!void {
+    try out.append(gpa, .{ .rect = .{ .x = x, .y = y, .w = w, .h = h, .color = .carrion } });
+    try out.append(gpa, .{ .rect = .{ .x = x, .y = y, .w = w, .h = 1, .color = edge } });
+    try out.append(gpa, .{ .rect = .{ .x = x, .y = y + h - 1, .w = w, .h = 1, .color = edge } });
+    try out.append(gpa, .{ .rect = .{ .x = x, .y = y, .w = 1, .h = h, .color = edge } });
+    try out.append(gpa, .{ .rect = .{ .x = x + w - 1, .y = y, .w = 1, .h = h, .color = edge } });
+    const b: i32 = 8;
+    try out.append(gpa, .{ .rect = .{ .x = x, .y = y, .w = b, .h = 2, .color = accent } });
+    try out.append(gpa, .{ .rect = .{ .x = x, .y = y, .w = 2, .h = b, .color = accent } });
+    try out.append(gpa, .{ .rect = .{ .x = x + w - b, .y = y + h - 2, .w = b, .h = 2, .color = accent } });
+    try out.append(gpa, .{ .rect = .{ .x = x + w - 2, .y = y + h - b, .w = 2, .h = b, .color = accent } });
+}
+
+/// The war dispatch -- GLOBAL, never local (I3). No numbers yet: the counts that would make it
+/// specific ("14,000 souls at war") need a field on the wire that does not exist, and the phone does
+/// not invent data (H1). Mood only, until that slice lands.
+fn dispatchLine(ms: u32) []const u8 {
+    return switch ((ms / 5000) % 3) {
+        0 => "THE INFECTION IS SPREADING",
+        1 => "THE LINE IS MOVING TONIGHT",
+        else => "IT GETS LOUD AFTER DARK",
+    };
+}
+
 fn drawQuiet(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
     const t = state.now_ms;
     const faction = state.faction;
+    const acc = factionGlow(faction);
+    const edge = factionDeep(faction);
 
-    // THE EMBER FIELD, filling the void so the black reads as a place, not an absence. Behind the
-    // well. Parallax: near ones bigger and wandering further. A few run red -- the infection adrift.
-    const bg_beat: i32 = heartbeat(t, 1150);
-    for (embers, 0..) |e, ei| {
-        const amp: i32 = if (e.near) 26 else 11;
-        const x = @divTrunc(size.w * e.x, 1000) + wander(t, e.period, amp, e.phase);
-        const y = @divTrunc(size.h * e.y, 1000) + wander(t, e.period * 6 / 5, amp, e.phase + 2000);
-        const a: u8 = @intCast(18 + @divTrunc(bg_beat, 9) + @as(i32, if (e.near) 12 else 0));
-        const col: Color = if (ei % 4 == 0) .blood_deep else factionDeep(faction);
-        try softDot(out, gpa, x, y, e.size, dim(col, a));
-    }
+    // 1. THE COMMAND BAR -- who you are, on the left; the licence credit rides its right side.
+    const cmd_h: i32 = 44;
+    try panel(out, gpa, pad, 22, size.w - pad * 2, cmd_h, edge, dim(acc, 180));
+    try out.append(gpa, .{ .text = .{ .x = pad + 12, .y = 37, .text = factionLabel(faction), .color = acc, .weight = .label } });
 
-    // Header. The faction, in the faction's own colour -- who you are, at a glance.
-    try out.append(gpa, .{ .text = .{ .x = pad, .y = 40, .text = factionLabel(faction), .color = factionGlow(faction), .weight = .label } });
+    // 2. THE DISPATCH -- the global war, mood only for now (no invented numbers, H1).
+    const disp_y: i32 = 22 + cmd_h + 8;
+    try panel(out, gpa, pad, disp_y, size.w - pad * 2, 30, .clot, dim(.wound, 160));
+    try out.append(gpa, .{ .text = .{ .x = pad + 12, .y = disp_y + 10, .text = "FRONT", .color = .wound, .weight = .label } });
+    try out.append(gpa, .{ .text = .{ .x = pad + 62, .y = disp_y + 10, .text = dispatchLine(t), .color = .serum, .weight = .label } });
 
-    // THE WELL. Geometry shared with the touch test, so a ripple is born where the ring is drawn.
+    // 3. THE SCOPE CONSOLE -- the hero. Geometry is shared with the touch handler, so a tap ripples
+    // where the flesh is drawn.
     const g = sonarGeometry(size);
+    const con_y = g.con_y;
+    const con_h = g.con_h;
     const cx = g.cx;
     const cy = g.cy;
     const r = g.r;
+    try panel(out, gpa, pad, con_y, size.w - pad * 2, con_h, edge, dim(acc, 180));
+    try out.append(gpa, .{ .text = .{ .x = pad + 12, .y = con_y + 11, .text = "FIELD SCAN", .color = .dust, .weight = .label } });
+    try out.append(gpa, .{ .text = .{ .x = size.w - pad - 12, .y = con_y + 11, .text = "SCANNING", .color = acc, .weight = .label, .alignment = .right } });
 
-    try drawWell(state, cx, cy, r, false, out, gpa);
+    try drawScope(state, cx, cy, r, false, out, gpa);
 
-    // THE VIGNETTE. Darken the edges so the eye falls into the pit -- a hole of light at the centre,
-    // dark at the corners. Over the well and the embers, but UNDER the text so the words stay legible.
-    try out.append(gpa, .{ .sprite = .{ .x = -pad, .y = cy - size.w, .w = size.w + pad * 2, .h = size.w * 2, .color = dim(.void_black, 165), .sprite = .vignette } });
-
-    // The reading, centred in the well. One word, bright enough to read. "QUIET" is shown identically
-    // for an empty field, a sub-quorum cell, and a quiet one above quorum -- which is the whole of I3
-    // on the glass: the three are indistinguishable because the phone is told nothing that could tell
-    // them apart.
+    // The reading, centred. "QUIET" is shown identically for an empty field, a sub-quorum cell, and a
+    // quiet one above quorum -- the whole of I3 on the glass: the phone is told nothing that could
+    // tell the three apart.
     try out.append(gpa, .{ .text = .{ .x = cx, .y = cy - 9, .text = "QUIET", .color = .bone, .weight = .label, .alignment = .center } });
 
-    // THE EKG. A heartbeat traced in your faction's colour, scrolling across the foot of the well --
-    // the vital sign spelled out. Same waveform the whole screen breathes on. Geometry, never a
-    // number (I5): it is a shape of a pulse, and it carries nothing but the clock.
-    const ekg_y = @min(cy + r + 8, size.h - 190);
-    const ekg_base = 22; // amplitude
-    var ex: i32 = pad;
-    while (ex < size.w - pad) : (ex += 4) {
-        const v: i32 = heartbeat(t + @as(u32, @intCast(ex - pad)) * 7, 1150);
-        const yy = ekg_y - @divTrunc(v * ekg_base, 255);
-        try softDot(out, gpa, ex, yy, 1, dim(factionGlow(faction), @intCast(40 + @divTrunc(v, 3))));
-    }
+    // 4. THE VITALS -- both real, both number-free: your CONDITION (a word) and the binary THREAT.
+    const vit_y: i32 = con_y + con_h + 8;
+    const gap: i32 = 8;
+    const half = @divTrunc(size.w - pad * 2 - gap, 2);
+    try panel(out, gpa, pad, vit_y, half, 46, edge, dim(acc, 150));
+    try out.append(gpa, .{ .text = .{ .x = pad + 11, .y = vit_y + 9, .text = "CONDITION", .color = .dust, .weight = .label } });
+    try out.append(gpa, .{ .text = .{ .x = pad + 11, .y = vit_y + 25, .text = conditionWord(state.hp), .color = .bone, .weight = .body } });
+    const rx = pad + half + gap;
+    try panel(out, gpa, rx, vit_y, half, 46, edge, dim(acc, 150));
+    try out.append(gpa, .{ .text = .{ .x = rx + 11, .y = vit_y + 9, .text = "THREAT", .color = .dust, .weight = .label } });
+    try out.append(gpa, .{ .text = .{ .x = rx + 11, .y = vit_y + 25, .text = "QUIET", .color = .smoke, .weight = .body } });
 
-    // The legend, below the trace. Number-free, on purpose: a digit on this screen is how a count
-    // could ever leak (see the test). Condition is a word; nothing here is measured.
-    const legend_y = @min(cy + r + 54, size.h - 150);
-    try out.append(gpa, .{ .text = .{ .x = pad, .y = legend_y, .text = "CONDITION", .color = .dust, .weight = .label } });
-    try out.append(gpa, .{ .text = .{ .x = size.w - pad, .y = legend_y, .text = conditionWord(state.hp), .color = .bone, .weight = .body, .alignment = .right } });
-
-    // The dread copy: mood, never occupancy. It says nothing about who is or is not in the room
-    // (I3) -- only that the quiet is temporary.
-    try out.append(gpa, .{ .text = .{ .x = cx, .y = size.h - 96, .text = "The room is quiet.", .color = .smoke, .weight = .body, .alignment = .center } });
-    try out.append(gpa, .{ .text = .{ .x = cx, .y = size.h - 70, .text = "It won't stay that way.", .color = .smoke, .weight = .body, .alignment = .center } });
+    // 5. THE FOOTER -- the human voice. Mood, never occupancy (I3): only that the quiet is temporary.
+    try out.append(gpa, .{ .text = .{ .x = cx, .y = size.h - 72, .text = "The room is quiet.", .color = .smoke, .weight = .body, .alignment = .center } });
+    try out.append(gpa, .{ .text = .{ .x = cx, .y = size.h - 48, .text = "It won't stay that way.", .color = .grave, .weight = .body, .alignment = .center } });
 
     try drawCreditsLink(size, out, gpa);
     try drawDiagnostic(state, size, out, gpa);
