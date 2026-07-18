@@ -55,6 +55,7 @@ const entropy = @import("entropy.zig");
 const protocol = @import("protocol.zig");
 const session_mod = @import("session.zig");
 const spatial = @import("spatial.zig");
+const world = @import("world.zig");
 
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
@@ -156,7 +157,8 @@ pub fn serve(server: *Server, io: Io, gpa: Allocator, stream: net.Stream) void {
 
     const hello = protocol.decodeHello(&hello_bytes) catch return; // garbage is not a client
 
-    const session = authenticate(server, io, gpa, hello) catch return;
+    const auth = authenticate(server, io, gpa, hello) catch return;
+    const session = auth.session;
 
     // Wipe the credentials out of our stack the instant we are done with them. They do not
     // belong in a core dump, a crash report, or a page of swap.
@@ -166,6 +168,10 @@ pub fn serve(server: *Server, io: Io, gpa: Allocator, stream: net.Stream) void {
         .session = session,
         .precision = server.sessions.precision,
         .tick_seconds = 30,
+        // AUTHORITATIVE. On a login this is the account's stored side, not the one the client just
+        // sent -- the vow is the server's to keep, not the phone's (H1). On a register it is the
+        // side just sworn. Either way, the client's local cache reconciles to this.
+        .faction = auth.faction,
     });
 
     var write_buffer: [64]u8 = undefined;
@@ -209,8 +215,12 @@ pub fn serve(server: *Server, io: Io, gpa: Allocator, stream: net.Stream) void {
     }
 }
 
+/// What a completed handshake yields: the session token, and the authoritative side the server
+/// holds for this account (which the welcome carries back to the client).
+const Authenticated = struct { session: protocol.SessionId, faction: world.Faction };
+
 /// SHELL. Register or log in. The only place a password exists in this process.
-fn authenticate(server: *Server, io: Io, gpa: Allocator, hello: protocol.Hello) !protocol.SessionId {
+fn authenticate(server: *Server, io: Io, gpa: Allocator, hello: protocol.Hello) !Authenticated {
     const contact = protocol.unpad(&hello.contact);
     const password = protocol.unpad(&hello.password);
 
@@ -265,7 +275,7 @@ fn authenticate(server: *Server, io: Io, gpa: Allocator, hello: protocol.Hello) 
     // Unguessable, from the OS, never from the tick's mixer (B3). See POSTMORTEM_2026-07-13.
     const session = try entropy.newSession(io);
     _ = try session_mod.joinAuthenticated(&server.sessions, gpa, account.player, account.faction, session);
-    return session;
+    return .{ .session = session, .faction = account.faction };
 }
 
 fn forget(server: *Server, io: Io, session: protocol.SessionId) void {
@@ -334,4 +344,39 @@ fn find(replies: []const session_mod.Reply, session: protocol.SessionId) ?protoc
         if (reply.session == session) return reply.response;
     }
     return null;
+}
+
+const testing = std.testing;
+
+test "a login is bound to the account's sworn side, not the one it sends" {
+    // THE VOW IS THE SERVER'S TO KEEP (H1). A returning player -- or a modified client -- can put any
+    // faction in a login Hello. The server ignores it and hands back the side the account registered
+    // with, and THAT is what the welcome carries to the phone (the client reconciles its local cache
+    // to it). Break this -- reach for hello.faction on the login path -- and a permanent choice
+    // becomes changeable from the client, which is the one thing it must never be.
+    //
+    // Tested through `authenticate` directly, not a socket: this is server logic, and it keeps the
+    // argon2 work single-threaded and off the flake-prone socket path.
+    const gpa = testing.allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var server = try init(io, 0x5EED, spatial.default_precision, .{});
+    defer deinit(&server, gpa);
+
+    var reg: protocol.Hello = .{ .contact = @splat(0), .password = @splat(0), .faction = .human, .intent = .register };
+    @memcpy(reg.contact[0.."op@example.com".len], "op@example.com");
+    @memcpy(reg.password[0.."a good long password".len], "a good long password");
+
+    // Sworn to the humans, once.
+    const registered = try authenticate(&server, io, gpa, reg);
+    try testing.expectEqual(world.Faction.human, registered.faction);
+
+    // The same account returns, its Hello claiming the other side. The claim is ignored.
+    var log = reg;
+    log.faction = .zombie;
+    log.intent = .login;
+    const returned = try authenticate(&server, io, gpa, log);
+    try testing.expectEqual(world.Faction.human, returned.faction);
 }

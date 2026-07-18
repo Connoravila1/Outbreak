@@ -914,6 +914,18 @@ fn render() void {
                 // folded above, is the other).
                 dirty = true;
             }
+
+            // RECONCILE the local cache to the server's truth. The welcome carries the authoritative
+            // side (transport.zig); if it disagrees with what we are showing -- only possible today
+            // under the shared dev credential, impossible once each device has its own account -- the
+            // server wins, because it is authoritative over the vow (H1). The persist below writes the
+            // correction so the next cold start already agrees. Same-value welcomes are a no-op.
+            if (client.authoritativeFaction()) |server_side| {
+                if (host.state.faction != server_side) {
+                    host.state.faction = server_side;
+                    dirty = true;
+                }
+            }
         }
 
         if (!host.awake.load(.acquire)) {
@@ -972,11 +984,12 @@ fn render() void {
             break :blk host.state;
         };
 
-        // THE VOW, PERSISTED. The seal set the faction in `advance` this frame (or, defensively, any
-        // other null -> set edge). Written here, outside every lock, so a returning player wakes into
-        // their sworn colour and is never asked again (O5). See `saveFaction`.
-        if (faction_before == null) {
-            if (host.state.faction) |faction| saveFaction(io, faction);
+        // THE VOW, PERSISTED. Written whenever the side becomes known OR changes this frame -- the
+        // seal sets it in `advance`, and a server reconcile (above) can correct it. Either way the
+        // next cold start wakes into the right colour and never re-asks (O5). Outside every lock: the
+        // teardown thread waits on that mutex, and nothing slow happens under it.
+        if (host.state.faction) |faction| {
+            if (faction_before == null or faction_before.? != faction) saveFaction(io, faction);
         }
 
         // IN DP. The interface has never heard of a phone and does not start now.

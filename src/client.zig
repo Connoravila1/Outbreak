@@ -42,6 +42,23 @@ var latest: protocol.Response = undefined;
 var connected: std.atomic.Value(bool) = .init(false);
 var should_run: std.atomic.Value(bool) = .init(false);
 
+/// THE SERVER'S TRUTH ABOUT YOUR OWN SIDE. -1 until a welcome arrives; 0/1 = human/zombie. The
+/// phone colours its terminal from a LOCAL byte at launch (O5, android.zig) so it need not wait for
+/// the wire -- but the server is authoritative (a login uses the account's stored faction, not the
+/// one the client sent), so the render thread reconciles the local cache against this. It is the
+/// player's OWN side and nothing about anyone else (I1-I3).
+var server_faction: std.atomic.Value(i32) = .init(-1);
+
+/// The side the server says you are, or null if no welcome has arrived this run. The render thread
+/// folds this into the UI and persists any correction (android.zig).
+pub fn authoritativeFaction() ?Faction {
+    return switch (server_faction.load(.acquire)) {
+        0 => .human,
+        1 => .zombie,
+        else => null,
+    };
+}
+
 /// Take the latest response, if there is one. Returns null if nothing new has arrived.
 ///
 /// The render thread calls this each frame and folds a result into the UI (`ui.told`). Clearing on
@@ -185,6 +202,12 @@ fn welcomeFrom(
 
     const welcome = try protocol.decodeWelcome(&welcome_bytes);
     location.setPrecision(welcome.precision);
+
+    // THE SERVER'S TRUTH, PUBLISHED. Whether this was a register (the side just sworn) or a login
+    // (the account's stored side, whatever the client sent), the welcome carries the authoritative
+    // faction. The render thread reconciles the local cache against it.
+    server_faction.store(@intFromEnum(welcome.faction), .release);
+
     return welcome.session;
 }
 

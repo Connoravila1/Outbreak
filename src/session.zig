@@ -119,6 +119,7 @@ pub fn joinAuthenticated(
                 .session = session,
                 .precision = server.precision,
                 .tick_seconds = 30,
+                .faction = faction,
             };
         }
     }
@@ -138,6 +139,7 @@ pub fn joinAuthenticated(
         .session = session,
         .precision = server.precision,
         .tick_seconds = 30,
+        .faction = faction,
     };
 }
 

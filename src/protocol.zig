@@ -386,24 +386,41 @@ pub const Welcome = struct {
     /// Seconds between ticks. The client uses it to pace GPS, which is a battery decision
     /// before it is a protocol one (G5).
     tick_seconds: u8,
+    /// THE PLAYER'S OWN SIDE, AS THE SERVER HOLDS IT -- authoritative. Chosen once and pinned at
+    /// registration; a login returns the account's stored faction and ignores whatever the client
+    /// sent (transport.zig). The client colours its terminal from a LOCAL byte at launch (O5) so it
+    /// need not wait for the wire; this is the server's truth to reconcile that cache against. It is
+    /// a fact about YOURSELF -- not a who, a where, or a count of anyone else (I1-I3, I5).
+    faction: world.Faction,
 };
 
-pub const welcome_size = 10;
+pub const welcome_size = 11;
 
 pub fn encodeWelcome(welcome: Welcome) [welcome_size]u8 {
     var out: [welcome_size]u8 = undefined;
     std.mem.writeInt(u64, out[0..8], @intFromEnum(welcome.session), .little);
     out[8] = welcome.precision;
     out[9] = welcome.tick_seconds;
+    out[10] = @intFromEnum(welcome.faction);
     return out;
 }
 
 pub fn decodeWelcome(bytes: []const u8) Error!Welcome {
     if (bytes.len != welcome_size) return Error.Truncated;
+
+    // An attacker-controlled byte is never cast straight into an enum (Error.BadValue). Same class
+    // of crash the fuzzer found in decodeHello -- the server is trusted, but the wire is not.
+    const faction: world.Faction = switch (bytes[10]) {
+        0 => .human,
+        1 => .zombie,
+        else => return Error.BadValue,
+    };
+
     return .{
         .session = @enumFromInt(std.mem.readInt(u64, bytes[0..8], .little)),
         .precision = @intCast(bytes[8] & 0x3f),
         .tick_seconds = bytes[9],
+        .faction = faction,
     };
 }
 
@@ -511,12 +528,29 @@ test "the server tells the client how to quantize" {
         .session = @enumFromInt(0x5E5510),
         .precision = spatial.default_precision,
         .tick_seconds = 30,
+        .faction = .zombie,
     };
 
     const back = try decodeWelcome(&encodeWelcome(welcome));
     try testing.expectEqual(welcome.session, back.session);
     try testing.expectEqual(welcome.precision, back.precision);
     try testing.expectEqual(@as(u8, 30), back.tick_seconds);
+    // The player's own side rides the handshake, and it round-trips.
+    try testing.expectEqual(world.Faction.zombie, back.faction);
+}
+
+test "a welcome with a nonsense faction byte is rejected, not cast" {
+    // The same discipline as decodeHello: a byte off the wire is never @enumFromInt'd into a
+    // Faction. Inside TLS the server is trusted, but a decoder that can be handed a bad byte and
+    // does the safe thing is one fewer place a crash can hide (Error.BadValue).
+    var bytes = encodeWelcome(.{
+        .session = @enumFromInt(1),
+        .precision = spatial.default_precision,
+        .tick_seconds = 30,
+        .faction = .human,
+    });
+    bytes[10] = 2; // neither human (0) nor zombie (1)
+    try testing.expectError(Error.BadValue, decodeWelcome(&bytes));
 }
 
 test "a client reporting a finer cell than we asked for is coarsened, not trusted" {
