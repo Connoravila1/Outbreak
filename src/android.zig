@@ -51,6 +51,8 @@ const atlas_mod = @import("render/atlas.zig");
 const location = @import("location.zig");
 const client = @import("client.zig");
 const governor = @import("governor.zig");
+const world = @import("world.zig");
+const store = @import("store.zig");
 const flags = @import("flags");
 
 const Io = std.Io;
@@ -249,6 +251,63 @@ var render_thread: ?std.Thread = null;
 /// prose. It has now caught three of my own comments ABOUT it. The bluntness is the feature.)
 var radio: location.Radio = .{ .vm = null, .activity = null };
 
+/// ============================================================================
+/// THE VOW, MADE DURABLE. FACTION PERSISTENCE (O5).
+///
+/// A side is chosen once and never changed -- and that promise is a lie if a task-kill erases it.
+/// The server already enforces it (a login uses the account's stored faction, never the client's),
+/// but the PHONE forgot: `host.state.faction` lived only in process memory, so a cold start dropped
+/// the player back onto the choose-a-side screen as if the vow had never been made.
+///
+/// So it is written down. One byte -- the faction enum -- in the app's own private directory. It is
+/// read at launch and folded into the initial state; once a faction is set, the boot sequence flows
+/// straight to the terminal and never offers the choice again (see ui.advance). It is NOT a
+/// location and never will be (I7): a faction is a fact about yourself, not a place or a person.
+///
+/// The encoding is the enum's own `u8`, the SAME encoding the wire already pins (protocol.zig). The
+/// comptime assert makes that dependency explicit and local: reorder the enum and the build stops
+/// here, not silently at a returning player's coloured-wrong terminal.
+var data_path: ?[*:0]const u8 = null;
+
+const faction_file = "faction";
+
+comptime {
+    // The persisted byte IS the enum value. If this ever stops holding, a saved side would decode
+    // to the wrong colour on the next launch -- so it fails the build instead.
+    std.debug.assert(@intFromEnum(world.Faction.human) == 0);
+    std.debug.assert(@intFromEnum(world.Faction.zombie) == 1);
+}
+
+/// Build "<internalDataPath>/faction" into `buf`, or null if the data path is not known yet.
+fn factionPath(buf: []u8) ?[]const u8 {
+    const dir = data_path orelse return null;
+    return std.fmt.bufPrint(buf, "{s}/{s}", .{ std.mem.span(dir), faction_file }) catch null;
+}
+
+/// SHELL. Persist the chosen side. Called once, on the tick the choice is confirmed. A failure to
+/// write is not fatal -- the vow degrades to "this session" rather than crashing the game (E4).
+fn saveFaction(io: Io, faction: world.Faction) void {
+    var buf: [512]u8 = undefined;
+    const path = factionPath(&buf) orelse return;
+    const byte = [_]u8{@intFromEnum(faction)};
+    store.save(io, path, &byte) catch {};
+}
+
+/// SHELL. Read the side chosen on a previous launch. Absent (first launch) or malformed is simply
+/// "no side yet", and the player is sent to the choice -- an ordinary result, not an error (E4).
+fn loadFaction(io: Io) ?world.Faction {
+    var buf: [512]u8 = undefined;
+    const path = factionPath(&buf) orelse return null;
+    const bytes = store.load(io, std.heap.smp_allocator, path) catch return null;
+    defer std.heap.smp_allocator.free(bytes);
+    if (bytes.len != 1) return null;
+    return switch (bytes[0]) {
+        0 => .human,
+        1 => .zombie,
+        else => null, // a byte we did not write is not a side
+    };
+}
+
 /// The entry point. The framework calls this and nothing else.
 export fn ANativeActivity_onCreate(
     activity: *ANativeActivity,
@@ -284,6 +343,18 @@ export fn ANativeActivity_onCreate(
     // The JVM, and the activity object the location calls hang off. `clazz` in the NDK's own
     // header; `class` here because `clazz` is not a word.
     radio = .{ .vm = activity.vm, .activity = activity.class };
+
+    // THE VOW, RESTORED. Before the render thread reads the state: recover the side chosen on a
+    // previous launch, if any. A returning player skips the choice and wakes into their own colour;
+    // a first launch finds nothing and is offered the choice, exactly as before. Seeded here so it
+    // is set before `render` ever advances the boot sequence (ui.advance sends a chosen player
+    // straight to the terminal). BEFORE the render thread starts, so it is never read mid-write.
+    data_path = activity.internalDataPath;
+    {
+        var threaded: Io.Threaded = .init(std.heap.smp_allocator, .{});
+        defer threaded.deinit();
+        if (loadFaction(threaded.io())) |faction| host.state.faction = faction;
+    }
 
     host.running.store(true, .release);
     render_thread = std.Thread.spawn(.{}, render, .{}) catch null;
@@ -805,6 +876,11 @@ fn render() void {
         drainInput(queue, io);
 
         // ---- fold the touch into the game. The UI is pure; this is the only place it moves.
+        //
+        // A side chosen this frame is persisted below -- OUTSIDE the lock. A one-byte write is
+        // microseconds, but `onWindowDestroyed` blocks the OS thread on this same mutex, and the
+        // one rule that fixed the fifteen-second launch hang is that nothing slow happens under it.
+        var newly_chosen: ?world.Faction = null;
         {
             host.mutex.lock(io) catch break;
             defer host.mutex.unlock(io);
@@ -820,7 +896,12 @@ fn render() void {
                     .x = toDp(at.x - safe.left),
                     .y = toDp(at.y - safe.top),
                 };
+
+                // THE CHOICE IS MADE ONCE. Catch the null -> set edge so the vow is written exactly
+                // when it is taken, and never rewritten thereafter.
+                const chosen_before = host.state.faction != null;
                 host.state = ui.touch(host.state, in_dp, sizeInDp(&surface));
+                if (!chosen_before) newly_chosen = host.state.faction;
                 host.pending_touch = null;
 
                 // The state moved. That is the ONLY thing that makes the screen stale.
@@ -831,6 +912,9 @@ fn render() void {
                 dirty = true;
             }
         }
+
+        // The vow, committed to disk the instant it is taken. Outside the lock (see above).
+        if (newly_chosen) |faction| saveFaction(io, faction);
 
         if (!host.awake.load(.acquire)) {
             // Not visible. Do not draw, and DO NOT SPIN.

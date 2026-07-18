@@ -1803,6 +1803,23 @@ test "choosing a side is permanent" {
     try testing.expectEqual(Faction.human, state.faction.?);
 }
 
+test "a restored faction skips the choice and wakes into the terminal" {
+    // FACTION PERSISTENCE (O5). The phone seeds the side chosen on a previous launch into the
+    // initial state before the boot sequence runs (android.zig, loadFaction). THIS is the guarantee
+    // that makes persisting it worth anything: a boot that already knows its side flows straight to
+    // the terminal and is never offered the choice again. Break it -- send a returning player back
+    // to choose_side -- and the durable vow is pointless, a promise the screen forgets on sight.
+    const restored: State = .{ .screen = .boot, .faction = .zombie, .leaving_ms = 0 };
+    const woken = advance(restored, boot_exit_ms);
+    try testing.expectEqual(Screen.quiet, woken.screen);
+    try testing.expectEqual(Faction.zombie, woken.faction.?);
+
+    // The mirror, the same code path's other branch: no side yet still leads to the choice, so a
+    // genuine first launch is unaffected.
+    const fresh: State = .{ .screen = .boot, .faction = null, .leaving_ms = 0 };
+    try testing.expectEqual(Screen.choose_side, advance(fresh, boot_exit_ms).screen);
+}
+
 test "a quiet tick shows nothing, and shows it forever" {
     // The most important screen in the product, and the one that is on almost all the time.
     var state: State = .{ .screen = .quiet, .faction = .human };
