@@ -189,9 +189,25 @@ const phone_file = "android.zig";
 /// dependency you can actually remove.
 const render_dir = "@import(\"render/";
 
+/// THE INTEGER UI CORE DOES NOT IMPORT SPUNKY.
+///
+/// `spunky/` is the interaction-feel module -- float, shell, pure. It animates presentation
+/// values (a drawer fraction, a scroll offset, the war-globe's spin) and hit-tests screen rects.
+/// It is legitimately imported by the shell (the frame loop, the renderer) when a screen is
+/// wired to it. It must NOT be imported by a CORE file.
+///
+/// The coordinate wall (B6) already bans a float TOKEN from a core file, but an inferred-type
+/// float slips past a textual scan: `const v = spunky.gesture.velocity(&ring);` puts no `f32` in
+/// the file yet pulls float motion into the pure integer core. So the import itself is what the
+/// build forbids -- the same shape as the renderer quarantine above, and the same lesson as the
+/// deterministic mixer that looked like a CSPRNG: bind the CATEGORY, not the token.
+///
+/// This was a boundary written only in prose (`src/spunky/spunky.zig`) until this guard bound it.
+const spunky_dir = "@import(\"spunky/";
+
 /// `root.zig` is the module manifest, not a unit of logic -- it re-exports everything so the test
 /// binary can reach it, and it imports the shell too. It is the one file permitted to name the
-/// renderer, and it is named here rather than left as an unexplained hole.
+/// renderer (and spunky), and it is named here rather than left as an unexplained hole.
 const render_importer_exempt = "root.zig";
 
 const Source = struct { name: []const u8, text: []const u8 };
@@ -275,6 +291,18 @@ const shell = [_]Source{
     // it is shell -- but it holds no coordinate (it works in counters, not places), and the guard
     // pins the f64 out of it just the same.
     .{ .name = "governor.zig", .text = @embedFile("governor.zig") },
+    // SHELL: spunky, the interaction-feel module (spring physics, gesture feel, hit testing).
+    // Vendored by copy from our own side-project; first-party, so not an F1 dependency. It is
+    // SHELL for the same reason quads.zig is: it speaks in floats (spring positions, scroll
+    // offsets, screen-pixel rects), and the coordinate wall keeps floats out of core textually,
+    // pixels or not. Pure regardless -- dt and timestamps are parameters, no clock/RNG/I/O -- so
+    // it is fully tested on a laptop. It holds NO f64 (all f32), sees no CellId, and is inert with
+    // respect to Section I. It is not imported by ui.zig (the integer UI core); see the boundary
+    // note in src/spunky/spunky.zig. Unwired today, adopted ahead of the war-globe/menu work.
+    .{ .name = "spunky/spunky.zig", .text = @embedFile("spunky/spunky.zig") },
+    .{ .name = "spunky/spring.zig", .text = @embedFile("spunky/spring.zig") },
+    .{ .name = "spunky/gesture.zig", .text = @embedFile("spunky/gesture.zig") },
+    .{ .name = "spunky/hit.zig", .text = @embedFile("spunky/hit.zig") },
 };
 
 /// ============================================================================
@@ -467,6 +495,15 @@ comptime {
                         "to by it. If the renderer vanished tomorrow, only the renderer should " ++
                         "fail to compile. It is also where the one sanctioned rendering dependency " ++
                         "lives, and the quarantine is what makes that dependency removable at all.");
+                }
+                if (startsWith(src.text[j..], spunky_dir)) {
+                    @compileError("SPUNKY IN CORE: " ++ src.name ++ " imports spunky, and it is " ++
+                        "CORE. Spunky is float, shell interaction-feel -- springs, gesture " ++
+                        "momentum, screen-rect hit testing. It belongs to the shell (the frame " ++
+                        "loop, the renderer), never the pure integer core. The coordinate wall " ++
+                        "catches a float TOKEN in a core file; an inferred-type float from spunky " ++
+                        "would not carry one, so the import itself is what fails here. Animate view " ++
+                        "state in the shell and hand the core plain integer results.");
                 }
             }
         }

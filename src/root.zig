@@ -81,6 +81,12 @@ pub const client = @import("client.zig");
 /// SHELL. Governs the GPS radio by the pure policy in `gps.zig`.
 pub const governor = @import("governor.zig");
 
+/// SHELL. Interaction feel — spring physics, gesture momentum, hit testing (spunky). Vendored
+/// from our own side-project by copy; first-party, so not an F1 dependency. Float and pure,
+/// tested without a screen. Never sees a `CellId`; not imported by `ui.zig`. Unwired today,
+/// adopted ahead of the war-globe/menu work. See the boundary note in `spunky/spunky.zig`.
+pub const spunky = @import("spunky/spunky.zig");
+
 comptime {
     // The forbidden-construct guard runs at compile time, so a distance function or a
     // coordinate in the core fails the build rather than the review. Referencing it here
@@ -119,4 +125,5 @@ test {
     _ = @import("location.zig");
     _ = @import("client.zig");
     _ = @import("governor.zig");
+    _ = @import("spunky/spunky.zig");
 }
