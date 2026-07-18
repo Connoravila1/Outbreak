@@ -135,6 +135,7 @@ extern fn AMotionEvent_getY(*const AInputEvent, usize) f32;
 const input_event_type_motion: i32 = 2;
 const motion_action_mask: i32 = 0xff;
 const motion_action_up: i32 = 1;
+const motion_action_down: i32 = 0;
 
 // ============================================================================ EGL, locally
 
@@ -217,8 +218,13 @@ const Host = struct {
     /// THE GAME. The whole of what the phone knows (ui.zig).
     state: ui.State = .{},
 
-    /// A touch that arrived and has not been folded into the state yet.
+    /// A touch (finger UP -- a tap) that arrived and has not been folded into the state yet.
     pending_touch: ?ui.Touch = null,
+
+    /// A press (finger DOWN) not yet folded. The vow's hold begins on this (ui.press); every other
+    /// screen ignores it. Kept separate from `pending_touch` so down and up never overwrite one
+    /// another when both land in a single frame.
+    pending_press: ?ui.Touch = null,
 
     /// ============================================================================
     /// THE SAFE RECTANGLE. WHERE THE PHONE WILL ACTUALLY LET US DRAW.
@@ -875,46 +881,40 @@ fn render() void {
 
         drainInput(queue, io);
 
-        // ---- fold the touch into the game. The UI is pure; this is the only place it moves.
+        // ---- fold input into the game. The UI is pure; this is the only place it moves. A PRESS
+        // (finger down) begins the vow's hold; a TOUCH (finger up) is a tap, and also cancels an
+        // incomplete hold. Down comes before up, so the press folds first.
         //
-        // A side chosen this frame is persisted below -- OUTSIDE the lock. A one-byte write is
-        // microseconds, but `onWindowDestroyed` blocks the OS thread on this same mutex, and the
-        // one rule that fixed the fifteen-second launch hang is that nothing slow happens under it.
-        var newly_chosen: ?world.Faction = null;
+        // The chosen faction is persisted AFTER `advance` below -- the seal completes on the clock,
+        // not on a tap (ui.advance), so the null -> set edge appears there. And OUTSIDE the lock:
+        // `onWindowDestroyed` blocks the OS thread on this same mutex, and the rule that fixed the
+        // fifteen-second launch hang is that nothing slow happens under it.
+        const faction_before = host.state.faction; // single writer -- this thread -- so no lock to read.
         {
             host.mutex.lock(io) catch break;
             defer host.mutex.unlock(io);
 
-            if (host.pending_touch) |at| {
-                // The touch arrived in PHYSICAL pixels; the UI thinks in dp. Divide here, or a tap
-                // on the Confirm button lands three times too far down the screen and the game
-                // appears not to respond to touch at all.
-                // Back into the safe area's own coordinates, then into dp. The UI placed that
-                // button relative to a rectangle whose origin it has never been told about.
-                const safe = safeArea(&surface);
-                const in_dp: ui.Touch = .{
-                    .x = toDp(at.x - safe.left),
-                    .y = toDp(at.y - safe.top),
-                };
+            // PHYSICAL pixels into the safe area's own dp: the UI placed its buttons relative to a
+            // rectangle whose origin it was never told about. Get this wrong and a tap on HOLD TO
+            // COMMIT lands far down the screen and the game seems dead to the touch.
+            const safe = safeArea(&surface);
+            const size_dp = sizeInDp(&surface);
 
-                // THE CHOICE IS MADE ONCE. Catch the null -> set edge so the vow is written exactly
-                // when it is taken, and never rewritten thereafter.
-                const chosen_before = host.state.faction != null;
-                host.state = ui.touch(host.state, in_dp, sizeInDp(&surface));
-                if (!chosen_before) newly_chosen = host.state.faction;
+            if (host.pending_press) |at| {
+                host.state = ui.press(host.state, .{ .x = toDp(at.x - safe.left), .y = toDp(at.y - safe.top) }, size_dp);
+                host.pending_press = null;
+                dirty = true;
+            }
+
+            if (host.pending_touch) |at| {
+                host.state = ui.touch(host.state, .{ .x = toDp(at.x - safe.left), .y = toDp(at.y - safe.top) }, size_dp);
                 host.pending_touch = null;
 
-                // The state moved. That is the ONLY thing that makes the screen stale.
-                //
-                // M.7 WIRES THE SOCKET, AND A REPLY FROM THE SERVER IS THE OTHER THING THAT MOVES
-                // IT. Whatever folds a `Tell` into `host.state` must set this too, or the news
-                // will arrive and the screen will not show it.
+                // The state moved -- the one thing that makes the screen stale (a server reply,
+                // folded above, is the other).
                 dirty = true;
             }
         }
-
-        // The vow, committed to disk the instant it is taken. Outside the lock (see above).
-        if (newly_chosen) |faction| saveFaction(io, faction);
 
         if (!host.awake.load(.acquire)) {
             // Not visible. Do not draw, and DO NOT SPIN.
@@ -971,6 +971,13 @@ fn render() void {
 
             break :blk host.state;
         };
+
+        // THE VOW, PERSISTED. The seal set the faction in `advance` this frame (or, defensively, any
+        // other null -> set edge). Written here, outside every lock, so a returning player wakes into
+        // their sworn colour and is never asked again (O5). See `saveFaction`.
+        if (faction_before == null) {
+            if (host.state.faction) |faction| saveFaction(io, faction);
+        }
 
         // IN DP. The interface has never heard of a phone and does not start now.
         ui.draw(state, sizeInDp(&surface), insetsInDp(&surface), &draws, gpa) catch continue;
@@ -1146,8 +1153,11 @@ fn drainInput(queue: ?*AInputQueue, io: Io) void {
         if (AInputEvent_getType(e) == input_event_type_motion) {
             const action = AMotionEvent_getAction(e) & motion_action_mask;
 
-            // A tap is a RELEASE, not a press. It is the only gesture this game has.
-            if (action == motion_action_up) {
+            // DOWN and UP, and only those. A tap is the UP (the game's one everyday gesture); the
+            // DOWN exists for exactly one thing -- the vow's hold, which measures how long the
+            // thumb stays down (ui.press). Nothing here tracks MOVE: a hold is down-then-up, and a
+            // finger that slides off before it lifts still lifts, which cancels (ui.touch).
+            if (action == motion_action_down or action == motion_action_up) {
                 // The floats die here. They are screen pixels, not a place on Earth -- but the
                 // core is integer-only, and a pixel that lands on a half is a pixel that looks
                 // blurry (ui.zig).
@@ -1158,7 +1168,11 @@ fn drainInput(queue: ?*AInputQueue, io: Io) void {
                     AInputQueue_finishEvent(q, e, 0);
                     continue;
                 };
-                host.pending_touch = .{ .x = x, .y = y };
+                if (action == motion_action_down) {
+                    host.pending_press = .{ .x = x, .y = y };
+                } else {
+                    host.pending_touch = .{ .x = x, .y = y };
+                }
                 host.mutex.unlock(io);
 
                 handled = 1;

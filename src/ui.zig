@@ -191,8 +191,21 @@ pub const State = struct {
 
     /// Chosen once, permanently. Null until they choose.
     faction: ?Faction = null,
-    /// Highlighted but not yet confirmed.
+    /// Highlighted but not yet confirmed. On `choose_side`, the side being tried on -- ARMED, not
+    /// sworn. It may be changed freely by tapping the other card, right up until the hold begins.
     hovering: ?Faction = null,
+
+    /// THE VOW, IN PROGRESS. When the finger came down on HOLD TO COMMIT, or null if it is not being
+    /// held. `advance` watches this: once the finger has been down for `hold_commit_ms`, the vow
+    /// seals. A finger lifted before then (a `touch`) clears it -- release early and you are still
+    /// free. This is the whole mechanism of the one moment the game will not let you take back by
+    /// accident (OPENING §3).
+    holding_since: ?u32 = null,
+
+    /// WHEN THE VOW SEALED. Null until the hold completes. While set, the choosing floods with the
+    /// chosen colour and `advance` hands over to the terminal after `seal_flood_ms`. It is the beat
+    /// between the decision and the long watch -- the machine taking its side (OPENING §4).
+    sealed_ms: ?u32 = null,
 
     /// The last thing the server said. Null before the first tick.
     hp: u16 = 100,
@@ -385,6 +398,17 @@ const boot_exit_ms: u32 = 420;
 /// This exists because an ANIMATION HAS TO FINISH. `touch` cannot both start the exit and end it
 /// -- the player taps once, and the four hundred milliseconds that follow are not touches. So the
 /// shell calls this every frame and the state machine advances itself.
+/// THE CEREMONY, IN MILLISECONDS.
+///
+/// `hold_commit_ms` is the length of the vow -- how long the thumb stays down while the machine
+/// binds you. 1.2s is the paper value (OPENING §7); it is tuned on the device, not in a test. Too
+/// short is not a ceremony; too long is tedious.
+///
+/// `seal_flood_ms` is the beat AFTER the seal -- the colour flooding the terminal before the
+/// choosing dissolves into the long watch. The handover, not the decision.
+const hold_commit_ms: u32 = 1200;
+const seal_flood_ms: u32 = 900;
+
 pub fn advance(state: State, ms: u32) State {
     var next = state;
 
@@ -400,6 +424,30 @@ pub fn advance(state: State, ms: u32) State {
             if (ms -| began >= boot_exit_ms) {
                 next.screen = if (state.faction == null) .choose_side else .quiet;
                 next.leaving_ms = null;
+            }
+        }
+    }
+
+    if (state.screen == .choose_side) {
+        if (state.sealed_ms) |sealed| {
+            // THE HANDOVER. The vow is sworn; the flood plays, then the choosing dissolves into the
+            // terminal, now permanently in the sworn colour. The one path off this screen, forward.
+            if (ms -| sealed >= seal_flood_ms) {
+                next.screen = .quiet;
+                next.sealed_ms = null;
+            }
+        } else if (state.holding_since) |began| {
+            // THE SEAL. A thumb held on HOLD TO COMMIT for the whole ceremony. Time is a parameter,
+            // so this completes purely as a function of the millisecond -- testable with no finger
+            // and no clock. `hovering` is the armed side; the seal makes it the sworn one.
+            if (ms -| began >= hold_commit_ms) {
+                if (state.hovering) |sworn| {
+                    // Set once, here, forever. The null -> set edge is also what the phone persists
+                    // (android.zig): the vow is written to disk the instant it is taken.
+                    next.faction = sworn;
+                    next.sealed_ms = ms;
+                    next.holding_since = null;
+                }
             }
         }
     }
@@ -430,20 +478,23 @@ pub fn touch(state: State, at: Touch, size: Size) State {
         },
 
         .choose_side => {
-            const human = factionButton(size, .human);
-            const zombie = factionButton(size, .zombie);
-            const confirm = confirmButton(size);
+            // THE VOW IS SEALING, OR SEALED. The choosing is locked: no tap changes it, and there is
+            // no back button on this screen -- the HOLD was the "are you sure" (OPENING §3). This is
+            // the one-way door, stated in code.
+            if (state.sealed_ms != null) return next;
 
-            if (within(at, human)) next.hovering = .human;
-            if (within(at, zombie)) next.hovering = .zombie;
-
-            if (within(at, confirm)) {
-                if (state.hovering) |chosen| {
-                    // Chosen once. Permanently. There is no code path back to this screen.
-                    next.faction = chosen;
-                    next.screen = .quiet;
-                }
+            // A RELEASE CANCELS AN INCOMPLETE HOLD. The thumb lifted before the ceremony finished, so
+            // the vow was not taken and you are still free. (A completed hold seals in `advance`,
+            // before this release arrives, and is caught by the lock above.)
+            if (state.holding_since != null) {
+                next.holding_since = null;
+                return next;
             }
+
+            // ARM a side by tapping its card. Reversible -- tap the other to change your mind, right
+            // up to the hold. No default, no pre-selection: the terminal waits (OPENING §2).
+            if (within(at, factionButton(size, .human))) next.hovering = .human;
+            if (within(at, factionButton(size, .zombie))) next.hovering = .zombie;
 
             if (within(at, creditsLink(size))) next.screen = .credits;
         },
@@ -482,6 +533,28 @@ pub fn touch(state: State, at: Touch, size: Size) State {
                 next.tell_count = 0;
             }
         },
+    }
+
+    return next;
+}
+
+/// CORE. The player put a finger DOWN. Returns the new state.
+///
+/// The companion to `touch`, which is the finger coming UP (a tap). Almost every screen cares only
+/// about the tap; the ONE thing that needs the press is the vow, where the machine measures how long
+/// the thumb stays down before it binds you (OPENING §3). Pure: same state, same press, same result.
+pub fn press(state: State, at: Touch, size: Size) State {
+    var next = state;
+
+    if (state.screen == .choose_side) {
+        // Begin the ceremony ONLY when a side is armed and the thumb comes down on HOLD TO COMMIT.
+        // No armed side, no hold: a permanent choice is never begun by a stray press on nothing
+        // (OPENING §2). Already sealing, or already holding? Then this press is not the start of one.
+        if (state.sealed_ms == null and state.holding_since == null) {
+            if (state.hovering != null and within(at, confirmButton(size))) {
+                next.holding_since = state.now_ms;
+            }
+        }
     }
 
     return next;
@@ -618,25 +691,57 @@ pub fn draw(state: State, size: Size, insets: Insets, out: *std.ArrayList(Draw),
     }
 }
 
+/// The record the machine stamps when the vow seals. ASCII only -- the atlas bakes the game's copy,
+/// and a stray glyph it never saw renders as a hole.
+fn sealLine(faction: ?Faction) []const u8 {
+    return switch (faction orelse return "ALLEGIANCE SEALED / IRREVERSIBLE") {
+        .human => "ALLEGIANCE SEALED / HUMAN / IRREVERSIBLE",
+        .zombie => "ALLEGIANCE SEALED / ZOMBIE / IRREVERSIBLE",
+    };
+}
+
 fn drawChooseSide(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
+    // THIS IS A FIRST, FUNCTIONAL PASS of the choosing in the terminal's voice (OPENING §2-4). The
+    // machine copy, the two leaning previews, and a HOLD TO COMMIT bar that fills as the thumb holds
+    // are here so the vow can be FELT on the device; the cinematic flood, the whole-screen lean, and
+    // the coloured live previews iterate on the phone with the user.
     try out.append(gpa, .{ .text = .{ .x = pad, .y = 40, .text = "OUTBREAK", .color = .grave, .weight = .label } });
 
-    try out.append(gpa, .{ .text = .{ .x = pad, .y = 110, .text = "Choose a side", .color = .bone, .weight = .heading } });
-    try out.append(gpa, .{ .text = .{ .x = pad, .y = 110 + line, .text = "This choice is permanent.", .color = .dust, .weight = .body } });
-    try out.append(gpa, .{ .text = .{ .x = pad, .y = 110 + line * 2, .text = "You will never be able to change it.", .color = .dust, .weight = .body } });
+    // THE MACHINE'S VOICE. Contamination detected; it cannot proceed until it classifies the
+    // operator. Cold, procedural, and the weight is entirely in what it withholds.
+    try out.append(gpa, .{ .text = .{ .x = pad, .y = 104, .text = "OPERATOR UNCLASSIFIED", .color = .wound, .weight = .heading } });
+    try out.append(gpa, .{ .text = .{ .x = pad, .y = 104 + line, .text = "DECLARE ALLEGIANCE.", .color = .bone, .weight = .body } });
+    try out.append(gpa, .{ .text = .{ .x = pad, .y = 104 + line * 2, .text = "THIS RECORD IS PERMANENT AND CANNOT BE AMENDED.", .color = .dust, .weight = .body } });
 
-    const human = factionButton(size, .human);
-    const zombie = factionButton(size, .zombie);
+    try drawFaction(state, factionButton(size, .human), .human, "HUMAN", "You hold. You are outnumbered, and you know it.", out, gpa);
+    try drawFaction(state, factionButton(size, .zombie), .zombie, "ZOMBIE", "You persist. You were already here.", out, gpa);
 
-    try drawFaction(state, human, .human, "Human", "You hold. You are outnumbered and you know it.", out, gpa);
-    try drawFaction(state, zombie, .zombie, "Zombie", "You persist. You were already here.", out, gpa);
-
+    // THE COMMIT, IN THREE STATES -- inert (nothing armed), holding (the fill grows on the clock),
+    // sealed (the colour has taken the bar). All pure functions of holding_since / sealed_ms.
     const confirm = confirmButton(size);
-    const ready = state.hovering != null;
-    try out.append(gpa, .{ .rect = .{ .x = confirm.x, .y = confirm.y, .w = confirm.w, .h = confirm.h, .color = if (ready) .scab else .carrion } });
-    try out.append(gpa, .{ .text = .{ .x = confirm.x + 16, .y = confirm.y + 18, .text = "Confirm", .color = if (ready) .bone else .grave, .weight = .body } });
+    if (state.sealed_ms != null) {
+        const glow = factionGlow(state.faction);
+        try out.append(gpa, .{ .rect = .{ .x = confirm.x, .y = confirm.y, .w = confirm.w, .h = confirm.h, .color = glow } });
+        try out.append(gpa, .{ .text = .{ .x = confirm.x + 14, .y = confirm.y + 18, .text = sealLine(state.faction), .color = .void_black, .weight = .label } });
+    } else if (state.hovering) |armed| {
+        try out.append(gpa, .{ .rect = .{ .x = confirm.x, .y = confirm.y, .w = confirm.w, .h = confirm.h, .color = .scab } });
+        if (state.holding_since) |began| {
+            // Elapsed, clamped before the multiply so a long-lived clock cannot overflow the u32.
+            const elapsed = @min(state.now_ms -| began, hold_commit_ms);
+            const fill_w = @divTrunc(confirm.w * @as(i32, @intCast(elapsed * 100 / hold_commit_ms)), 100);
+            if (fill_w > 0) try out.append(gpa, .{ .rect = .{ .x = confirm.x, .y = confirm.y, .w = fill_w, .h = confirm.h, .color = factionGlow(armed) } });
+        }
+        try out.append(gpa, .{ .text = .{ .x = confirm.x + 16, .y = confirm.y + 18, .text = "HOLD TO COMMIT", .color = .bone, .weight = .body } });
+    } else {
+        try out.append(gpa, .{ .rect = .{ .x = confirm.x, .y = confirm.y, .w = confirm.w, .h = confirm.h, .color = .carrion } });
+        try out.append(gpa, .{ .text = .{ .x = confirm.x + 16, .y = confirm.y + 18, .text = "SELECT A SIDE", .color = .grave, .weight = .body } });
+    }
 
-    try out.append(gpa, .{ .text = .{ .x = pad, .y = size.h - 50, .text = "No faction is stronger. Only different.", .color = .grave, .weight = .body } });
+    // The dread line, quiet and true -- the choice is who you are, not which wins. Yielded to the
+    // seal record once the vow is taken.
+    if (state.sealed_ms == null) {
+        try out.append(gpa, .{ .text = .{ .x = pad, .y = size.h - 50, .text = "No faction is stronger. Only different.", .color = .grave, .weight = .body } });
+    }
 
     try drawCreditsLink(size, out, gpa);
 }
@@ -650,9 +755,13 @@ fn drawFaction(
     out: *std.ArrayList(Draw),
     gpa: Allocator,
 ) Allocator.Error!void {
-    const chosen = state.hovering == faction;
-    try out.append(gpa, .{ .rect = .{ .x = rect.x, .y = rect.y, .w = rect.w, .h = rect.h, .color = if (chosen) .clot else .carrion } });
-    try out.append(gpa, .{ .text = .{ .x = rect.x + 16, .y = rect.y + 20, .text = name, .color = .bone, .weight = .heading } });
+    // Armed leans the card into its faction's colour -- a first taste of the two lives before the
+    // vow (OPENING §2). A rough lean (fill + name glow); the living previews iterate on the device.
+    const armed = state.hovering == faction;
+    const fill: Color = if (armed) factionDeep(faction) else .carrion;
+    const name_color: Color = if (armed) factionBright(faction) else .bone;
+    try out.append(gpa, .{ .rect = .{ .x = rect.x, .y = rect.y, .w = rect.w, .h = rect.h, .color = fill } });
+    try out.append(gpa, .{ .text = .{ .x = rect.x + 16, .y = rect.y + 20, .text = name, .color = name_color, .weight = .heading } });
     try out.append(gpa, .{ .text = .{ .x = rect.x + 16, .y = rect.y + 52, .text = blurb, .color = if (faction == .zombie) .serum else .dust, .weight = .body } });
 }
 
@@ -1777,30 +1886,80 @@ test "the fight reads the same to both sides" {
     try testing.expectEqualStrings("The fight is even.", momentumSentence(.even, .human));
 }
 
-test "choosing a side is permanent" {
+test "the vow: arm, hold to commit, seal, and it cannot be taken back" {
     const size: Size = .{ .w = 380, .h = 760 };
+    const human = factionButton(size, .human);
+    const confirm = confirmButton(size);
 
-    // Explicit now that the app opens on the boot sequence. A test that relied on the default was
-    // a test that would have silently changed meaning the day the default did.
-    var state: State = .{ .screen = .choose_side };
+    var state: State = .{ .screen = .choose_side, .now_ms = 1000 };
     try testing.expectEqual(Screen.choose_side, state.screen);
 
-    // Tapping a card highlights it. It does not commit.
-    const human = factionButton(size, .human);
+    // Tapping a card ARMS it. It does not commit -- there is no faction yet.
     state = touch(state, .{ .x = human.x + 10, .y = human.y + 10 }, size);
     try testing.expectEqual(Faction.human, state.hovering.?);
     try testing.expectEqual(@as(?Faction, null), state.faction);
 
-    // Confirm commits.
-    const confirm = confirmButton(size);
-    state = touch(state, .{ .x = confirm.x + 10, .y = confirm.y + 10 }, size);
-    try testing.expectEqual(Faction.human, state.faction.?);
-    try testing.expectEqual(Screen.quiet, state.screen);
+    // Pressing HOLD TO COMMIT begins the ceremony. It does not finish it.
+    state = press(state, .{ .x = confirm.x + 10, .y = confirm.y + 10 }, size);
+    try testing.expect(state.holding_since != null);
+    try testing.expectEqual(@as(?Faction, null), state.faction);
 
-    // And there is no way back. Touching anything on the quiet screen does not return you.
+    // Held ALMOST the whole ceremony: still nothing. One millisecond short is not a vow.
+    state = advance(state, 1000 + hold_commit_ms - 1);
+    try testing.expectEqual(@as(?Faction, null), state.faction);
+
+    // Held the whole ceremony: the seal. The side is sworn, and the choosing FLOODS before it hands
+    // over -- the screen is still `choose_side` for the flood beat, not yet the terminal.
+    state = advance(state, 1000 + hold_commit_ms);
+    try testing.expectEqual(Faction.human, state.faction.?);
+    try testing.expect(state.sealed_ms != null);
+    try testing.expectEqual(Screen.choose_side, state.screen);
+
+    // The flood plays out; the choosing dissolves into the terminal.
+    state = advance(state, 1000 + hold_commit_ms + seal_flood_ms);
+    try testing.expectEqual(Screen.quiet, state.screen);
+    try testing.expectEqual(Faction.human, state.faction.?);
+
+    // And there is no way back. Nothing returns you, and nothing changes the side.
     state = touch(state, .{ .x = 10, .y = 10 }, size);
     try testing.expectEqual(Screen.quiet, state.screen);
     try testing.expectEqual(Faction.human, state.faction.?);
+}
+
+test "the vow: releasing early leaves you free" {
+    const size: Size = .{ .w = 380, .h = 760 };
+    const zombie = factionButton(size, .zombie);
+    const confirm = confirmButton(size);
+
+    var state: State = .{ .screen = .choose_side, .now_ms = 500 };
+    state = touch(state, .{ .x = zombie.x + 10, .y = zombie.y + 10 }, size); // arm
+    state = press(state, .{ .x = confirm.x + 10, .y = confirm.y + 10 }, size); // begin the hold
+    try testing.expect(state.holding_since != null);
+
+    // Lift the thumb before the ceremony finishes: the release cancels it.
+    state = touch(state, .{ .x = confirm.x + 10, .y = confirm.y + 10 }, size);
+    try testing.expectEqual(@as(?u32, null), state.holding_since);
+
+    // Time passes, and nothing seals -- the hold was let go. Still armed, still free.
+    state = advance(state, 500 + hold_commit_ms * 3);
+    try testing.expectEqual(@as(?Faction, null), state.faction);
+    try testing.expectEqual(Screen.choose_side, state.screen);
+    try testing.expectEqual(Faction.zombie, state.hovering.?);
+}
+
+test "the vow: no side armed, a press commits to nothing" {
+    const size: Size = .{ .w = 380, .h = 760 };
+    const confirm = confirmButton(size);
+
+    // No default, no pre-selection: a press on HOLD TO COMMIT with nothing armed begins no hold, so
+    // the terminal waits forever and no side is ever sworn by accident (OPENING §2, the gravity).
+    var state: State = .{ .screen = .choose_side, .now_ms = 0 };
+    state = press(state, .{ .x = confirm.x + 10, .y = confirm.y + 10 }, size);
+    try testing.expectEqual(@as(?u32, null), state.holding_since);
+
+    state = advance(state, hold_commit_ms * 5);
+    try testing.expectEqual(@as(?Faction, null), state.faction);
+    try testing.expectEqual(Screen.choose_side, state.screen);
 }
 
 test "a restored faction skips the choice and wakes into the terminal" {
