@@ -714,13 +714,15 @@ fn within(at: Touch, rect: Rect) bool {
 const pad: i32 = 22;
 const line: i32 = 26;
 
-fn factionButton(size: Size, faction: Faction) Rect {
+/// The card a tap arms, and the button a hold seals. `pub` so the desktop harness's scripted
+/// touch driver can land on the REAL rectangles rather than a copy that drifts.
+pub fn factionButton(size: Size, faction: Faction) Rect {
     const h: i32 = 96;
     const y: i32 = @divTrunc(size.h, 3) + (if (faction == .zombie) h + 12 else 0);
     return .{ .x = pad, .y = y, .w = size.w - pad * 2, .h = h };
 }
 
-fn confirmButton(size: Size) Rect {
+pub fn confirmButton(size: Size) Rect {
     return .{ .x = pad, .y = size.h - 120, .w = size.w - pad * 2, .h = 52 };
 }
 
@@ -815,9 +817,11 @@ fn drawChooseSide(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allo
     } else if (state.hovering) |armed| {
         try out.append(gpa, .{ .rect = .{ .x = confirm.x, .y = confirm.y, .w = confirm.w, .h = confirm.h, .color = .scab } });
         if (state.holding_since) |began| {
-            // Elapsed, clamped before the multiply so a long-lived clock cannot overflow the u32.
+            // Clamped first so a long-lived clock cannot overflow; multiplied LAST because @min
+            // narrows `elapsed` to the type that holds 0..hold_commit_ms, and u11 * 100 overflows
+            // exactly when the bar is full. Multiply the wide side instead.
             const elapsed = @min(state.now_ms -| began, hold_commit_ms);
-            const fill_w = @divTrunc(confirm.w * @as(i32, @intCast(elapsed * 100 / hold_commit_ms)), 100);
+            const fill_w = @divTrunc(confirm.w * @as(i32, @intCast(elapsed)), @as(i32, @intCast(hold_commit_ms)));
             if (fill_w > 0) try out.append(gpa, .{ .rect = .{ .x = confirm.x, .y = confirm.y, .w = fill_w, .h = confirm.h, .color = factionGlow(armed) } });
         }
         try out.append(gpa, .{ .text = .{ .x = confirm.x + 16, .y = confirm.y + 18, .text = "HOLD TO COMMIT", .color = .bone, .weight = .body } });
@@ -1554,8 +1558,8 @@ fn drawBoot(state: State, size: Size, insets: Insets, out: *std.ArrayList(Draw),
         // never wrong -- so the only symptom was that a transition everyone had seen simply
         // stopped existing. No test caught it: they all asserted the state machine, and none of
         // them asserted that the exit had anything to look at.
-        const since = raw -| began;
-        const t: i32 = @intCast(@min(@as(u32, 100), since * 100 / boot_exit_ms));
+        const since: u32 = @min(raw -| began, boot_exit_ms);
+        const t: i32 = @intCast(since * 100 / boot_exit_ms);
 
         // A FLARE, AND THEN THE DARK. No collapsing vignette -- that was the same mistake as the
         // infection wipe, and it looked like a black rectangle eating the title.
@@ -1715,8 +1719,8 @@ fn drawWordmark(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) 
     // stagger, not a wipe passing over the word.
     // IN LOCKSTEP WITH THE BAR -- which means the same uneven curve. The letters catch in bursts,
     // stall while the bar stalls, and land together with it. They are one event, not two.
-    const into = ms -| boot_terminal_ms;
-    const elapsed: i32 = @intCast(@min(@as(u32, 100), into * 100 / boot_infection_ms));
+    const into: u32 = @min(ms -| boot_terminal_ms, boot_infection_ms);
+    const elapsed: i32 = @intCast(into * 100 / boot_infection_ms);
     const burn: u8 = @intCast(@divTrunc(loading(elapsed) * 255, 100));
 
     try out.append(gpa, .{ .text = .{
@@ -1789,8 +1793,8 @@ fn drawInfection(ms: u32, size: Size, out: *std.ArrayList(Draw), gpa: Allocator)
     // have hard edges. A fade here would be the sequence apologising for its own ending.
     if (ms >= boot_hold_end) return;
 
-    const into = ms - boot_terminal_ms;
-    const elapsed: i32 = @intCast(@min(@as(u32, 100), into * 100 / boot_infection_ms));
+    const into: u32 = @min(ms -| boot_terminal_ms, boot_infection_ms);
+    const elapsed: i32 = @intCast(into * 100 / boot_infection_ms);
     const percent = loading(elapsed);
 
     // THE HOLD. The bar is full, and the verdict blinks at you while nothing happens.
@@ -2815,4 +2819,23 @@ test "THE DIAGNOSTIC READOUT IS ABSENT BY DEFAULT AND ONLY SPEAKS OF THIS PHONE"
         else => {},
     };
     try testing.expectEqual(flags.diagnostic, saw_room);
+}
+test "THE HOLD BAR FILLS AT EVERY MILLISECOND OF THE VOW, NOT A SAMPLE OF THEM" {
+    // The hold was sampled either side of full and the bar overflowed at exactly the boundary:
+    // @min narrows the elapsed value to a u11, and u11 * 100 panics the frame the bar tops out --
+    // on the phone, mid-vow, the first time anyone held it. Walk every millisecond.
+    const size: Size = .{ .w = 390, .h = 844 };
+    var out: std.ArrayList(Draw) = .empty;
+    defer out.deinit(testing.allocator);
+
+    var ms: u32 = 1000;
+    while (ms <= 1000 + hold_commit_ms * 3) : (ms += 1) {
+        const state: State = .{
+            .screen = .choose_side,
+            .now_ms = ms,
+            .hovering = .human,
+            .holding_since = 1000,
+        };
+        try draw(state, size, .{}, &out, testing.allocator);
+    }
 }

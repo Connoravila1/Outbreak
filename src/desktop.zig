@@ -14,14 +14,51 @@ const std = @import("std");
 const dvui = @import("dvui");
 const SDLBackend = @import("sdl-backend");
 const ui = @import("ui.zig");
+const playtest = @import("playtest.zig");
+const client = @import("client.zig");
+const location = @import("location.zig");
+const loadout = @import("loadout.zig");
+const world = @import("world.zig");
 
 const icon_png = @embedFile("icon_png");
+
+// The phone's JNI shim does not exist on a laptop. The calls below are only reachable with
+// radio.running set, which nothing on desktop ever sets; the exports exist for the linker.
+export fn jnishim_attach(vm: ?*anyopaque) ?*anyopaque {
+    _ = vm;
+    return null;
+}
+export fn jnishim_detach(vm: ?*anyopaque) void {
+    _ = vm;
+}
+export fn jnishim_combat_alert(env: ?*anyopaque, activity: ?*anyopaque, band: c_int) void {
+    _ = env;
+    _ = activity;
+    _ = band;
+}
 
 var state: ui.State = .{};
 var backend: SDLBackend = undefined;
 var win: dvui.Window = undefined;
 var fonts_ready = false;
 var io: std.Io = undefined;
+
+// ---- the server, or the stand-in for one
+var radio: location.Radio = .{ .vm = null, .activity = null };
+var client_started = false;
+var demo_mode = false;
+var fix_arg: ?[]const u8 = null;
+var pt: playtest.State = .{};
+var quiet_ms: u32 = 0;
+var last_ms: u32 = 0;
+var init_gpa: std.mem.Allocator = undefined;
+
+// Scripted touches through the real touch/press path -- `--faction=human` plays the whole ceremony
+// headlessly: tap-to-enter, card tap, hold-to-seal. It is how a screenshot reaches the live loop.
+var faction_arg: ?world.Faction = null;
+var boot_tapped = false;
+var card_armed = false;
+var seal_pressed = false;
 
 /// Desktop iteration aid: `--shot=path.png --ms=N` renders the frame at N milliseconds since
 /// open into a PNG and exits. The whole animation is a pure function of the millisecond, so the
@@ -38,15 +75,25 @@ var sprites: [@typeInfo(ui.Sprite).@"enum".fields.len]dvui.Texture = undefined;
 
 pub fn main(init: std.process.Init) !void {
     io = init.io;
+    init_gpa = init.gpa;
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     for (args) |arg| {
         if (std.mem.startsWith(u8, arg, "--shot=")) shot_path = arg["--shot=".len..];
         if (std.mem.startsWith(u8, arg, "--ms=")) shot_ms = try std.fmt.parseInt(u32, arg["--ms=".len..], 10);
         if (std.mem.eql(u8, arg, "--dump")) dump_ops = true;
         if (std.mem.startsWith(u8, arg, "--only=")) only_op = arg["--only=".len..];
+        if (std.mem.eql(u8, arg, "--demo")) demo_mode = true;
+        if (std.mem.startsWith(u8, arg, "--fix=")) fix_arg = arg["--fix=".len..];
+        if (std.mem.eql(u8, arg, "--faction=human")) faction_arg = .human;
+        if (std.mem.eql(u8, arg, "--faction=zombie")) faction_arg = .zombie;
     }
 
     SDLBackend.enableSDLLogging();
+
+    // A dev fix, fed through the real callback: the coordinate dies in `onLocation` exactly as it
+    // does on the phone. What survives is a room the loopback server can resolve us into.
+    if (fix_arg) |fix| feedFix(fix);
+    client.setInstallIdentity(try loadOrCreateIdentity());
 
     backend = try SDLBackend.initWindow(.{
         .io = init.io,
@@ -104,6 +151,87 @@ pub fn main(init: std.process.Init) !void {
     }
 }
 
+/// Plays the ceremony with the same calls a finger makes: `touch` is a tap, `press` begins the
+/// hold and the seal completes on the clock inside `advance` -- the driver never pokes the state.
+fn driveCeremony(ms: u32, size: ui.Size, side: world.Faction) void {
+    switch (state.screen) {
+        .boot => if (ms > 9600 and !boot_tapped) {
+            boot_tapped = true;
+            state = ui.touch(state, .{ .x = @divTrunc(size.w, 2), .y = @divTrunc(size.h, 2) }, size);
+        },
+        .choose_side => {
+            if (state.sealed_ms != null) return;
+            if (!card_armed) {
+                card_armed = true;
+                const card = ui.factionButton(size, if (side == .human) .human else .zombie);
+                state = ui.touch(state, .{ .x = card.x + @divTrunc(card.w, 2), .y = card.y + @divTrunc(card.h, 2) }, size);
+                return;
+            }
+            if (state.holding_since == null and !seal_pressed) {
+                seal_pressed = true;
+                const btn = ui.confirmButton(size);
+                state = ui.press(state, .{ .x = btn.x + @divTrunc(btn.w, 2), .y = btn.y + @divTrunc(btn.h, 2) }, size);
+            }
+        },
+        else => {},
+    }
+}
+
+/// The stand-in server: `playtest.zig` resolves the accelerated encounter on the frame clock and
+/// each round lands as a `toldGame` -- the same fold a real response takes. Its figures never enter
+/// progression; the point is a complete encounter on a laptop, in seconds.
+fn drivePlaytest(dt: u32, faction: world.Faction) void {
+    if (state.screen == .quiet) {
+        quiet_ms += dt;
+        if (quiet_ms > 2500 and playtest.canStartEquipped(pt, pt.equipped)) {
+            pt = playtest.start(pt, state.kit);
+        }
+    } else {
+        quiet_ms = 0;
+    }
+
+    const phase_before = pt.phase;
+    const round_before = pt.round;
+    pt = playtest.advance(pt, dt, faction);
+
+    if (pt.phase == .resolving and pt.round != round_before) {
+        state = ui.toldGame(state, pt.hp, 1, state.total_xp + pt.xp_earned, pt.last_damage, pt.momentum, .a_few, pt.kit, pt.damage_dealt, .none, pt.equipped, loadout.starter_owned, 6, loadout.no_item, false, .ambient);
+    }
+    if (pt.phase == .debrief and phase_before != .debrief) {
+        state = ui.toldGame(state, pt.hp, 1, state.total_xp + pt.xp_earned, 0, pt.momentum, .a_few, pt.kit, pt.damage_dealt, pt.reward, pt.equipped, loadout.starter_owned, 6, pt.reward_item, true, .none);
+    }
+
+    // The debrief card was seen and tapped away; the driver returns to idle for the next one.
+    if (state.encounter_finished and pt.phase == .debrief and state.screen == .quiet) {
+        state = ui.acknowledgeEncounter(state);
+    }
+}
+
+/// One dev fix through the real entry point: `location.devFix` parses and quantizes the
+/// coordinate inside location.zig, the only file the coordinate is permitted to exist in (B6).
+fn feedFix(spec: []const u8) void {
+    location.devFix(spec);
+}
+
+/// A dev install identity, persisted under zig-out so a restart lands on the same account --
+/// the same "anonymous per-install" shape the phone has, minus the phone.
+fn loadOrCreateIdentity() ![client.identity_size]u8 {
+    const path = "zig-out/desktop-identity";
+    if (std.Io.Dir.cwd().openFile(io, path, .{})) |file| {
+        defer file.close(io);
+        var buf: [client.identity_size]u8 = undefined;
+        const n = file.readPositionalAll(io, &buf, 0) catch 0;
+        if (n == buf.len) return buf;
+    } else |_| {}
+    var identity: [client.identity_size]u8 = undefined;
+    io.randomSecure(&identity) catch return error.EntropyUnavailable;
+    if (std.Io.Dir.cwd().createFile(io, path, .{})) |file| {
+        defer file.close(io);
+        file.writePositionalAll(io, &identity, 0) catch {};
+    } else |_| {}
+    return identity;
+}
+
 /// Read back the presented frame -- what a player actually sees, not a re-render.
 fn writeShot(path: []const u8) void {
     const c = SDLBackend.c;
@@ -146,7 +274,28 @@ fn frame(arena: std.mem.Allocator) bool {
     };
 
     const ms: u32 = @intCast(SDLBackend.c.SDL_GetTicks());
+    const dt = ms -| last_ms;
+    last_ms = ms;
     state = ui.advance(state, ms);
+
+    // The game moves before the screen does. A tell from the loopback server folds exactly as it
+    // does on the phone; when no server is up, --demo lets the deterministic driver play its part.
+    if (client.takeResponse()) |r| {
+        state = ui.toldGame(state, r.hp, r.level, r.total_xp, r.damage, r.momentum, r.crowd, r.kit, r.salvage, r.reward, r.equipped, r.owned, r.capacity, r.item, r.discovered, r.source);
+    }
+    if (client.authoritativeFaction()) |server_side| {
+        if (state.faction != server_side) state.faction = server_side;
+    }
+
+    if (faction_arg) |side| driveCeremony(ms, size, side);
+
+    if (state.faction) |faction| {
+        if (!client_started) {
+            client_started = true;
+            _ = std.Thread.spawn(.{}, client.run, .{ init_gpa, faction, &radio }) catch {};
+        }
+        if (demo_mode) drivePlaytest(dt, faction);
+    }
 
     for (dvui.events()) |*e| {
         switch (e.evt) {

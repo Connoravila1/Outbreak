@@ -122,7 +122,7 @@ var precision: std.atomic.Value(u8) = .init(spatial.default_precision);
 ///
 /// ONE EXPRESSION. `quantize` takes the floats, returns a `u64`, and the parameters go out of
 /// scope on the next line. There is no branch in which they are kept, and no field to keep them in.
-export fn Java_com_outbreak_game_OutbreakService_onLocation(
+pub export fn Java_com_outbreak_game_OutbreakService_onLocation(
     env: ?*anyopaque,
     class: ?*anyopaque,
     latitude: f64,
@@ -299,6 +299,18 @@ pub fn combatAlert(radio: *Radio, band: i32) void {
 
     const env = jnishim_attach(radio.vm) orelse return;
     jnishim_combat_alert(env, radio.activity, @intCast(band));
+}
+
+/// DESKTOP DEV FIX. Parses "lat,lon" and feeds it through the same quantize-and-drop path as a
+/// real fix, so the desktop harness can stand in a room for the loopback server. The floats still
+/// die in this file -- the string crosses the wall, the coordinate never does.
+pub fn devFix(spec: []const u8) void {
+    const comma = std.mem.indexOfScalar(u8, spec, ',') orelse return;
+    const latitude = std.fmt.parseFloat(f64, spec[0..comma]) catch return;
+    const longitude = std.fmt.parseFloat(f64, spec[comma + 1 ..]) catch return;
+    const cell = spatial.quantize(latitude, longitude, @intCast(precision.load(.acquire))) orelse return;
+    room.store(@intFromEnum(cell), .release);
+    _ = fix_count.fetchAdd(1, .monotonic);
 }
 
 const testing = std.testing;
