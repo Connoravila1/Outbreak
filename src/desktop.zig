@@ -640,6 +640,45 @@ fn holdRegion(src: std.builtin.SourceLocation, r: ui.Rect) bool {
     return dvui.captured(bx.data().id);
 }
 
+// ─── THE DESIGN ───
+// Glass over the field: every surface is a rounded slab of near-opaque dark with a real shadow
+// and a whisper of border, floating over the live map. Controls are filled, not outlined; icons
+// are glyphs, not words. This is the vocabulary the whole chrome layer speaks.
+
+/// A card: the basic floating surface.
+fn cardOpts() dvui.Options {
+    return .{
+        .expand = .horizontal,
+        .padding = .{ .x = 16, .y = 14, .w = 16, .h = 14 },
+        .background = true,
+        .color_fill = toColor(ui.dim(.char_deep, 235)),
+        .border = .all(1),
+        .color_border = toColor(ui.dim(.bone, 22)),
+        .corner_radius = .all(14),
+        .box_shadow = .{ .color = .black, .offset = .{ .x = 0, .y = 5 }, .fade = 16, .alpha = 0.5 },
+    };
+}
+
+/// A pill: fully rounded, used for the status capsule and the nav segments' home.
+fn pillOpts() dvui.Options {
+    return .{
+        .padding = .{ .x = 14, .y = 8, .w = 14, .h = 8 },
+        .background = true,
+        .color_fill = toColor(ui.dim(.char_deep, 238)),
+        .border = .all(1),
+        .color_border = toColor(ui.dim(.bone, 22)),
+        .corner_radius = .all(1000),
+        .box_shadow = .{ .color = .black, .offset = .{ .x = 0, .y = 3 }, .fade = 10, .alpha = 0.45 },
+    };
+}
+
+/// A glyph from the bundled Entypo set.
+fn iconW(src: std.builtin.SourceLocation, bytes: []const u8, color: ui.Color, opts: dvui.Options) void {
+    var o = opts;
+    o.color_text = toColor(color);
+    dvui.icon(src, "glyph", bytes, .{}, o);
+}
+
 fn labelW(src: std.builtin.SourceLocation, str: []const u8, weight: ui.Weight, color: ui.Color, opts: dvui.Options) void {
     var o = opts;
     o.font = fontFor(weight);
@@ -652,11 +691,17 @@ fn labelW(src: std.builtin.SourceLocation, str: []const u8, weight: ui.Weight, c
 
 fn chrome(s: f32, size: ui.Size, arena: std.mem.Allocator) void {
     _ = s;
+    const on_map = state.map_marker != null;
     switch (state.screen) {
         .choose_side => chooseChrome(size),
         .briefing => briefingChrome(size),
         .quiet => {
-            creditsTop(size);
+            if (on_map) {
+                statusPill();
+                quietSheet(size);
+            } else {
+                creditsTop(size);
+            }
             navBar(size);
         },
         .gear => {
@@ -668,7 +713,13 @@ fn chrome(s: f32, size: ui.Size, arena: std.mem.Allocator) void {
             navBar(size);
         },
         .credits => creditsScreen(size),
-        .live => liveChrome(size),
+        .live => if (on_map) {
+            statusPill();
+            liveBanner(size);
+            liveSheet(size);
+        } else {
+            liveChrome(size);
+        },
         .boot => {},
     }
 }
@@ -710,16 +761,27 @@ fn creditsTop(size: ui.Size) void {
     }
 }
 
-/// THE TAB BAR -- three real buttons on a hairline-edged strip. The toolkit owns the hover, the
-/// press, the thirds.
+/// THE STATUS CAPSULE -- a floating glass pill carrying the faction mark, top-left. The map is
+/// the screen; this is the only chrome that floats over it permanently.
+fn statusPill() void {
+    var pill = dvui.box(@src(), .{ .dir = .horizontal }, pillOpts().override(.{
+        .rect = nat(12, 34, 132, 38),
+        .gravity_y = 0.5,
+    }));
+    defer pill.deinit();
+    const acc = ui.factionGlow(state.faction);
+    iconW(@src(), dvui.entypo.location_pin, acc, .{ .min_size_content = .{ .h = 16 } });
+    labelW(@src(), ui.factionLabel(state.faction), .label, .bone, .{ .margin = .{ .x = 8 } });
+}
+
+/// THE TAB BAR -- a segmented control floating over the map's lower edge: one glass pill, three
+/// segments, the active one filled in the faction's colour. The toolkit owns hover and press.
 fn navBar(size: ui.Size) void {
-    var bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
-        .rect = nat(0, size.h - ui.nav_h, size.w, ui.nav_h),
-        .background = true,
-        .color_fill = toColor(.char_deep),
-        .padding = .{},
+    var bar = dvui.box(@src(), .{ .dir = .horizontal }, pillOpts().override(.{
+        .rect = nat(14, size.h - ui.nav_h - 6, size.w - 28, ui.nav_h - 10),
+        .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
         .name = "nav",
-    });
+    }));
     defer bar.deinit();
 
     const acc = ui.factionGlow(state.faction);
@@ -732,19 +794,151 @@ fn navBar(size: ui.Size) void {
         const active = state.screen == t.scr;
         if (dvui.button(@src(), t.name, .{}, .{
             .id_extra = i,
-            // .both splits the bar into thirds; a non-edge gravity would turn the child into an
+            // .both splits the pill into thirds; a non-edge gravity would turn the child into an
             // overlay and stack all three on top of each other.
             .expand = .both,
             .font = fontFor(.label),
             .color_text = if (active) toColor(.bone) else toColor(.dust),
-            .color_fill = toColor(.char_deep),
-            .color_fill_hover = toColor(.ash),
+            .color_text_hover = toColor(.bone),
+            .color_fill = if (active) toColor(ui.dim(acc, 110)) else toColor(ui.dim(.char_deep, 0)),
+            .color_fill_hover = toColor(ui.dim(acc, 60)),
             .color_fill_press = toColor(acc),
             .color_text_press = toColor(.void_black),
-            .corner_radius = .all(0),
+            .corner_radius = .all(1000),
         })) {
             state = ui.act(state, .{ .nav = t.scr }, size);
         }
+    }
+}
+
+/// THE SHEET, quiet -- the reading floats over the map's lower edge, handle on top like the map
+/// apps it sits beside. Top corners rounded; the bottom runs to the nav pill.
+fn quietSheet(size: ui.Size) void {
+    const sy = size.h - ui.nav_h - 190;
+    var sheet = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .rect = nat(0, sy, size.w, 190),
+        .padding = .{ .x = 22, .y = 10, .w = 22, .h = 16 },
+        .background = true,
+        .color_fill = toColor(ui.dim(.char_deep, 246)),
+        .border = .all(1),
+        .color_border = toColor(ui.dim(.bone, 20)),
+        // {x=topleft, y=topright, w=botright, h=botleft} -- a sheet rounds only its top edge.
+        .corner_radius = .{ .x = 20, .y = 20, .w = 0, .h = 0 },
+        .box_shadow = .{ .color = .black, .offset = .{ .x = 0, .y = -4 }, .fade = 18, .alpha = 0.55 },
+        .name = "sheet",
+    });
+    defer sheet.deinit();
+
+    // The handle.
+    var handle = dvui.box(@src(), .{}, .{
+        .min_size_content = .{ .w = 44, .h = 5 },
+        .gravity_x = 0.5,
+        .margin = .{ .y = 4 },
+        .background = true,
+        .color_fill = toColor(.ash),
+        .corner_radius = .all(1000),
+    });
+    handle.deinit();
+
+    const acc = ui.factionBright(state.faction);
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .y = 10 }, .background = false });
+    labelW(@src(), "QUIET", .heading, acc, .{});
+    _ = dvui.spacer(@src(), .{ .expand = .horizontal });
+    // The condition, as a chip.
+    var chip = dvui.box(@src(), .{}, .{
+        .background = true,
+        .color_fill = toColor(ui.dim(acc, 46)),
+        .border = .all(1),
+        .color_border = toColor(ui.dim(acc, 90)),
+        .corner_radius = .all(1000),
+        .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
+    });
+    labelW(@src(), ui.conditionWord(state.hp), .label, .bone, .{});
+    chip.deinit();
+    row.deinit();
+
+    labelW(@src(), "The room is quiet.", .body, .smoke, .{ .margin = .{ .y = 6 } });
+    labelW(@src(), "It won't stay that way.", .body, .grave, .{ .margin = .{ .y = 2 } });
+}
+
+/// THE BANNER, live -- the alarm card at the top of the map.
+fn liveBanner(size: ui.Size) void {
+    var card = dvui.box(@src(), .{ .dir = .vertical }, cardOpts().override(.{
+        .rect = nat(10, 84, size.w - 20, 164),
+        .color_fill = toColor(ui.dim(.char_deep, 240)),
+        .color_border = toColor(ui.dim(.wound, 90)),
+    }));
+    defer card.deinit();
+
+    var head = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .background = false });
+    iconW(@src(), dvui.entypo.warning, .wound, .{ .min_size_content = .{ .h = 20 } });
+    labelW(@src(), "THIS CELL IS LIVE", .alarm, .wound, .{ .margin = .{ .x = 10 } });
+    head.deinit();
+
+    var crowd = std.mem.splitSequence(u8, ui.crowdSentence(state.crowd), ", ");
+    const first = crowd.next().?;
+    if (crowd.next()) |rest| {
+        const joined = std.fmt.allocPrint(dvui.currentWindow().arena(), "{s},", .{first}) catch first;
+        labelW(@src(), joined, .body, .bone, .{ .margin = .{ .y = 10 } });
+        labelW(@src(), rest, .body, .bone, .{});
+    } else {
+        labelW(@src(), first, .body, .bone, .{ .margin = .{ .y = 10 } });
+    }
+    labelW(@src(), ui.momentumSentence(state.momentum, state.faction orelse .human), .label, .serum, .{ .margin = .{ .y = 12 }, .gravity_x = 1.0 });
+}
+
+/// THE SHEET, live -- what you know, and the way out.
+fn liveSheet(size: ui.Size) void {
+    const sy = size.h - 268;
+    var sheet = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .rect = nat(0, sy, size.w, 268),
+        .padding = .{ .x = 22, .y = 10, .w = 22, .h = 26 },
+        .background = true,
+        .color_fill = toColor(ui.dim(.char_deep, 246)),
+        .border = .all(1),
+        .color_border = toColor(ui.dim(.bone, 20)),
+        .corner_radius = .{ .x = 20, .y = 20, .w = 0, .h = 0 },
+        .box_shadow = .{ .color = .black, .offset = .{ .x = 0, .y = -4 }, .fade = 18, .alpha = 0.55 },
+        .name = "sheet_live",
+    });
+    defer sheet.deinit();
+
+    var handle = dvui.box(@src(), .{}, .{
+        .min_size_content = .{ .w = 44, .h = 5 },
+        .gravity_x = 0.5,
+        .margin = .{ .y = 4 },
+        .background = true,
+        .color_fill = toColor(.ash),
+        .corner_radius = .all(1000),
+    });
+    handle.deinit();
+
+    labelW(@src(), "WHAT YOU KNOW", .label, .grave, .{ .margin = .{ .y = 8 } });
+    var i: u8 = 0;
+    while (i < state.tell_count) : (i += 1) {
+        var parts = std.mem.splitSequence(u8, state.tells[i], ", ");
+        const head_s = parts.next().?;
+        labelW(@src(), head_s, .label, .smoke, .{ .margin = .{ .y = 2 }, .id_extra = i });
+        if (parts.next()) |rest| {
+            labelW(@src(), rest, .label, .smoke, .{ .margin = .{ .y = 0 }, .id_extra = i + 100 });
+        }
+    }
+
+    _ = dvui.spacer(@src(), .{ .expand = .vertical });
+    if (dvui.button(@src(), "WALK AWAY", .{}, .{
+        .expand = .horizontal,
+        .font = fontFor(.label),
+        .padding = .{ .y = 14 },
+        .margin = .{ .y = 6 },
+        .color_fill = toColor(ui.dim(.ash, 90)),
+        .color_fill_hover = toColor(.ash),
+        .color_fill_press = toColor(.wound),
+        .color_text = toColor(.bone),
+        .border = .all(1),
+        .color_border = toColor(.ash),
+        .corner_radius = .all(12),
+    })) {
+        state = ui.act(state, .leave_live, size);
     }
 }
 
@@ -768,6 +962,8 @@ fn briefingChrome(size: ui.Size) void {
 
     _ = dvui.spacer(@src(), .{ .expand = .vertical });
 
+    // The page itself, as a card the machine hands you.
+    var card = dvui.box(@src(), .{ .dir = .vertical }, cardOpts());
     {
         var lw: dvui.LabelWidget = undefined;
         lw.initNoFmt(@src(), page.head, .{}, .{
@@ -779,21 +975,25 @@ fn briefingChrome(size: ui.Size) void {
         lw.deinit();
     }
     for (page.lines, 0..) |l, i| {
-        labelW(@src(), l, .body, .smoke, .{ .margin = .{ .y = 2 }, .id_extra = i });
+        labelW(@src(), l, .body, .smoke, .{ .margin = .{ .y = 3 }, .id_extra = i });
     }
+    card.deinit();
 
     _ = dvui.spacer(@src(), .{ .expand = .vertical });
 
-    // Where you are in it -- a hairline of ticks.
-    var ticks = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .gravity_x = 0.5, .margin = .{ .y = 10 } });
+    // Where you are in it -- dots now, not hairlines.
+    var ticks = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .gravity_x = 0.5, .margin = .{ .y = 14 } });
     var i: u8 = 0;
     while (i < ui.briefing_pages.len) : (i += 1) {
-        _ = dvui.separator(@src(), .{
+        var dot = dvui.box(@src(), .{}, .{
             .id_extra = i,
-            .min_size_content = .{ .w = 40, .h = 2 },
-            .color_fill = toColor(if (i == state.brief_page) ui.factionGlow(faction) else .grave),
+            .min_size_content = .{ .w = if (i == state.brief_page) 22 else 8, .h = 8 },
+            .background = true,
+            .color_fill = toColor(if (i == state.brief_page) ui.factionGlow(faction) else .ash),
+            .corner_radius = .all(1000),
             .margin = .{ .x = 4 },
         });
+        dot.deinit();
     }
     ticks.deinit();
 
@@ -807,7 +1007,8 @@ fn briefingChrome(size: ui.Size) void {
         .color_fill_press = toColor(ui.factionBright(faction)),
         .color_text = toColor(.bone),
         .color_text_press = toColor(.void_black),
-        .corner_radius = .all(0),
+        .corner_radius = .all(12),
+        .box_shadow = .{ .color = .black, .offset = .{ .x = 0, .y = 3 }, .fade = 10, .alpha = 0.4 },
     })) {
         state = ui.act(state, .brief_next, size);
     }
@@ -839,24 +1040,16 @@ fn gearScreen(size: ui.Size, arena: std.mem.Allocator) void {
         .{ .label = "ARMOR", .id = state.equipped.armor },
         .{ .label = "UTILITY", .id = state.equipped.utility },
     };
+    const slot_glyph = [_][]const u8{ dvui.entypo.hair_cross, dvui.entypo.shield, dvui.entypo.radio };
     for (slots, 0..) |slot, i| {
         const def = loadout.definition(slot.id);
-        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .id_extra = i,
-            .expand = .horizontal,
-            .margin = .{ .y = 5 },
-            .padding = .{ .x = 14, .y = 12, .w = 14, .h = 12 },
-            .background = true,
-            .color_fill = toColor(.char_deep),
-            .border = .all(1),
-            .color_border = toColor(.ash),
-            .corner_radius = .all(0),
-        });
-        labelW(@src(), slot.label, .label, .grave, .{ .min_size_content = .{ .w = 76 } });
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, cardOpts().override(.{ .id_extra = i, .margin = .{ .y = 5 } }));
+        iconW(@src(), slot_glyph[i], ui.dim(acc, 200), .{ .min_size_content = .{ .h = 20 } });
+        labelW(@src(), slot.label, .label, .grave, .{ .min_size_content = .{ .w = 70 }, .margin = .{ .x = 12 } });
         var mid = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .background = false });
         labelW(@src(), def.name, .body, .bone, .{});
         const st = std.fmt.allocPrint(arena, "ATK {d}  DEF {d}  INI {d}", .{ def.attack, def.defense, def.initiative }) catch "";
-        labelW(@src(), st, .label, ui.dim(acc, 200), .{});
+        labelW(@src(), st, .label, ui.dim(acc, 200), .{ .margin = .{ .y = 2 } });
         mid.deinit();
         row.deinit();
     }
@@ -885,12 +1078,13 @@ fn gearScreen(size: ui.Size, arena: std.mem.Allocator) void {
             .expand = .horizontal,
             .margin = .{ .y = 5 },
             .padding = .{ .x = 14, .y = 12, .w = 14, .h = 12 },
-            .color_fill = toColor(.char_deep),
+            .color_fill = toColor(ui.dim(.char_deep, 235)),
             .color_fill_hover = toColor(.ash),
             .color_fill_press = toColor(ui.factionDeep(faction)),
             .border = .all(1),
-            .color_border = toColor(.ash),
-            .corner_radius = .all(0),
+            .color_border = toColor(ui.dim(.bone, 22)),
+            .corner_radius = .all(14),
+            .box_shadow = .{ .color = .black, .offset = .{ .x = 0, .y = 4 }, .fade = 12, .alpha = 0.4 },
         });
         defer bw.deinit();
         bw.processEvents();
@@ -899,6 +1093,12 @@ fn gearScreen(size: ui.Size, arena: std.mem.Allocator) void {
 
         var col = dvui.box(@src(), .{ .dir = .vertical }, .{ .background = false });
         var namerow = dvui.box(@src(), .{ .dir = .horizontal }, .{ .background = false });
+        iconW(@src(), switch (def.slot) {
+            .weapon => dvui.entypo.hair_cross,
+            .armor => dvui.entypo.shield,
+            .utility => dvui.entypo.radio,
+            .evidence => dvui.entypo.tag,
+        }, ui.dim(acc, 160), .{ .min_size_content = .{ .h = 15 }, .margin = .{ .w = 8 } });
         labelW(@src(), def.name, .body, if (carried) .bone else ui.rarityColor(def.rarity), .{});
         if (carried) {
             labelW(@src(), "· CARRIED", .label, acc, .{ .margin = .{ .x = 10 } });
@@ -931,15 +1131,7 @@ fn recordScreen(size: ui.Size, arena: std.mem.Allocator) void {
 
     labelW(@src(), "THE WAR, AS WRITTEN.", .heading, .bone, .{ .margin = .{ .y = 22 } });
 
-    const card: dvui.Options = .{
-        .expand = .horizontal,
-        .padding = .{ .x = 14, .y = 12, .w = 14, .h = 12 },
-        .background = true,
-        .color_fill = toColor(.char_deep),
-        .border = .all(1),
-        .color_border = toColor(.ash),
-        .corner_radius = .all(0),
-    };
+    const card = cardOpts();
 
     var stats = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .y = 8 }, .background = false });
     var left = dvui.box(@src(), .{ .dir = .vertical }, card.override(.{ .margin = .{ .w = 4 } }));
