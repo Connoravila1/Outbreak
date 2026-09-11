@@ -792,28 +792,55 @@ fn sealLine(faction: ?Faction) []const u8 {
 }
 
 fn drawChooseSide(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
-    // THIS IS A FIRST, FUNCTIONAL PASS of the choosing in the terminal's voice (OPENING §2-4). The
-    // machine copy, the two leaning previews, and a HOLD TO COMMIT bar that fills as the thumb holds
-    // are here so the vow can be FELT on the device; the cinematic flood, the whole-screen lean, and
-    // the coloured live previews iterate on the phone with the user.
+    // THE QUESTION, the two lives, and the vow (OPENING §2-4). The machine asks once and never
+    // again; the cards are living previews of the two ways to exist in this war, and the seal is a
+    // flood the whole screen drowns in.
     try out.append(gpa, .{ .text = .{ .x = pad, .y = 40, .text = "OUTBREAK", .color = .grave, .weight = .label } });
 
     // THE MACHINE'S VOICE. Contamination detected; it cannot proceed until it classifies the
     // operator. Cold, procedural, and the weight is entirely in what it withholds.
     try out.append(gpa, .{ .text = .{ .x = pad, .y = 104, .text = "OPERATOR UNCLASSIFIED", .color = .wound, .weight = .heading } });
     try out.append(gpa, .{ .text = .{ .x = pad, .y = 104 + line, .text = "DECLARE ALLEGIANCE.", .color = .bone, .weight = .body } });
-    try out.append(gpa, .{ .text = .{ .x = pad, .y = 104 + line * 2, .text = "THIS RECORD IS PERMANENT AND CANNOT BE AMENDED.", .color = .dust, .weight = .body } });
+    try out.append(gpa, .{ .text = .{ .x = pad, .y = 104 + line * 2, .text = "THIS RECORD IS PERMANENT.", .color = .dust, .weight = .body } });
+    try out.append(gpa, .{ .text = .{ .x = pad, .y = 104 + line * 3, .text = "IT CANNOT BE AMENDED.", .color = .dust, .weight = .body } });
 
-    try drawFaction(state, factionButton(size, .human), .human, "HUMAN", "You hold. You are outnumbered, and you know it.", out, gpa);
-    try drawFaction(state, factionButton(size, .zombie), .zombie, "ZOMBIE", "You persist. You were already here.", out, gpa);
+    // THE LEAN. With a side armed, the whole screen tilts its way -- a wash of its deep colour and
+    // the edges glowing faintly in it. Trying a life on, not yet swearing to it.
+    const sealed = state.sealed_ms != null;
+    if (state.hovering) |armed| {
+        if (!sealed) {
+            try out.append(gpa, .{ .rect = .{ .x = 0, .y = 0, .w = size.w, .h = size.h, .color = dim(factionDeep(armed), 64) } });
+            const edge = size.w * 3;
+            try out.append(gpa, .{ .sprite = .{
+                .x = @divTrunc(size.w - edge, 2),
+                .y = @divTrunc(size.h - edge, 2),
+                .w = edge,
+                .h = edge,
+                .color = dim(factionGlow(armed), 26),
+                .sprite = .vignette,
+            } });
+        }
+    }
+
+    try drawFaction(state, factionButton(size, .human), .human, "HUMAN", "You hold.", "Outnumbered, and you know it.", out, gpa);
+    try drawFaction(state, factionButton(size, .zombie), .zombie, "ZOMBIE", "You persist.", "You were already here.", out, gpa);
 
     // THE COMMIT, IN THREE STATES -- inert (nothing armed), holding (the fill grows on the clock),
     // sealed (the colour has taken the bar). All pure functions of holding_since / sealed_ms.
     const confirm = confirmButton(size);
     if (state.sealed_ms != null) {
-        const glow = factionGlow(state.faction);
-        try out.append(gpa, .{ .rect = .{ .x = confirm.x, .y = confirm.y, .w = confirm.w, .h = confirm.h, .color = glow } });
-        try out.append(gpa, .{ .text = .{ .x = confirm.x + 14, .y = confirm.y + 18, .text = sealLine(state.faction), .color = .void_black, .weight = .label } });
+        // THE FLOOD (OPENING §3). The held point erupts: the faction colour pours out of where the
+        // thumb is and takes the whole screen -- a hot core leading a body of colour -- and the
+        // record stamps itself on top. One hard pulse, not a fade.
+        const flood_ms: u32 = @min(state.now_ms -| state.sealed_ms.?, seal_flood_ms);
+        const cx = @divTrunc(size.w, 2);
+        const cy = confirm.y + @divTrunc(confirm.h, 2);
+        try out.append(gpa, .{ .rect = .{ .x = 0, .y = 0, .w = size.w, .h = size.h, .color = dim(factionDeep(state.faction), @intCast(flood_ms * 160 / seal_flood_ms)) } });
+        const body = 40 + @divTrunc(1600 * @as(i32, @intCast(flood_ms)), @as(i32, @intCast(seal_flood_ms)));
+        try out.append(gpa, .{ .sprite = .{ .x = cx - @divTrunc(body, 2), .y = cy - @divTrunc(body, 2), .w = body, .h = body, .color = factionGlow(state.faction), .sprite = .disc } });
+        const core = 20 + @divTrunc(900 * @as(i32, @intCast(flood_ms)), @as(i32, @intCast(seal_flood_ms)));
+        try out.append(gpa, .{ .sprite = .{ .x = cx - @divTrunc(core, 2), .y = cy - @divTrunc(core, 2), .w = core, .h = core, .color = factionBright(state.faction), .sprite = .disc } });
+        try out.append(gpa, .{ .text = .{ .x = cx, .y = confirm.y + 18, .text = sealLine(state.faction), .color = .void_black, .weight = .label, .alignment = .center } });
     } else if (state.hovering) |armed| {
         try out.append(gpa, .{ .rect = .{ .x = confirm.x, .y = confirm.y, .w = confirm.w, .h = confirm.h, .color = .scab } });
         if (state.holding_since) |began| {
@@ -823,6 +850,17 @@ fn drawChooseSide(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allo
             const elapsed = @min(state.now_ms -| began, hold_commit_ms);
             const fill_w = @divTrunc(confirm.w * @as(i32, @intCast(elapsed)), @as(i32, @intCast(hold_commit_ms)));
             if (fill_w > 0) try out.append(gpa, .{ .rect = .{ .x = confirm.x, .y = confirm.y, .w = fill_w, .h = confirm.h, .color = factionGlow(armed) } });
+            // The edges of the world lean in as the vow completes -- the flood rehearsing.
+            const edge = size.w * 3;
+            const lean_a: u8 = @intCast(24 + @as(u32, @intCast(elapsed)) * 56 / hold_commit_ms);
+            try out.append(gpa, .{ .sprite = .{
+                .x = @divTrunc(size.w - edge, 2),
+                .y = @divTrunc(size.h - edge, 2),
+                .w = edge,
+                .h = edge,
+                .color = dim(factionGlow(armed), lean_a),
+                .sprite = .vignette,
+            } });
         }
         try out.append(gpa, .{ .text = .{ .x = confirm.x + 16, .y = confirm.y + 18, .text = "HOLD TO COMMIT", .color = .bone, .weight = .body } });
     } else {
@@ -839,23 +877,74 @@ fn drawChooseSide(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allo
     try drawCreditsLink(size, out, gpa);
 }
 
+/// A card is not a button; it is a preview of a life (OPENING §2). Each carries its faction's
+/// instrument, alive: the ring, the sweep, the heartbeat. Human's is cold and slow with the red
+/// held at the rim; Zombie's is flooded and racing, the flesh already inside the glass.
 fn drawFaction(
     state: State,
     rect: Rect,
     faction: Faction,
     name: []const u8,
-    blurb: []const u8,
+    blurb1: []const u8,
+    blurb2: []const u8,
     out: *std.ArrayList(Draw),
     gpa: Allocator,
 ) Allocator.Error!void {
-    // Armed leans the card into its faction's colour -- a first taste of the two lives before the
-    // vow (OPENING §2). A rough lean (fill + name glow); the living previews iterate on the device.
     const armed = state.hovering == faction;
+    const receded = state.hovering != null and !armed;
+
     const fill: Color = if (armed) factionDeep(faction) else .carrion;
-    const name_color: Color = if (armed) factionBright(faction) else .bone;
     try out.append(gpa, .{ .rect = .{ .x = rect.x, .y = rect.y, .w = rect.w, .h = rect.h, .color = fill } });
-    try out.append(gpa, .{ .text = .{ .x = rect.x + 16, .y = rect.y + 20, .text = name, .color = name_color, .weight = .heading } });
-    try out.append(gpa, .{ .text = .{ .x = rect.x + 16, .y = rect.y + 52, .text = blurb, .color = if (faction == .zombie) .serum else .dust, .weight = .body } });
+    if (faction == .zombie) {
+        // The zombie card is already a little wrong: a red haze sits inside the glass whether or
+        // not it is armed. The human card stays clean metal.
+        try out.append(gpa, .{ .rect = .{ .x = rect.x, .y = rect.y, .w = rect.w, .h = rect.h, .color = dim(.clot, 70) } });
+    }
+    if (armed) {
+        try out.append(gpa, .{ .rect = .{ .x = rect.x, .y = rect.y, .w = rect.w, .h = 2, .color = dim(factionBright(faction), 220) } });
+    }
+
+    const name_color: Color = if (receded) .smoke else if (armed) factionBright(faction) else .bone;
+    const blurb_color: Color = if (receded) .grave else if (armed) .bone else if (faction == .zombie) .serum else .dust;
+    try out.append(gpa, .{ .text = .{ .x = rect.x + 16, .y = rect.y + 18, .text = name, .color = name_color, .weight = .heading } });
+    // Two short lines: the instrument owns the right side of the card.
+    try out.append(gpa, .{ .text = .{ .x = rect.x + 16, .y = rect.y + 50, .text = blurb1, .color = blurb_color, .weight = .body } });
+    try out.append(gpa, .{ .text = .{ .x = rect.x + 16, .y = rect.y + 50 + 22, .text = blurb2, .color = blurb_color, .weight = .body } });
+
+    // THE INSTRUMENT IN MINIATURE. Its temperament is the faction's: the human heart beats slow
+    // and the beam sweeps steadily; the zombie heart races and the beam jitters.
+    const now = state.now_ms;
+    const cx = rect.x + rect.w - 56;
+    const cy = rect.y + @divTrunc(rect.h, 2);
+    const r: i32 = 36;
+    const heart_period: u32 = if (faction == .human) 1500 else 620;
+    const hb: u32 = heartbeat(now, heart_period);
+
+    const rim: Color = if (receded) .grave else if (armed) factionGlow(faction) else factionDeep(faction);
+    try out.append(gpa, .{ .sprite = .{ .x = cx - r, .y = cy - r, .w = r * 2, .h = r * 2, .color = rim, .sprite = .ring } });
+
+    const beam_alpha: u8 = if (receded) 30 else if (armed) 150 else 70;
+    const sweep_period: u32 = if (faction == .human) 6000 else 2200;
+    const phase: i32 = @intCast((now % sweep_period) * 65536 / sweep_period);
+    const jitter: i32 = if (faction == .zombie) wander(now, 700, 2400, 0) else 0;
+    const angle: u16 = @intCast(@mod(phase + jitter, 65536));
+    try out.append(gpa, .{ .sprite = .{ .x = cx - r, .y = cy - r, .w = r * 2, .h = r * 2, .color = dim(factionBright(faction), beam_alpha), .sprite = .beam, .angle = angle } });
+
+    const heart_size: i32 = 14 + @divTrunc(@as(i32, @intCast(hb)) * 20, 255);
+    const heart_alpha: u8 = if (receded) 50 else @intCast(90 + hb * 140 / 255);
+    try out.append(gpa, .{ .sprite = .{ .x = cx - @divTrunc(heart_size, 2), .y = cy - @divTrunc(heart_size, 2), .w = heart_size, .h = heart_size, .color = dim(factionBright(faction), heart_alpha), .sprite = .disc } });
+
+    if (faction == .human) {
+        // The infection is real, but it is at the rim, held -- a single red spore pinned to the
+        // scope's edge by the line you are choosing to hold.
+        try out.append(gpa, .{ .sprite = .{ .x = cx - 33 - 7, .y = cy + 14 - 7, .w = 14, .h = 14, .color = dim(.blood, 190), .sprite = .disc } });
+    } else {
+        // The flesh is already inside the glass: three blooms that beat with the racing heart.
+        const a: u8 = if (receded) 40 else @intCast(80 + hb * 120 / 255);
+        try out.append(gpa, .{ .sprite = .{ .x = cx - 16 - 8, .y = cy - 10 - 8, .w = 16, .h = 16, .color = dim(.blood_glow, a), .sprite = .disc } });
+        try out.append(gpa, .{ .sprite = .{ .x = cx + 8 - 10, .y = cy + 12 - 10, .w = 20, .h = 20, .color = dim(.blood_glow, a), .sprite = .disc } });
+        try out.append(gpa, .{ .sprite = .{ .x = cx + 16 - 6, .y = cy - 14 - 6, .w = 12, .h = 12, .color = dim(.blood_glow, a), .sprite = .disc } });
+    }
 }
 
 // ============================================================================ the sonar
