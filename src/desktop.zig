@@ -16,6 +16,7 @@ const SDLBackend = @import("sdl-backend");
 const ui = @import("ui.zig");
 const playtest = @import("playtest.zig");
 const client = @import("client.zig");
+const map = @import("map.zig");
 const location = @import("location.zig");
 const loadout = @import("loadout.zig");
 const world = @import("world.zig");
@@ -42,6 +43,7 @@ var backend: SDLBackend = undefined;
 var win: dvui.Window = undefined;
 var fonts_ready = false;
 var io: std.Io = undefined;
+var environ_map: *const std.process.Environ.Map = undefined;
 
 // ---- the server, or the stand-in for one
 var radio: location.Radio = .{ .vm = null, .activity = null };
@@ -110,9 +112,20 @@ fn outbreakTheme() dvui.Theme {
 /// baked — recovered verbatim from git history (first-party code, no dependency).
 var sprites: [@typeInfo(ui.Sprite).@"enum".fields.len]dvui.Texture = undefined;
 
+/// THE MAP, cached. The quarantined module (map.zig) says which tiles cover the window; we hold
+/// their decoded, graded textures keyed by the cell that produced them. Rebuilt only when the
+/// cell changes -- the player stands in a room for minutes at a time, and the map does not move
+/// while they do.
+const map_max_tiles = 20;
+var map_cell: u64 = 0;
+var map_texs: [map_max_tiles]?dvui.Texture = .{null} ** map_max_tiles;
+var map_place: [map_max_tiles]map.Placement = undefined;
+var map_count: usize = 0;
+
 pub fn main(init: std.process.Init) !void {
     io = init.io;
     init_gpa = init.gpa;
+    environ_map = init.environ_map;
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     for (args) |arg| {
         if (std.mem.startsWith(u8, arg, "--shot=")) shot_path = arg["--shot=".len..];
@@ -130,6 +143,9 @@ pub fn main(init: std.process.Init) !void {
     // A dev fix, fed through the real callback: the coordinate dies in `onLocation` exactly as it
     // does on the phone. What survives is a room the loopback server can resolve us into.
     if (fix_arg) |fix| feedFix(fix);
+    // The demo needs a room to stand in for the map and the loopback alike; midtown is the dev
+    // default. On the phone this call is the Android callback, and the cell is real.
+    if (demo_mode and fix_arg == null) feedFix("40.7580,-73.9855");
     client.setInstallIdentity(try loadOrCreateIdentity());
 
     backend = try SDLBackend.initWindow(.{
@@ -300,6 +316,80 @@ fn feedFix(spec: []const u8) void {
     location.devFix(spec);
 }
 
+/// Load the tile cache for the cell the player stands in. The quarantined map module owns the
+/// geography (which tiles, where on screen); this function only does I/O: read the cached PNGs,
+/// decode, grade to the palette, upload. A missing tile is a dark block, not an error -- the map
+/// degrades to void, which is what the streets look like at night anyway.
+fn rebuildMap(cell_bits: u64, size: ui.Size) void {
+    for (&map_texs) |*t| {
+        if (t.*) |tex| SDLBackend.c.SDL_DestroyTexture(@ptrCast(@alignCast(tex.ptr)));
+        t.* = null;
+    }
+    map_count = 0;
+    if (cell_bits == 0) return;
+
+    map_count = map.layout(@enumFromInt(cell_bits), size.w, size.h, &map_place);
+
+    const home = environ_map.get("HOME") orelse return;
+    var dir_buf: [256]u8 = undefined;
+    const dir = std.fmt.bufPrint(&dir_buf, "{s}/.cache/outbreak/tiles", .{home}) catch return;
+
+    for (map_place[0..map_count], 0..) |pl, i| {
+        var path_buf: [320]u8 = undefined;
+        const path = map.tilePath(dir, pl.tile, &path_buf);
+        const file = std.Io.Dir.cwd().openFile(io, path, .{}) catch continue;
+        defer file.close(io);
+        const stat = file.stat(io) catch continue;
+        const bytes = init_gpa.alloc(u8, @intCast(stat.size)) catch continue;
+        defer init_gpa.free(bytes);
+        _ = file.readPositionalAll(io, bytes, 0) catch continue;
+
+        var w: c_int = 0;
+        var h: c_int = 0;
+        var ch: c_int = 0;
+        const decoded = dvui.c.stbi_load_from_memory(bytes.ptr, @intCast(bytes.len), &w, &h, &ch, 4) orelse continue;
+        defer dvui.c.stbi_image_free(decoded);
+
+        const px: usize = @intCast(w * h * 4);
+        map.grade(decoded[0..px]);
+        map_texs[i] = uploadTexture(decoded, @intCast(w), @intCast(h)) catch continue;
+    }
+}
+
+/// RGBA pixels -> GPU texture, the same direct-SDL path bake() uses (backend.textureCreate goes
+/// through a surface and flattens alpha).
+fn uploadTexture(pixels: [*]const u8, w: u32, h: u32) !dvui.Texture {
+    const c = SDLBackend.c;
+    const tex = c.SDL_CreateTexture(backend.renderer, c.SDL_PIXELFORMAT_RGBA32, c.SDL_TEXTUREACCESS_STATIC, @intCast(w), @intCast(h)) orelse return error.TextureCreate;
+    errdefer c.SDL_DestroyTexture(tex);
+    if (!c.SDL_UpdateTexture(tex, null, pixels, @intCast(w * 4))) return error.TextureUpdate;
+    _ = c.SDL_SetTextureScaleMode(tex, c.SDL_SCALEMODE_LINEAR);
+    const pma = c.SDL_ComposeCustomBlendMode(c.SDL_BLENDFACTOR_ONE, c.SDL_BLENDFACTOR_ONE_MINUS_SRC_ALPHA, c.SDL_BLENDOPERATION_ADD, c.SDL_BLENDFACTOR_ONE, c.SDL_BLENDFACTOR_ONE_MINUS_SRC_ALPHA, c.SDL_BLENDOPERATION_ADD);
+    _ = c.SDL_SetTextureBlendMode(tex, pma);
+    return .{ .ptr = tex, .width = w, .height = h, .format = .rgba_32 };
+}
+
+/// The graded tiles, drawn under the scene's marker and labels. A tile that failed to load is a
+/// gap in the world, painted as void -- a real hole reads better than a placeholder.
+fn drawMapLayer(s: f32) void {
+    for (map_place[0..map_count], 0..) |pl, i| {
+        const r: dvui.Rect.Physical = .{
+            .x = @as(f32, @floatFromInt(pl.x)) * s,
+            .y = @as(f32, @floatFromInt(pl.y)) * s,
+            .w = @as(f32, @floatFromInt(pl.w)) * s,
+            .h = @as(f32, @floatFromInt(pl.h)) * s,
+        };
+        if (map_texs[i]) |tex| {
+            dvui.renderTexture(tex, .{ .r = r, .s = s }, .{}) catch {};
+        } else {
+            var b = dvui.Path.Builder.init(dvui.currentWindow().arena());
+            defer b.deinit();
+            b.addRect(.{ .x = r.x, .y = r.y, .w = r.w, .h = r.h }, .{});
+            b.build().fillConvex(.{ .color = .{ .r = 14, .g = 10, .b = 12 } });
+        }
+    }
+}
+
 /// A dev install identity, persisted under zig-out so a restart lands on the same account --
 /// the same "anonymous per-install" shape the phone has, minus the phone.
 fn loadOrCreateIdentity() ![client.identity_size]u8 {
@@ -396,8 +486,19 @@ fn frame(arena: std.mem.Allocator) bool {
         if (demo_mode) drivePlaytest(dt, faction);
     }
 
-    // THE SCENE FIRST -- the bespoke painting (boot, the choosing, the well) underneath whatever
+    // THE MAP. The cell the location layer holds is the one thing a map is allowed to be of;
+    // when it changes, the tiles for the new cell are the only ones that exist. Where a map is
+    // built, the core's scene ops get a marker point to pulse on instead of a well to draw.
+    const cell_bits = location.read().cell;
+    if (cell_bits != map_cell) {
+        map_cell = cell_bits;
+        rebuildMap(map_cell, size);
+    }
+    state.map_marker = if (map_cell != 0) .{ .x = @divTrunc(size.w, 2), .y = @divTrunc(size.h, 2) } else null;
+
+    // THE SCENE FIRST -- the bespoke painting (boot, the choosing, the map) underneath whatever
     // chrome the widgets draw. Then the widgets: structure, layout, and events the toolkit owns.
+    if (state.map_marker != null and (state.screen == .quiet or state.screen == .live)) drawMapLayer(s);
     var out: std.ArrayList(ui.Draw) = .empty;
     ui.draw(state, size, .{}, &out, arena) catch return true;
     for (out.items) |op| drawOp(op, s);

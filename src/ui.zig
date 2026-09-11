@@ -277,6 +277,13 @@ pub const State = struct {
     /// It exists because O3 cannot be answered from a chair. See build.zig.
     diagnostic: ?Diagnostic = null,
 
+    /// THE MAP MARKER, in window pixels. Set by the shell when the quarantined map module has
+    /// produced tiles for the cell; null everywhere else (the phone until it learns tiles, any
+    /// client without a fix, every test). When it is set the quiet and live screens draw their
+    /// pulse ON the map instead of the well -- the marker is a screen position, not a place, and
+    /// it is always the cell's centre the shell projects, never the player's own fix (I2).
+    map_marker: ?Touch = null,
+
     pub const max_tells = 8;
     pub const max_ripples = 4;
 };
@@ -819,13 +826,15 @@ pub fn draw(state: State, size: Size, insets: Insets, out: *std.ArrayList(Draw),
     out.clearRetainingCapacity();
 
     // FULL BLEED. Not the safe area -- the whole phone. A background that stops at the inset is
-    // the letterbox we were trying to get rid of.
+    // the letterbox we were trying to get rid of. On a screen where the map is up, the map IS the
+    // background: what the ops emit instead is a scrim, so the words stay legible on real streets.
+    const mapped = state.map_marker != null and (state.screen == .quiet or state.screen == .live);
     try out.append(gpa, .{ .rect = .{
         .x = insets.bleedLeft(),
         .y = insets.bleedTop(),
         .w = insets.bleedWidth(size),
         .h = insets.bleedHeight(size),
-        .color = .void_black,
+        .color = if (mapped) dim(.void_black, 84) else .void_black,
     } });
 
     switch (state.screen) {
@@ -1312,11 +1321,69 @@ fn drawScope(state: State, cx: i32, cy: i32, r: i32, live: bool, out: *std.Array
     }
 }
 
+/// The pulse the quiet and live screens share: a soft heart at a point, and a ping ring that
+/// expands out of it on a slow period. On the well it lives inside the glass; on the map it is
+/// the cell's centre glowing under real streets. `live` only changes tempo and colour.
+fn drawPulse(state: State, x: i32, y: i32, live: bool, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
+    const t = state.now_ms;
+    const beat: i32 = heartbeat(t, if (live) 560 else 1150);
+    const glow: Color = if (live) .blood_glow else factionGlow(state.faction);
+    const bright: Color = if (live) .blood_glow else factionBright(state.faction);
+
+    // The ping: a ring leaving the point every couple of seconds, fading as it travels.
+    const period: u32 = if (live) 1300 else 2400;
+    const into: i32 = @intCast(t % period);
+    const reach: i32 = if (live) 150 else 110;
+    const radius = 8 + @divTrunc(into * reach, @as(i32, @intCast(period)));
+    const fade: u8 = @intCast(@max(0, 120 - @divTrunc(into * 120, @as(i32, @intCast(period)))));
+    try softRing(out, gpa, x, y, radius, dim(glow, fade));
+    try softRing(out, gpa, x, y, @divTrunc(radius * 2, 3), dim(glow, @intCast(@divTrunc(@as(u32, fade) * 3, 4))));
+
+    // The heart itself -- a wet disc that swells on the beat.
+    try softDot(out, gpa, x, y, 7 + @divTrunc(beat, 30), dim(glow, @intCast(120 + @divTrunc(beat, 2))));
+    try softDot(out, gpa, x, y, 3 + @divTrunc(beat, 90), dim(bright, @intCast(180 + @divTrunc(beat * 75, 255))));
+}
+
+/// The rings a tap leaves, on whatever surface is underneath -- the flesh of the well, or the
+/// streets of the map. `reach` is how far a ripple travels before it dies.
+fn drawRipples(state: State, reach: i32, bright: Color, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
+    const t = state.now_ms;
+    for (state.ripples) |rp| {
+        if (rp.born_ms == 0) continue;
+        const age = t -| rp.born_ms;
+        if (age >= ripple_life_ms) continue;
+        const age_i: i32 = @intCast(age);
+        const grow = @divTrunc(age_i * reach, @as(i32, @intCast(ripple_life_ms)));
+        if (grow < 4) continue;
+        const a: u8 = @intCast(@max(0, 210 - @divTrunc(age_i * 210, @as(i32, @intCast(ripple_life_ms)))));
+        try softRing(out, gpa, rp.x, rp.y, grow, dim(bright, a));
+    }
+}
+
 fn drawQuiet(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
     const faction = state.faction;
 
     // Who you are, and nothing else up top. No bar, no strip -- the instrument does the talking.
     try out.append(gpa, .{ .text = .{ .x = pad, .y = 40, .text = factionLabel(faction), .color = .smoke, .weight = .label } });
+
+    if (state.map_marker) |mp| {
+        // THE MAP. Real streets, graded to ours; the pulse sits on the cell's centre and the
+        // reading lives under it. The map is backdrop -- nothing the war does ever lands on it.
+        try drawPulse(state, mp.x, mp.y, false, out, gpa);
+        try out.append(gpa, .{ .text = .{ .x = mp.x, .y = mp.y - 9, .text = "QUIET", .color = .bone, .weight = .label, .alignment = .center } });
+        try drawRipples(state, 220, factionBright(faction), out, gpa);
+
+        // The legend, floating on the map near the bottom chrome.
+        const legend_y = size.h - 190;
+        try out.append(gpa, .{ .text = .{ .x = pad, .y = legend_y, .text = "CONDITION", .color = .dust, .weight = .label } });
+        try out.append(gpa, .{ .text = .{ .x = size.w - pad, .y = legend_y, .text = conditionWord(state.hp), .color = .bone, .weight = .body, .alignment = .right } });
+
+        try out.append(gpa, .{ .text = .{ .x = mp.x, .y = size.h - 116, .text = "The room is quiet.", .color = .smoke, .weight = .body, .alignment = .center } });
+        try out.append(gpa, .{ .text = .{ .x = mp.x, .y = size.h - 92, .text = "It won't stay that way.", .color = .grave, .weight = .body, .alignment = .center } });
+
+        try drawDiagnostic(state, size, out, gpa);
+        return;
+    }
 
     // THE WELL. The whole upper screen is the instrument -- flesh, veins, the slow sweep, the heart.
     const g = sonarGeometry(size);
@@ -1420,6 +1487,50 @@ fn drawLive(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allocator)
     try out.append(gpa, .{ .text = .{ .x = pad, .y = 40, .text = factionLabel(state.faction), .color = .serum, .weight = .label } });
 
     try out.append(gpa, .{ .text = .{ .x = pad, .y = 76, .text = "THIS CELL IS LIVE", .color = .wound, .weight = .alarm } });
+
+    if (state.map_marker) |mp| {
+        // THE MAP, UNDER ATTACK. The same real streets, washed red; the marker races. The fight
+        // is never drawn where it is -- the wash is everywhere, which is exactly what the rules
+        // allow: a mood, not a position (I2).
+        try out.append(gpa, .{ .rect = .{ .x = 0, .y = 0, .w = size.w, .h = size.h, .color = dim(.blood_deep, 60) } });
+        try drawPulse(state, mp.x, mp.y, true, out, gpa);
+        try out.append(gpa, .{ .text = .{ .x = mp.x, .y = mp.y - 9, .text = conditionWord(state.hp), .color = .bone, .weight = .label, .alignment = .center } });
+        try drawRipples(state, 260, .blood_glow, out, gpa);
+
+        // The scale of it, wrapped at its clause break; then the tide in words.
+        var crowd = std.mem.splitSequence(u8, crowdSentence(state.crowd), ", ");
+        const first = crowd.next().?;
+        var text_y: i32 = 116;
+        if (crowd.next()) |rest| {
+            const joined = try std.fmt.allocPrint(gpa, "{s},", .{first});
+            try out.append(gpa, .{ .text = .{ .x = pad, .y = text_y, .text = joined, .color = .bone, .weight = .body } });
+            try out.append(gpa, .{ .text = .{ .x = pad, .y = text_y + 24, .text = rest, .color = .bone, .weight = .body } });
+            text_y += 24;
+        } else {
+            try out.append(gpa, .{ .text = .{ .x = pad, .y = text_y, .text = first, .color = .bone, .weight = .body } });
+        }
+
+        try out.append(gpa, .{ .text = .{ .x = mp.x, .y = size.h - 190, .text = momentumSentence(state.momentum, state.faction orelse .human), .color = .serum, .weight = .body, .alignment = .center } });
+
+        // The tells, seeping in along the bottom of the map.
+        try out.append(gpa, .{ .text = .{ .x = pad, .y = size.h - 160, .text = "WHAT YOU KNOW", .color = .grave, .weight = .label } });
+        var i: u8 = 0;
+        var y: i32 = size.h - 134;
+        while (i < state.tell_count) : (i += 1) {
+            if (y > size.h - 90) break;
+            var parts = std.mem.splitSequence(u8, state.tells[i], ", ");
+            const head = parts.next().?;
+            try out.append(gpa, .{ .text = .{ .x = pad, .y = y, .text = head, .color = .smoke, .weight = .label } });
+            y += 18;
+            if (parts.next()) |rest| {
+                try out.append(gpa, .{ .text = .{ .x = pad, .y = y, .text = rest, .color = .smoke, .weight = .label } });
+                y += 18;
+            }
+        }
+        return;
+    }
+
+    // THE WELL, BLOOMED -- the fallback when no map is up (the phone until it learns tiles).
 
     // The scale of it. A band, never a number -- wrapped at its clause break so the sentence never
     // runs off the glass.

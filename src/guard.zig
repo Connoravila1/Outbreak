@@ -270,10 +270,16 @@ const shell = [_]Source{
     // SHELL. The desktop host: SDL3 window, DVUI frame loop, the draw-list interpreter for
     // ui.zig. Holds no coordinate -- the f64 ban applies to it like every other shell file.
     .{ .name = "desktop.zig", .text = @embedFile("desktop.zig") },
+    // SHELL, AND QUARANTINED ABSOLUTELY (D7). The map module: it consumes a CellId and produces
+    // pixels, imports no game state, and writes none. It is the sixth coordinate bearer below --
+    // a cell's geohash bits are decoded to a geographic extent here and nowhere else, because a
+    // map that cannot find its cell is not a map. It may show the player their own streets; it
+    // may never place anything game-state on them (I2, I9).
+    .{ .name = "map.zig", .text = @embedFile("map.zig") },
 };
 
 /// ============================================================================
-/// WHERE A COORDINATE IS ALLOWED TO EXIST. FIVE FILES. NOT SIX.
+/// WHERE A COORDINATE IS ALLOWED TO EXIST. SIX FILES. NOT SEVEN.
 ///
 /// B6 already bans a float from any file classified CORE, and that is what makes the server
 /// structurally incapable of leaking a location: it was never given one.
@@ -289,15 +295,20 @@ const shell = [_]Source{
 ///   ffi.zig               `outbreak_quantize`, the C ABI's one coordinate-shaped door.
 ///   location.zig          the Android callback. Where the coordinate dies.
 ///   sim.zig               the synthetic city, which invents coordinates to feed the quantizer.
+///   map.zig               the map module (D7). The one place a CellId may become a region
+///                         again -- the sanctioned inverse, quarantined, in the file whose only
+///                         job is turning a room into pixels. This is the sixth, and the
+///                         decision is written here because the ruleset says the map exists.
 ///
-/// Add a sixth and the build stops. If a new file genuinely needs one, that is a decision worth
-/// making out loud -- which is the entire point of making the compiler ask.
+/// Add a seventh and the build stops. If a new file genuinely needs one, that is a decision
+/// worth making out loud -- which is the entire point of making the compiler ask.
 const coordinate_bearers = [_][]const u8{
     "spatial/geohash.zig",
     "spatial/geohash_vectors_test.zig",
     "ffi.zig",
     "location.zig",
     "sim.zig",
+    "map.zig",
 };
 
 /// Does `haystack` begin with `needle`? Byte-wise, so that comptime does the least work
