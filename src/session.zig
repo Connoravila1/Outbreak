@@ -12,7 +12,10 @@
 //! the core.
 
 const std = @import("std");
+const ambient = @import("ambient.zig");
 const combat = @import("combat.zig");
+const encounter = @import("encounter.zig");
+const loadout = @import("loadout.zig");
 const protocol = @import("protocol.zig");
 const spatial = @import("spatial.zig");
 const tick_mod = @import("tick.zig");
@@ -41,6 +44,9 @@ pub const Session = struct {
 pub const Server = struct {
     world: World,
     sessions: std.AutoHashMapUnmanaged(SessionId, Session),
+    /// Personal environmental pressure. Keyed by player, never by room: its timing reveals
+    /// nothing about whether another human is nearby and it never contributes to quorum.
+    ambient: std.AutoHashMapUnmanaged(PlayerId, ambient.State),
 
     /// The precision every client is told to quantize at (O6). Server-side, so changing the
     /// cell size is a config change rather than a flag day.
@@ -58,6 +64,7 @@ pub fn init(seed: u64, precision: u6) Server {
     return .{
         .world = .empty,
         .sessions = .empty,
+        .ambient = .empty,
         .precision = precision,
         .seed = seed,
         .tick_index = 0,
@@ -68,6 +75,7 @@ pub fn init(seed: u64, precision: u6) Server {
 pub fn deinit(server: *Server, gpa: Allocator) void {
     world_mod.deinit(&server.world, gpa);
     server.sessions.deinit(gpa);
+    server.ambient.deinit(gpa);
     server.* = init(server.seed, server.precision);
 }
 
@@ -114,6 +122,8 @@ pub fn joinAuthenticated(
     // A reconnecting player must not be duplicated in the world.
     for (world_mod.playerIds(&server.world)) |existing| {
         if (existing == player) {
+            const pressure = try server.ambient.getOrPut(gpa, player);
+            if (!pressure.found_existing) pressure.value_ptr.* = ambient.afterRestore(server.tick_index);
             try server.sessions.put(gpa, session, .{ .player = player });
             return .{
                 .session = session,
@@ -123,6 +133,9 @@ pub fn joinAuthenticated(
             };
         }
     }
+
+    const pressure = try server.ambient.getOrPut(gpa, player);
+    if (!pressure.found_existing) pressure.value_ptr.* = ambient.init(server.tick_index);
 
     try server.sessions.put(gpa, session, .{ .player = player });
 
@@ -153,9 +166,21 @@ pub fn ingest(server: *Server, report: protocol.Report) bool {
 
     // The shell boundary. A cell finer than we asked for is coarsened; a coarser one, or a
     // zeroed one, is dropped and never reaches the core.
-    const cell = protocol.validate(report, server.precision) orelse return false;
+    const validated = protocol.validate(report, server.precision) orelse return false;
 
-    session.claimed = cell;
+    _ = world_mod.selectKitIfIdle(
+        &server.world,
+        session.player,
+        validated.cell,
+        validated.kit,
+    );
+    _ = world_mod.selectEquipmentIfIdle(
+        &server.world,
+        session.player,
+        validated.cell,
+        validated.equipped,
+    );
+    session.claimed = validated.cell;
     return true;
 }
 
@@ -203,6 +228,65 @@ pub fn tick(server: *Server, gpa: Allocator, scratch: Allocator) Allocator.Error
     var told: std.AutoHashMapUnmanaged(PlayerId, tick_mod.Tell) = .empty;
     defer told.deinit(scratch);
     for (result.tells) |tell| try told.put(scratch, tell.player, tell);
+
+    // A SPARSE WORLD STILL PLAYS. If real opposing players produced a tell, that always wins and
+    // ambient pressure remains silent. Otherwise a personal, explicitly-labelled world threat may
+    // resolve. It does not enter the presence columns, so it cannot manufacture quorum or pretend
+    // that a synthetic opponent is a person in this room.
+    var pressure_sessions = server.sessions.iterator();
+    while (pressure_sessions.next()) |entry| {
+        const player = entry.value_ptr.player;
+        if (told.contains(player)) continue;
+        const cell = world_mod.cellOfPlayer(&server.world, player) orelse continue;
+        if (cell == spatial.nowhere) continue;
+        const pressure = server.ambient.getPtr(player) orelse continue;
+        const faction = world_mod.factionOf(&server.world, player) orelse continue;
+        const before = world_mod.progressOf(&server.world, player);
+
+        var current_hp: u16 = 0;
+        for (world_mod.playerIds(&server.world), world_mod.hitPoints(&server.world)) |candidate, hp| {
+            if (candidate == player) current_hp = hp;
+        }
+        const step = ambient.resolve(
+            pressure,
+            server.seed,
+            server.tick_index,
+            player,
+            faction,
+            current_hp,
+            before.equipped,
+        ) orelse continue;
+        const hp_after = world_mod.applyPersonalOutcome(&server.world, player, step.damage, step.xp) orelse continue;
+
+        var reward: loadout.Reward = .none;
+        var item_byte: u8 = loadout.no_item;
+        var discovered = false;
+        if (step.started) {
+            const progressed = world_mod.progressOf(&server.world, player);
+            const item = loadout.drop(server.seed, server.tick_index, @intFromEnum(player), progressed.level);
+            const acquisition = world_mod.awardItem(&server.world, player, item);
+            item_byte = @intFromEnum(acquisition.item);
+            discovered = acquisition.discovered;
+            reward = switch (loadout.definition(item).slot) {
+                .weapon => .weapon_parts,
+                .armor => .armor_parts,
+                .utility, .evidence => .field_supplies,
+            };
+        }
+
+        try told.put(scratch, player, .{
+            .player = player,
+            .damage = step.damage,
+            .hp = hp_after,
+            .xp = step.xp,
+            .momentum = step.momentum,
+            .crowd = .a_few,
+            .reward = reward,
+            .item = item_byte,
+            .discovered = discovered,
+            .source = encounter.Source.ambient,
+        });
+    }
 
     const hp_by_player = world_mod.hitPoints(&server.world);
     const player_col = world_mod.playerIds(&server.world);
@@ -334,7 +418,7 @@ test "THE PHASE 2 EXIT CRITERION" {
     //
     // The player standing in a café with a hostile two feet away, below quorum, receives
     // EXACTLY the bytes received by the player standing alone in an empty field. Not a similar
-    // message. Not a shorter one. The same sixteen bytes.
+    // message. Not a shorter one. The same fixed-size frame.
     //
     // There is no count to read, no flag to test, and nothing in the packet length to measure.
     // A cell below quorum is indistinguishable from an empty field, and it is indistinguishable
@@ -379,6 +463,24 @@ test "and when quorum is reached, the fight is real" {
     }
 }
 
+test "kit intent is accepted between encounters and refused during one" {
+    const gpa = testing.allocator;
+    const p = spatial.default_precision;
+    const cafe = spatial.cellFromKey(0xCAFE, p);
+
+    var server: Server = init(0x5EED, p);
+    defer deinit(&server, gpa);
+    const player_session = try joinAt(&server, gpa, .human, 11);
+    const player = server.sessions.get(player_session).?.player;
+
+    try testing.expect(ingest(&server, .{ .session = player_session, .cell = cafe, .kit = .raider }));
+    try testing.expectEqual(@import("loadout.zig").Kit.raider, world_mod.kitOf(&server.world, player));
+
+    try server.world.engagements.put(gpa, cafe, .{ .started = 0, .humans = 1, .zombies = 2 });
+    try testing.expect(ingest(&server, .{ .session = player_session, .cell = cafe, .kit = .bulwark }));
+    try testing.expectEqual(@import("loadout.zig").Kit.raider, world_mod.kitOf(&server.world, player));
+}
+
 test "every session gets a reply, every tick, whatever happened" {
     // The shape of the traffic must not depend on the state of the world. If a quiet player got
     // NO packet while a fighting one got a packet, then the presence of a packet is a signal --
@@ -402,6 +504,55 @@ test "every session gets a reply, every tick, whatever happened" {
         try testing.expectEqual(@as(u16, 0), reply.response.damage);
         try testing.expectEqual(@as(u16, 0), reply.response.xp);
     }
+}
+
+test "one player receives an honest ambient encounter early without manufacturing presence" {
+    const gpa = testing.allocator;
+    const p = spatial.default_precision;
+    const field = spatial.cellFromKey(0xA11B1E, p);
+
+    var server: Server = init(0x51DE, p);
+    defer deinit(&server, gpa);
+    const lone = try joinAt(&server, gpa, .human, 41);
+    try testing.expect(ingest(&server, .{ .session = lone, .cell = field }));
+
+    const quiet_replies = try tick(&server, gpa, gpa);
+    defer gpa.free(quiet_replies);
+    try testing.expectEqual(encounter.Source.none, quiet_replies[0].response.source);
+
+    const live_replies = try tick(&server, gpa, gpa);
+    defer gpa.free(live_replies);
+    try testing.expectEqual(encounter.Source.ambient, live_replies[0].response.source);
+    try testing.expect(live_replies[0].response.damage > 0);
+    try testing.expect(live_replies[0].response.xp > 0);
+
+    // The ambient threat is personal state, not an occupant, and cannot create a real engagement.
+    try testing.expectEqual(@as(usize, 1), world_mod.playerIds(&server.world).len);
+    try testing.expectEqual(@as(usize, 0), server.world.engagements.count());
+}
+
+test "real opposing-faction contact always overrides ambient pressure" {
+    const gpa = testing.allocator;
+    const p = spatial.default_precision;
+    const field = spatial.cellFromKey(0xC0FFEE, p);
+
+    var server: Server = init(0x51DE, p);
+    defer deinit(&server, gpa);
+    const human = try joinAt(&server, gpa, .human, 51);
+    const zombie_a = try joinAt(&server, gpa, .zombie, 52);
+    const zombie_b = try joinAt(&server, gpa, .zombie, 53);
+
+    // Advance once so every personal ambient clock is eligible on the next tick.
+    for ([_]SessionId{ human, zombie_a, zombie_b }) |id|
+        try testing.expect(ingest(&server, .{ .session = id, .cell = field }));
+    const first = try tick(&server, gpa, gpa);
+    gpa.free(first);
+
+    for ([_]SessionId{ human, zombie_a, zombie_b }) |id|
+        try testing.expect(ingest(&server, .{ .session = id, .cell = field }));
+    const replies = try tick(&server, gpa, gpa);
+    defer gpa.free(replies);
+    for (replies) |reply| try testing.expectEqual(encounter.Source.players, reply.response.source);
 }
 
 test "a client that lies about its cell arrives at silence" {

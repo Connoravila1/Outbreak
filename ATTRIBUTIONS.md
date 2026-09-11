@@ -11,12 +11,9 @@ in someone's memory is an asset we will one day have to delete.
 
 ## Code
 
-| | |
-|---|---|
-| **stb_truetype** v1.26 | `vendor/stb_truetype.h` |
-| Author | Sean Barrett |
-| Licence | **Public domain** (Unlicense), per the dual-licence block at the foot of the header |
-| Why it is here | Parses TrueType outlines to an anti-aliased coverage bitmap. The written justification for taking it as a dependency at all is at the import site, in `vendor/stb_impl.c` (F1, F6). |
+No third-party code ships in the project today. (stb_truetype was removed with the GLES
+renderer when presentation moved to DVUI; DVUI itself lands as a vendored dependency with its
+own row here when it does.)
 
 ---
 

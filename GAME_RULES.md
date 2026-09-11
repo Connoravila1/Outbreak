@@ -47,7 +47,7 @@ All provisional. Phase 1's named trap is tuning these before anyone has played.
 | `recovery_per_tick` | **1** | You heal when you are **not** in a live cell. Full recovery from zero takes 100 ticks (50 minutes). There is no death and no permanence — nothing may be at stake worth stalking someone over. |
 | `max_hp` | **100** | Placeholder. |
 | `xp_per_tick` | **10** | Earned for **one thing**: a tick in a live cell with ≥1 hostile present (H3). |
-| Level curve | `level n costs n² × 100 XP` | Quadratic: levelling slows without ever stopping. At 10 XP/tick in a fight — level 2 is ~7 minutes of fighting, level 10 ~3 hours, level 50 ~3 days of accumulated combat. **A shape you can argue with**, rather than a number tuned in the dark. |
+| Level curve | `level n costs n² × 100 XP`, authored cap **10** | Quadratic through the complete MVP catalogue. XP keeps accumulating at level 10 without implying unbuilt levels or rewards. |
 | `engagement_ticks` | **10** (5 min) | The **floor**: shortest a fight can be, however small the room. |
 | `engagement_dozens_ticks` | **60** (30 min) | A busy bar. |
 | `engagement_scores_ticks` | **180** (90 min) | |
@@ -56,6 +56,24 @@ All provisional. Phase 1's named trap is tuning these before anyone has played.
 
 **Duration comes from the crowd *band*, never the exact count.** The first version was `10 + 2 × occupants` — which is invertible. A player timing their own fight recovered an **exact headcount of everyone in the room**, through the clock, with no count ever transmitted. Enormous care went into making the crowd a coarse band so no number could leak, and the number leaked out through the duration instead. **A side channel does not care which field you were guarding.** There are now exactly five possible durations in the game — one per band — so inverting one tells a player the band they were already told.
 | `cooldown_ticks` | **240** (2 h) | How long a room is spent afterwards. Keyed to the **room**, not the player. |
+
+### Sparse-launch world pressure
+
+Real player contact remains the heart of Outbreak, but a new player cannot be asked to wait for
+local adoption before the app becomes a game. A lone player therefore receives a bounded,
+server-authored environmental encounter after entering a valid field: **feral infected** threaten
+Humans; a **containment patrol** threatens Zombies.
+
+| Knob | Value | Rationale |
+|---|---|---|
+| Ambient rounds | **5** | A legible, cinematic encounter rather than endless background damage. |
+| Ambient XP | **6 per round** | Meaningful early progression, below real-contact XP. |
+| Ambient cooldown | **480 ticks / 4 h** | Fills a sparse world without becoming the optimal grind. |
+
+Ambient pressure is personal world state. It never enters presence, never contributes to quorum,
+never appears as a nearby player, and is pre-empted whenever a real encounter resolves. Its source
+is carried explicitly through the fixed-size response so the interface cannot imply a synthetic
+person was present.
 
 ### The engagement model — the biggest design change so far
 

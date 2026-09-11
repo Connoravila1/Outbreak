@@ -8,11 +8,16 @@
 //! get wrong, and a security property nobody measured is a security property nobody has.
 
 const std = @import("std");
+const account_journal = @import("account_journal.zig");
 const accounts_mod = @import("accounts.zig");
+const combat = @import("combat.zig");
 const protocol = @import("protocol.zig");
+const replay = @import("replay.zig");
+const server_state = @import("server_state.zig");
 const session_mod = @import("session.zig");
 const spatial = @import("spatial.zig");
 const transport = @import("transport.zig");
+const world = @import("world.zig");
 
 const Io = std.Io;
 const net = std.Io.net;
@@ -147,12 +152,76 @@ test "THE PHASE 2 EXIT CRITERION, over a socket" {
     //
     // The player standing in a café with a hostile two feet away, below quorum, received EXACTLY
     // the bytes received by the player standing alone in an empty field. Not a similar message.
-    // Not a shorter one. The same sixteen bytes.
+    // Not a shorter one. The same fixed-size frame.
     //
     // A packet sniffer on the café's wifi learns nothing. There is no length to measure, no
     // count to read, and no flag to test.
     try testing.expectEqualSlices(u8, &alone_in_field, &human_in_cafe);
     try testing.expectEqualSlices(u8, &alone_in_field, &zombie_in_cafe);
+}
+
+test "three independent accounts and their progress survive one atomic server snapshot" {
+    const gpa = testing.allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var before = try transport.init(io, 0x5EED, spatial.default_precision, .{});
+    defer transport.deinit(&before, gpa);
+
+    const contacts = [_]accounts_mod.ContactHash{ @splat(1), @splat(2), @splat(3) };
+    const factions = [_]world.Faction{ .human, .zombie, .human };
+    for (contacts, factions, 0..) |contact, faction, i| {
+        const account = try accounts_mod.register(
+            &before.accounts,
+            gpa,
+            contact,
+            @splat(@as(u8, @intCast(10 + i))),
+            @splat(@as(u8, @intCast(20 + i))),
+            faction,
+            @intCast(i + 1),
+            0,
+            .default,
+        );
+        _ = try session_mod.joinAuthenticated(
+            &before.sessions,
+            gpa,
+            account.player,
+            account.faction,
+            @enumFromInt(100 + i),
+        );
+    }
+    _ = world.applyPersonalOutcome(&before.sessions.world, @enumFromInt(1), 7, 66);
+    before.sessions.tick_index = 19;
+
+    const bytes = try transport.snapshot(&before, io, gpa);
+    defer gpa.free(bytes);
+    const parts = try server_state.decode(bytes);
+    const auth = try account_journal.decode(gpa, parts.accounts);
+    const restored = try replay.replay(gpa, parts.world, combat.Rules.default);
+
+    var after = try transport.init(io, 99, spatial.default_precision, .{});
+    defer transport.deinit(&after, gpa);
+    try transport.restore(
+        &after,
+        io,
+        gpa,
+        restored.world,
+        auth,
+        restored.next_tick,
+        restored.seed,
+        restored.precision,
+    );
+
+    try testing.expectEqual(@as(u64, 19), after.sessions.tick_index);
+    try testing.expectEqual(@as(u64, 0x5EED), after.sessions.seed);
+    try testing.expectEqual(@as(usize, 3), world.playerIds(&after.sessions.world).len);
+    try testing.expectEqual(@as(u32, 66), world.progressOf(&after.sessions.world, @enumFromInt(1)).xp);
+    for (contacts, factions, 0..) |contact, faction, i| {
+        const account = try accounts_mod.beginLogin(&after.accounts, gpa, contact, 19, .default);
+        try testing.expectEqual(@as(u32, @intCast(i + 1)), @intFromEnum(account.player));
+        try testing.expectEqual(faction, account.faction);
+    }
 }
 
 /// Resolve two worlds of `population` people -- one crammed into a single enormous fight, one
@@ -205,11 +274,8 @@ fn extraAllocationsAtWar(io: Io, gpa: std.mem.Allocator, population: u32) !usize
     try transport.tick(&asleep, io, quiet_gpa.allocator(), quiet_scratch.allocator());
     const quiet = quiet_gpa.allocations + quiet_scratch.allocations;
 
-    std.debug.print(
-        "\n    population {d:>4} -- allocation calls at war: {d:>3}   asleep: {d:>3}   extra: {d}\n",
-        .{ population, war, quiet, war -| quiet },
-    );
-
+    // Not printed: writing mid-run corrupts the 0.16 test runner's --listen=- channel and zig
+    // build test reports a phantom "failed command". The assertions below carry the property.
     return war -| quiet;
 }
 

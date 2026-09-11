@@ -21,6 +21,8 @@
 
 const std = @import("std");
 const combat = @import("combat.zig");
+const encounter = @import("encounter.zig");
+const loadout = @import("loadout.zig");
 const spatial = @import("spatial.zig");
 const world_mod = @import("world.zig");
 
@@ -52,13 +54,18 @@ pub const Tell = struct {
     /// never refreshed -- so there is no tick-to-tick delta to watch, and a person leaving
     /// the room moves nothing (I5). See combat.Crowd.
     crowd: Crowd, // u8
+    /// Server-issued salvage on the first tick of an engagement. Never a client claim.
+    reward: loadout.Reward = .none, // u8
+    /// The actual authored discovery, or `loadout.no_item` outside the first engagement tick.
+    item: u8 = loadout.no_item,
+    discovered: bool = false,
+    source: encounter.Source = .players,
 
     comptime {
         // THE SIZE GUARD (A7). One per presence in every live cell, every tick: the
-        // second-hottest struct in the system. 4 + 2 + 2 + 2 + 1 + 1 = 12 bytes packed.
-        //
-        // The crowd band costs nothing: it occupies the byte that was padding.
-        assert(@sizeOf(Tell) == 12);
+        // second-hottest struct in the system. A7.1: 12 -> 16 for the authoritative engagement
+        // reward; the remaining bytes are explicit padding rather than hidden state.
+        assert(@sizeOf(Tell) == 16);
     }
 };
 
@@ -123,6 +130,9 @@ pub fn tick(
     const factions = world.presences.items(.faction);
     const cells = world.presences.items(.cell);
     const hps = world.presences.items(.hp);
+    const equipped = try scratch.alloc(loadout.Loadout, players.len);
+    defer scratch.free(equipped);
+    world_mod.loadouts(world, equipped);
 
     // Everyone recovers. The people actually in a fight then take damage that dwarfs it.
     //
@@ -177,10 +187,11 @@ pub fn tick(
         if (at_start.started == index) started_here += 1;
 
         const out = outcomes[written..][0..run.len];
-        const momentum = combat.resolve(
+        const momentum = combat.resolveEquipped(
             players[start..end],
             factions[start..end],
             hps[start..end],
+            equipped[start..end],
             cell,
             seed,
             index,
@@ -197,6 +208,22 @@ pub fn tick(
             // kept a total. Everybody was level one forever.
             world_mod.award(world, outcome.player, outcome.xp);
 
+            var reward: loadout.Reward = .none;
+            var item_byte: u8 = loadout.no_item;
+            var discovered = false;
+            if (at_start.started == index) {
+                const progress = world_mod.progressOf(world, outcome.player);
+                const item = loadout.drop(seed, index, @intFromEnum(outcome.player), progress.level);
+                const acquisition = world_mod.awardItem(world, outcome.player, item);
+                item_byte = @intFromEnum(acquisition.item);
+                discovered = acquisition.discovered;
+                reward = switch (loadout.definition(item).slot) {
+                    .weapon => .weapon_parts,
+                    .armor => .armor_parts,
+                    .utility, .evidence => .field_supplies,
+                };
+            }
+
             // Your hostiles are the other side's headcount. A Human is told how many Zombies
             // are here, in bands; a Zombie is told the reverse.
             const hostiles: u32 = switch (faction) {
@@ -211,6 +238,9 @@ pub fn tick(
                 .xp = outcome.xp,
                 .momentum = momentum,
                 .crowd = combat.crowdOf(hostiles),
+                .reward = reward,
+                .item = item_byte,
+                .discovered = discovered,
             };
         }
 
@@ -359,6 +389,36 @@ test "the tick resolves live cells and is silent everywhere else" {
     const hps = world.presences.items(.hp);
     for (players, hps) |player, hp| {
         if (@intFromEnum(player) >= 7) try testing.expectEqual(@as(u16, 100), hp);
+    }
+}
+
+test "an engagement awards one deterministic authored item when it begins" {
+    const gpa = testing.allocator;
+    var world: World = .empty;
+    defer world_mod.deinit(&world, gpa);
+    try buildCity(&world, gpa);
+
+    const first = try tick(&world, gpa, gpa, 77, 0, .default);
+    defer gpa.free(first.tells);
+    try testing.expect(first.tells.len > 0);
+    for (first.tells) |tell| {
+        try testing.expect(tell.reward != .none);
+        try testing.expect(tell.item != loadout.no_item);
+        const item = loadout.itemFromByte(tell.item).?;
+        const progress = world_mod.progressOf(&world, tell.player);
+        if (tell.discovered) {
+            try testing.expect(loadout.owns(progress.owned, item));
+        } else {
+            try testing.expect(progress.salvage > 0);
+        }
+    }
+
+    const second = try tick(&world, gpa, gpa, 77, 1, .default);
+    defer gpa.free(second.tells);
+    for (second.tells) |tell| {
+        try testing.expectEqual(loadout.Reward.none, tell.reward);
+        try testing.expectEqual(loadout.no_item, tell.item);
+        try testing.expect(!tell.discovered);
     }
 }
 

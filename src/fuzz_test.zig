@@ -56,13 +56,13 @@ test "fuzz: a report from a hostile phone never crashes the server" {
             // Whatever survives validation is a real cell at exactly the precision we asked
             // for. Nothing else may reach the core.
             if (cell) |c| {
-                try testing.expectEqual(spatial.default_precision, spatial.precisionOf(c));
-                try testing.expect(c != spatial.nowhere);
+                try testing.expectEqual(spatial.default_precision, spatial.precisionOf(c.cell));
+                try testing.expect(c.cell != spatial.nowhere);
             }
         } else |err| {
             // An explicit error is the correct outcome for garbage (E3). Not a panic, not a
             // silent zero.
-            try testing.expect(err == protocol.Error.Truncated or err == protocol.Error.BadVersion);
+            try testing.expect(err == protocol.Error.Truncated or err == protocol.Error.BadVersion or err == protocol.Error.BadValue);
         }
     }
 }
@@ -82,8 +82,8 @@ test "fuzz: a hostile cell value never produces a bad cell" {
         if (cell) |c| {
             // Whatever came out is a real room at the working precision. There is no third
             // possibility, and that is what makes the core safe to hand it to.
-            try testing.expectEqual(spatial.default_precision, spatial.precisionOf(c));
-            try testing.expect(@intFromEnum(c) != 0);
+            try testing.expectEqual(spatial.default_precision, spatial.precisionOf(c.cell));
+            try testing.expect(@intFromEnum(c.cell) != 0);
         }
     }
 }

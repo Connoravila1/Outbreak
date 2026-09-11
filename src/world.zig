@@ -24,6 +24,7 @@
 //! your back (C2).
 
 const std = @import("std");
+const loadout = @import("loadout.zig");
 const spatial = @import("spatial.zig");
 
 const Allocator = std.mem.Allocator;
@@ -117,12 +118,17 @@ pub const World = struct {
 /// Hot and cold data live apart. That is the whole of A3, and this is what it is for.
 pub const Progress = struct {
     xp: u32,
+    owned: loadout.ItemMask = loadout.starter_owned,
     level: u16,
-    _pad: u16 = 0,
+    salvage: u16 = 0,
+    equipped: loadout.Loadout = loadout.starter_loadout,
+    kit: loadout.Kit = .field,
 
     comptime {
-        // THE SIZE GUARD (A7). One per player, for as long as they exist.
-        assert(@sizeOf(Progress) == 8);
+        // A7.1: 12 -> 16 bytes. The 24-bit discovery catalogue and three equipped item ids replace
+        // a pretend salvage counter with persistent collection state. This is cold player data;
+        // Presence, the hot group-by row, remains unchanged.
+        assert(@sizeOf(Progress) == 16);
     }
 };
 
@@ -174,23 +180,111 @@ pub fn progressOf(world: *const World, player: PlayerId) Progress {
     return world.progress.get(player) orelse .{ .xp = 0, .level = 1 };
 }
 
+/// CORE. The server-authoritative kit currently equipped by a player.
+pub fn kitOf(world: *const World, player: PlayerId) loadout.Kit {
+    return progressOf(world, player).kit;
+}
+
+pub fn equippedOf(world: *const World, player: PlayerId) loadout.Loadout {
+    return progressOf(world, player).equipped;
+}
+
+pub fn ownedBy(world: *const World, player: PlayerId) loadout.ItemMask {
+    return progressOf(world, player).owned;
+}
+
+/// CORE. Apply a bounded loadout intent only while the player is outside an engagement.
+/// `claimed` is included so a client cannot switch while stepping into a room whose fight is
+/// already running. The phone chooses among authored kits; it never supplies a stat.
+pub fn selectKitIfIdle(world: *World, player: PlayerId, claimed: CellId, kit: loadout.Kit) bool {
+    const players = world.presences.items(.player);
+    const cells = world.presences.items(.cell);
+    for (players, cells) |candidate, cell| {
+        if (candidate != player) continue;
+        if (world.engagements.contains(cell) or world.engagements.contains(claimed)) return false;
+        const earned = world.progress.getPtr(player) orelse return false;
+        earned.kit = kit;
+        return true;
+    }
+    return false;
+}
+
+/// Apply a complete, bounded equipment intent only when every item is owned, correctly slotted,
+/// and the player is outside an engagement. The client can choose; it cannot invent ownership.
+pub fn selectEquipmentIfIdle(world: *World, player: PlayerId, claimed: CellId, equipped: loadout.Loadout) bool {
+    const players = world.presences.items(.player);
+    const cells = world.presences.items(.cell);
+    for (players, cells) |candidate, cell| {
+        if (candidate != player) continue;
+        if (world.engagements.contains(cell) or world.engagements.contains(claimed)) return false;
+        const earned = world.progress.getPtr(player) orelse return false;
+        if (!loadout.validEquipped(equipped, earned.owned)) return false;
+        earned.equipped = equipped;
+        return true;
+    }
+    return false;
+}
+
+/// CORE. One server-issued salvage unit. No client call site exists.
+pub fn awardSalvage(world: *World, player: PlayerId) void {
+    const earned = world.progress.getPtr(player) orelse return;
+    earned.salvage +|= 1;
+}
+
+pub const Acquisition = struct {
+    item: loadout.ItemId,
+    discovered: bool,
+};
+
+/// Grant one server-selected discovery. Evidence never consumes equipment capacity. A duplicate,
+/// or an equipment discovery beyond capacity, becomes one salvage unit instead of disappearing.
+pub fn awardItem(world: *World, player: PlayerId, item: loadout.ItemId) Acquisition {
+    const earned = world.progress.getPtr(player) orelse return .{ .item = item, .discovered = false };
+    const definition = loadout.definition(item);
+    const room = loadout.equipmentCount(earned.owned) < loadout.capacityForLevel(earned.level);
+    if (loadout.owns(earned.owned, item) or (definition.slot != .evidence and !room)) {
+        earned.salvage +|= 1;
+        return .{ .item = item, .discovered = false };
+    }
+    earned.owned = loadout.discover(earned.owned, item);
+    return .{ .item = item, .discovered = true };
+}
+
+/// CORE. Fill a caller-owned slice with kits in the same order as the presence columns.
+pub fn loadouts(world: *const World, out: []loadout.Loadout) void {
+    const players = playerIds(world);
+    assert(out.len == players.len);
+    for (players, out) |player, *equipped| equipped.* = equippedOf(world, player);
+}
+
 /// CORE. The level curve.
 ///
 /// PROVISIONAL, and provisional in a way that matters: nobody has played, so this is a shape,
-/// not a balance. It is quadratic -- level n costs n^2 * 100 XP -- which means levelling slows
-/// down without ever stopping.
+/// not a balance. It is quadratic -- level n costs n^2 * 100 XP -- and the authored MVP ends
+/// at level ten. XP can keep accumulating at the cap without inventing content beyond it.
 ///
 /// At 10 XP per tick in a fight, and a fight being a handful of minutes: level 2 costs about
-/// seven minutes of being in fights, level 10 about three hours, level 50 about three days of
-/// accumulated combat. That is a shape you can look at and argue with, which is the point of
+/// seven minutes of being in fights and level 10 about three hours of accumulated combat. That
+/// is a shape you can look at and argue with, which is the point of
 /// writing it down rather than tuning it in the dark.
 pub fn levelFor(xp: u32) u16 {
     var level: u16 = 1;
-    while (level < 1000) : (level += 1) {
+    while (level < 10) : (level += 1) {
         const next: u64 = @as(u64, level) * @as(u64, level) * 100;
         if (xp < next) return level;
     }
     return level;
+}
+
+pub fn xpFloor(level: u16) u32 {
+    if (level <= 1) return 0;
+    const prior = @min(@as(u16, 9), level - 1);
+    return @as(u32, prior) * @as(u32, prior) * 100;
+}
+
+pub fn xpNext(level: u16) ?u32 {
+    if (level >= 10) return null;
+    return @as(u32, level) * @as(u32, level) * 100;
 }
 
 /// CORE. Add a presence. Allocates, and says so (C1, C2).
@@ -245,6 +339,34 @@ pub fn factions(world: *const World) []const Faction {
 
 pub fn hitPoints(world: *const World) []const u16 {
     return world.presences.items(.hp);
+}
+
+pub fn cellOfPlayer(world: *const World, player: PlayerId) ?CellId {
+    for (world.presences.items(.player), world.presences.items(.cell)) |candidate, cell| {
+        if (candidate == player) return cell;
+    }
+    return null;
+}
+
+pub fn factionOf(world: *const World, player: PlayerId) ?Faction {
+    for (world.presences.items(.player), world.presences.items(.faction)) |candidate, faction| {
+        if (candidate == player) return faction;
+    }
+    return null;
+}
+
+/// Fold a server-authored personal threat outcome into the same persistent player state used by
+/// real contacts. The caller supplies an outcome, never the phone; this remains authoritative.
+pub fn applyPersonalOutcome(world: *World, player: PlayerId, damage: u16, xp: u16) ?u16 {
+    const players = world.presences.items(.player);
+    const hps = world.presences.items(.hp);
+    for (players, hps) |candidate, *hp| {
+        if (candidate != player) continue;
+        hp.* -|= damage;
+        award(world, player, xp);
+        return hp.*;
+    }
+    return null;
 }
 
 pub fn population(world: *const World) usize {
@@ -790,20 +912,50 @@ test "the award allocates nothing, because the row already exists" {
     try std.testing.expectEqual(rows, world.progress.count());
 }
 
-test "the level curve slows down without ever stopping" {
+test "discoveries gate equipment selection and duplicates become salvage" {
+    const gpa = std.testing.allocator;
+    const player: PlayerId = @enumFromInt(71);
+    const cell = spatial.cellFromKey(0x71, spatial.default_precision);
+    var world: World = .empty;
+    defer deinit(&world, gpa);
+    try add(&world, gpa, .{ .cell = cell, .player = player, .hp = 100, .faction = .human });
+
+    const wanted: loadout.Loadout = .{
+        .weapon = .nail_driver,
+        .armor = .work_jacket,
+        .utility = .field_radio,
+    };
+    try std.testing.expect(!selectEquipmentIfIdle(&world, player, cell, wanted));
+
+    const found = awardItem(&world, player, .nail_driver);
+    try std.testing.expect(found.discovered);
+    try std.testing.expect(selectEquipmentIfIdle(&world, player, cell, wanted));
+    try std.testing.expectEqual(wanted, equippedOf(&world, player));
+
+    const duplicate = awardItem(&world, player, .nail_driver);
+    try std.testing.expect(!duplicate.discovered);
+    try std.testing.expectEqual(@as(u16, 1), progressOf(&world, player).salvage);
+}
+
+test "the authored level curve advances and caps at ten" {
     // A shape you can look at and argue with, rather than a number tuned in the dark.
     try std.testing.expectEqual(@as(u16, 1), levelFor(0));
     try std.testing.expectEqual(@as(u16, 1), levelFor(99));
     try std.testing.expectEqual(@as(u16, 2), levelFor(100));
 
-    // Each level costs more than the last, forever.
+    // Each authored level costs more than the last.
     var level: u16 = 2;
     var previous_cost: u64 = 100;
-    while (level < 50) : (level += 1) {
+    while (level < 10) : (level += 1) {
         const cost: u64 = @as(u64, level) * @as(u64, level) * 100;
         try std.testing.expect(cost > previous_cost);
         previous_cost = cost;
     }
+    try std.testing.expectEqual(@as(u16, 10), levelFor(std.math.maxInt(u32)));
+    try std.testing.expectEqual(@as(u32, 0), xpFloor(1));
+    try std.testing.expectEqual(@as(u32, 100), xpFloor(2));
+    try std.testing.expectEqual(@as(?u32, 400), xpNext(2));
+    try std.testing.expectEqual(@as(?u32, null), xpNext(10));
 }
 
 test "XP saturates rather than wrapping" {

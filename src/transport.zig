@@ -18,7 +18,7 @@
 //! We take (3). It costs zero dependencies in our binary and hands TLS to software that has been
 //! attacked continuously for twenty years.
 //!
-//! IT COSTS US NOTHING WE CARE ABOUT. Every reply is a constant 16 bytes of plaintext, so every
+//! IT COSTS US NOTHING WE CARE ABOUT. Every reply is a constant-size plaintext frame, so every
 //! TLS record carrying one is the same length as every other. The size guarantee (I3) survives
 //! the proxy exactly.
 //!
@@ -49,11 +49,14 @@
 //! breaking, and that is the only kind of security property worth having.
 
 const std = @import("std");
+const account_journal = @import("account_journal.zig");
 const accounts_mod = @import("accounts.zig");
 const credential = @import("credential.zig");
 const entropy = @import("entropy.zig");
+const journal = @import("journal.zig");
 const protocol = @import("protocol.zig");
 const session_mod = @import("session.zig");
+const server_state = @import("server_state.zig");
 const spatial = @import("spatial.zig");
 const world = @import("world.zig");
 
@@ -129,6 +132,88 @@ pub fn deinit(server: *Server, gpa: Allocator) void {
 
     // The pepper is a secret. Wipe it rather than leave it in a core dump.
     std.crypto.secureZero(u8, &server.pepper);
+}
+
+/// Install the separately persisted server secret before any listener or account operation starts.
+pub fn setPepper(server: *Server, pepper: [32]u8) void {
+    std.crypto.secureZero(u8, &server.pepper);
+    server.pepper = pepper;
+}
+
+/// Install a world reconstructed from the privacy-bounded journal before the listener opens.
+/// Ownership of `restored` moves into the server.
+pub fn restore(
+    server: *Server,
+    io: Io,
+    gpa: Allocator,
+    restored_world: world.World,
+    restored_auth: account_journal.Restored,
+    next_tick: u64,
+    seed: u64,
+    precision: u6,
+) !void {
+    var world_owned = restored_world;
+    var auth_owned = restored_auth;
+
+    const entries = try accounts_mod.storedSorted(&auth_owned.accounts, gpa);
+    defer gpa.free(entries);
+    if (entries.len != world.playerIds(&world_owned).len) return error.InconsistentState;
+    for (entries) |entry| {
+        const faction = world.factionOf(&world_owned, entry.account.player) orelse return error.InconsistentState;
+        if (faction != entry.account.faction) return error.InconsistentState;
+    }
+
+    try server.mutex.lock(io);
+    defer server.mutex.unlock(io);
+
+    world.deinit(&server.sessions.world, gpa);
+    server.sessions.world = world_owned;
+    server.sessions.tick_index = next_tick;
+    server.sessions.seed = seed;
+    server.sessions.precision = precision;
+    accounts_mod.deinit(&server.accounts, gpa);
+    server.accounts = auth_owned.accounts;
+
+    var highest: u32 = 0;
+    for (world.playerIds(&server.sessions.world)) |player| highest = @max(highest, @intFromEnum(player));
+    server.sessions.next_player = highest +| 1;
+}
+
+/// Take one complete, internally consistent state snapshot. Authentication and world bytes share
+/// one envelope and therefore one atomic filesystem replacement. Location history remains absent:
+/// the restored roster begins nowhere and the next phone report places each player.
+pub fn snapshot(server: *Server, io: Io, gpa: Allocator) ![]u8 {
+    try server.mutex.lock(io);
+    defer server.mutex.unlock(io);
+
+    const lived = &server.sessions.world;
+    const auth_bytes = try account_journal.encode(gpa, &server.accounts);
+    defer gpa.free(auth_bytes);
+
+    var world_bytes: std.ArrayList(u8) = .empty;
+    defer world_bytes.deinit(gpa);
+    try journal.writeHeader(&world_bytes, gpa, .{ .seed = server.sessions.seed, .precision = server.sessions.precision });
+
+    const engagements = try world.engagementsSorted(lived, gpa);
+    defer gpa.free(engagements.cells);
+    defer gpa.free(engagements.engagements);
+    const progress = try world.progressSorted(lived, gpa);
+    defer gpa.free(progress.players);
+    defer gpa.free(progress.progress);
+
+    try journal.writeSnapshot(
+        &world_bytes,
+        gpa,
+        server.sessions.tick_index,
+        world.playerIds(lived),
+        world.factions(lived),
+        world.hitPoints(lived),
+        engagements.cells,
+        engagements.engagements,
+        progress.players,
+        progress.progress,
+    );
+    return server_state.encode(gpa, auth_bytes, world_bytes.items);
 }
 
 /// SHELL. Bind. LOOPBACK ONLY, and not negotiably.
@@ -296,7 +381,7 @@ fn forget(server: *Server, io: Io, session: protocol.SessionId) void {
 ///
 /// THIS IS WHERE CONSTANT-TIME SILENCE LIVES, and it lives here for free.
 ///
-/// Every connection is written to, every tick, with exactly sixteen bytes, in the same loop, in
+/// Every connection is written to, every tick, with exactly the same byte count, in the same loop, in
 /// the same order, doing the same work -- whether that player is in a war, in a quiet room, or
 /// alone in a field. There is no branch on what happened to them, so there is no timing to
 /// measure and no size to compare.
@@ -325,7 +410,7 @@ pub fn tick(server: *Server, io: Io, gpa: Allocator, scratch: Allocator) !void {
         }
     }
 
-    // And now: sixteen bytes to everyone. The same sixteen bytes' worth of work for everyone.
+    // And now: the same bytes to everyone. The same bytes' worth of work for everyone.
     for (server.connections.items) |connection| {
         const response = find(replies, connection.session) orelse protocol.quiet(now, 0, .{ .xp = 0, .level = 1 });
         const bytes = protocol.encodeResponse(response);

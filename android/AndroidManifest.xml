@@ -1,17 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-    THERE IS NO KOTLIN. THERE IS NO JAVA. THIS FILE IS WHAT MAKES THAT TRUE.
-
-    `android:hasCode="false"` tells the framework there is no dex in this APK. It loads
-    `android.app.NativeActivity`  —  a class that already ships on every device  —  which in turn
-    dlopens `liboutbreak.so` and calls `ANativeActivity_onCreate`. That symbol is in `android.zig`.
-
-    So the entire application is one shared library of Zig. No JVM class of ours is ever written,
-    no Java is ever compiled, and there is no bridge to maintain between two languages.
-
-    `android.app.lib_name` is the ONLY link between this file and the code: it names the library,
-    without the `lib` prefix and without the `.so`.
--->
+<!-- No activity is declared while the foreground is rebuilt on DVUI/SDL (CURRENT.md). What
+     remains here is what survives every presentation swap: the location permission, the
+     foreground service that keeps the radio alive, and the socket. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.outbreak.game"
     android:versionCode="1"
@@ -67,7 +57,7 @@ INTERNET carries the room to the server and the tell back. The coordinate is nev
         with no obvious cause. Explicit beats defaulted while the thing is being brought up.
     -->
     <!--
-        `hasCode` IS TRUE NOW, AND IT COST US SOMETHING TO SAY SO.
+        `hasCode` IS TRUE, AND IT COST US SOMETHING TO SAY SO.
 
         This file used to declare there was no code in the APK at all: the framework loaded a
         shared library and not one class of ours was ever written. That was true, and it was a
@@ -77,32 +67,22 @@ INTERNET carries the room to the server and the tell back. The coordinate is nev
         has been, and every route to a live fix runs through a Java callback object — which needs
         a class, which needs a dex. JNI cannot conjure one.
 
-        So there is exactly ONE class: android/java/com/outbreak/game/Fix.java. It has NO FIELDS.
-        It receives a Location, reads two doubles out of it, hands them to Zig, and forgets. If
-        that file ever grows, something has gone wrong.
+        So there is exactly ONE class: OutbreakService. It receives a Location, reads two doubles
+        out of it, hands them to Zig (OutbreakService.onLocation, exported from location.zig),
+        and forgets. If the Java in this project ever grows past that duty, something has gone
+        wrong.
     -->
     <application
         android:label="Outbreak"
         android:icon="@mipmap/ic_launcher"
         android:hasCode="true"
         android:allowBackup="false"
+        android:hardwareAccelerated="true"
         android:extractNativeLibs="true">
 
-        <activity
-            android:name="android.app.NativeActivity"
-            android:exported="true"
-            android:screenOrientation="portrait"
-            android:configChanges="orientation|keyboardHidden|screenSize|density">
-
-            <meta-data
-                android:name="android.app.lib_name"
-                android:value="outbreak" />
-
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
+        <!-- The launcher activity returns with the DVUI/SDL host. Until then this manifest
+             declares no entry point on purpose: an APK that cannot be launched is honest; one
+             that launches a dead WebView is not. -->
 
         <!-- The foreground service. `foregroundServiceType="location"` is what lets a backgrounded
              app keep receiving fixes; without it Android throttles background location to a few per

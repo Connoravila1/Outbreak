@@ -11,12 +11,12 @@
 //! ============================================================================
 //! THE CLIENT IS AUTHORITATIVE OVER NOTHING (H1)
 //!
-//! The client's entire vocabulary is: A SESSION, AND A CELL.
+//! The client's entire vocabulary is: A SESSION, A CELL, AND BOUNDED LOADOUT INTENT.
 //!
 //! It never sends a damage figure, a combat result, an inventory delta, an XP amount, a loot
-//! claim, a kill, a level, or a territory capture. Every outcome is computed server-side from
-//! data the client cannot influence. The only lie a perfectly modified phone can tell is a
-//! FALSE CELL -- and the protocol is designed so that this stays true.
+//! claim, a kill, a level, or a territory capture. Every outcome is computed server-side. A
+//! modified phone can lie about its cell or request one of three authored kits; it cannot author
+//! the kit's stats or whether the request is accepted.
 //!
 //! That is not a comment. It is a `comptime` assertion at the bottom of `Report`: the build
 //! fails if anyone ever adds a field to the client's message. The rule cannot rot, because
@@ -41,6 +41,8 @@
 
 const std = @import("std");
 const combat = @import("combat.zig");
+const encounter = @import("encounter.zig");
+const loadout = @import("loadout.zig");
 const spatial = @import("spatial.zig");
 const tick_mod = @import("tick.zig");
 const world = @import("world.zig");
@@ -51,7 +53,7 @@ const CellId = spatial.CellId;
 const Crowd = combat.Crowd;
 const Momentum = combat.Momentum;
 
-pub const version: u16 = 1;
+pub const version: u16 = 4;
 
 pub const Error = error{
     BadVersion,
@@ -73,10 +75,13 @@ pub const SessionId = enum(u64) { _ };
 
 /// EVERYTHING THE CLIENT IS ALLOWED TO SAY.
 ///
-/// A session, and a room. That is the whole vocabulary of the phone.
+/// A session, a room, and a bounded kit selection. The kit is an intent; the server decides
+/// whether changing it is currently legal and computes every consequence itself.
 pub const Report = struct {
     session: SessionId, // u64
     cell: CellId, // u64
+    kit: loadout.Kit = .field, // u8
+    equipped: loadout.Loadout = loadout.starter_loadout, // 3 x u8
 
     comptime {
         // ------------------------------------------------------------------
@@ -92,9 +97,8 @@ pub const Report = struct {
         // would have said "expected 16 bytes", which tells the next person to fix the number.
         // The order of these two checks is the difference between a rule and a speed bump.)
         //
-        // The only lie a perfectly modified phone can tell is a false cell. This is what keeps
-        // that sentence true.
-        const permitted = [_][]const u8{ "session", "cell" };
+        // The kit is bounded intent, not an outcome. The server owns its stats and acceptance.
+        const permitted = [_][]const u8{ "session", "cell", "kit", "equipped" };
 
         for (@typeInfo(Report).@"struct".fields) |field| {
             var allowed = false;
@@ -103,8 +107,8 @@ pub const Report = struct {
             }
             if (!allowed) {
                 @compileError("H1 VIOLATION: the client may not send '" ++ field.name ++
-                    "'. The client is authoritative over NOTHING. It transmits a session and a " ++
-                    "cell. It never transmits a damage figure, a combat result, an inventory " ++
+                    "'. The client is authoritative over NOTHING. It transmits a session, a " ++
+                    "cell, and bounded intent. It never transmits a damage figure, an inventory " ++
                     "delta, an XP amount, a loot claim, or a capture -- every outcome is " ++
                     "computed server-side from data the client cannot influence. The only lie a " ++
                     "modified phone can tell is a false cell, and that is the whole point.");
@@ -113,11 +117,11 @@ pub const Report = struct {
 
         // THE SIZE GUARD (A7). One per player per tick: the only thing the server ever
         // receives, 333 times a second at ten thousand players.
-        assert(@sizeOf(Report) == 16);
+        assert(@sizeOf(Report) == 24);
     }
 };
 
-pub const report_size = 18; // version(2) + session(8) + cell(8)
+pub const report_size = 22; // version(2) + session(8) + cell(8) + legacy preset(1) + equipment(3)
 
 /// CORE. Encode a report. The client's entire outbound traffic.
 pub fn encodeReport(report: Report) [report_size]u8 {
@@ -125,6 +129,10 @@ pub fn encodeReport(report: Report) [report_size]u8 {
     std.mem.writeInt(u16, out[0..2], version, .little);
     std.mem.writeInt(u64, out[2..10], @intFromEnum(report.session), .little);
     std.mem.writeInt(u64, out[10..18], @intFromEnum(report.cell), .little);
+    out[18] = @intFromEnum(report.kit);
+    out[19] = @intFromEnum(report.equipped.weapon);
+    out[20] = @intFromEnum(report.equipped.armor);
+    out[21] = @intFromEnum(report.equipped.utility);
     return out;
 }
 
@@ -133,9 +141,25 @@ pub fn decodeReport(bytes: []const u8) Error!Report {
     if (bytes.len != report_size) return Error.Truncated;
     if (std.mem.readInt(u16, bytes[0..2], .little) != version) return Error.BadVersion;
 
+    const kit: loadout.Kit = switch (bytes[18]) {
+        0 => .field,
+        1 => .raider,
+        2 => .bulwark,
+        else => return Error.BadValue,
+    };
+    const weapon = loadout.itemFromByte(bytes[19]) orelse return Error.BadValue;
+    const armor = loadout.itemFromByte(bytes[20]) orelse return Error.BadValue;
+    const utility = loadout.itemFromByte(bytes[21]) orelse return Error.BadValue;
+    const equipped: loadout.Loadout = .{ .weapon = weapon, .armor = armor, .utility = utility };
+    if (loadout.definition(weapon).slot != .weapon or
+        loadout.definition(armor).slot != .armor or
+        loadout.definition(utility).slot != .utility) return Error.BadValue;
+
     return .{
         .session = @enumFromInt(std.mem.readInt(u64, bytes[2..10], .little)),
         .cell = @enumFromInt(std.mem.readInt(u64, bytes[10..18], .little)),
+        .kit = kit,
+        .equipped = equipped,
     };
 }
 
@@ -150,15 +174,21 @@ pub fn decodeReport(bytes: []const u8) Error!Report {
 /// makes changing the cell size a server-side config change rather than a flag day, since a
 /// mid-rollout mix of client versions still shares rooms. A client reporting a COARSER cell
 /// than we asked for cannot be refined, and is dropped.
-pub fn validate(report: Report, wanted: u6) ?CellId {
+pub const ValidatedReport = struct {
+    cell: CellId,
+    kit: loadout.Kit,
+    equipped: loadout.Loadout,
+};
+
+pub fn validate(report: Report, wanted: u6) ?ValidatedReport {
     const value = @intFromEnum(report.cell);
     if (value == 0) return null; // 0 is not a place; a zeroed packet is not a report
 
     const claimed = spatial.precisionOf(report.cell);
-    if (claimed == wanted) return report.cell;
+    if (claimed == wanted) return .{ .cell = report.cell, .kit = report.kit, .equipped = report.equipped };
     if (claimed < wanted) return null; // coarser than we asked; we cannot invent the bits back
 
-    return spatial.coarsen(report.cell, claimed - wanted);
+    return .{ .cell = spatial.coarsen(report.cell, claimed - wanted), .kit = report.kit, .equipped = report.equipped };
 }
 
 // ============================================================================ server -> client
@@ -184,7 +214,17 @@ pub const Response = struct {
     level: u16,
     momentum: Momentum, // u8
     crowd: Crowd, // u8
-    _pad: u16 = 0,
+    /// The server-confirmed equipment state and the result earned when an encounter begins.
+    /// These are outcomes or bounded configuration, never client-authored rewards.
+    kit: loadout.Kit = .field,
+    reward: loadout.Reward = .none,
+    salvage: u16 = 0,
+    equipped: loadout.Loadout = loadout.starter_loadout,
+    item: u8 = loadout.no_item,
+    discovered: bool = false,
+    owned: loadout.ItemMask = loadout.starter_owned,
+    capacity: u8 = 6,
+    source: encounter.Source = .none,
 
     comptime {
         // THE SIZE GUARD (A7). One per player per tick.
@@ -201,7 +241,7 @@ pub const Response = struct {
         //
         // IT IS STILL CONSTANT, which is the property that actually matters: every reply is the
         // same size, whatever happened, so silence is still exactly as large as a war (I3).
-        assert(@sizeOf(Response) == 24);
+        assert(@sizeOf(Response) == 40);
     }
 };
 
@@ -222,15 +262,21 @@ pub fn quiet(tick: u64, hp: u16, progress: world.Progress) Response {
         .level = progress.level,
         .momentum = .even,
         .crowd = .a_few,
+        .kit = progress.kit,
+        .reward = .none,
+        .salvage = progress.salvage,
+        .equipped = progress.equipped,
+        .owned = progress.owned,
+        .capacity = loadout.capacityForLevel(progress.level),
     };
 }
 
-pub const response_size = 22; // tick + total_xp + hp + damage + xp + level + momentum + crowd
+pub const response_size = 37; // fixed-size authoritative player state and encounter origin
 
 /// CORE. Encode a response.
 ///
 /// NOTE WHAT IS NOT HERE: a branch on whether anything happened. There is one encoder, it
-/// writes the same sixteen bytes every time, and it does the same work every time. A shorter
+/// writes the same fixed-size frame every time, and it does the same work every time. A shorter
 /// message for a quiet cell would be a smaller packet, and a smaller packet is a count (I3).
 pub fn encodeResponse(response: Response) [response_size]u8 {
     var out: [response_size]u8 = undefined;
@@ -242,6 +288,17 @@ pub fn encodeResponse(response: Response) [response_size]u8 {
     std.mem.writeInt(u16, out[18..20], response.level, .little);
     out[20] = @intFromEnum(response.momentum);
     out[21] = @intFromEnum(response.crowd);
+    out[22] = @intFromEnum(response.kit);
+    out[23] = @intFromEnum(response.reward);
+    std.mem.writeInt(u16, out[24..26], response.salvage, .little);
+    out[26] = @intFromEnum(response.equipped.weapon);
+    out[27] = @intFromEnum(response.equipped.armor);
+    out[28] = @intFromEnum(response.equipped.utility);
+    out[29] = response.item;
+    out[30] = @intFromBool(response.discovered);
+    std.mem.writeInt(u32, out[31..35], response.owned, .little);
+    out[35] = response.capacity;
+    out[36] = @intFromEnum(response.source);
     return out;
 }
 
@@ -266,6 +323,42 @@ pub fn decodeResponse(bytes: []const u8) Error!Response {
         else => return Error.BadValue,
     };
 
+    const kit: loadout.Kit = switch (bytes[22]) {
+        0 => .field,
+        1 => .raider,
+        2 => .bulwark,
+        else => return Error.BadValue,
+    };
+
+    const reward: loadout.Reward = switch (bytes[23]) {
+        0 => .none,
+        1 => .weapon_parts,
+        2 => .armor_parts,
+        3 => .field_supplies,
+        else => return Error.BadValue,
+    };
+    const weapon = loadout.itemFromByte(bytes[26]) orelse return Error.BadValue;
+    const armor = loadout.itemFromByte(bytes[27]) orelse return Error.BadValue;
+    const utility = loadout.itemFromByte(bytes[28]) orelse return Error.BadValue;
+    const item = if (bytes[29] == loadout.no_item) loadout.no_item else blk: {
+        _ = loadout.itemFromByte(bytes[29]) orelse return Error.BadValue;
+        break :blk bytes[29];
+    };
+    const owned = std.mem.readInt(u32, bytes[31..35], .little);
+    const source: encounter.Source = switch (bytes[36]) {
+        0 => .none,
+        1 => .ambient,
+        2 => .players,
+        else => return Error.BadValue,
+    };
+    const catalogue_mask = (@as(loadout.ItemMask, 1) << loadout.item_count) - 1;
+    if (bytes[30] > 1 or
+        owned & ~catalogue_mask != 0 or
+        loadout.definition(weapon).slot != .weapon or
+        loadout.definition(armor).slot != .armor or
+        loadout.definition(utility).slot != .utility or
+        !loadout.validEquipped(.{ .weapon = weapon, .armor = armor, .utility = utility }, owned)) return Error.BadValue;
+
     return .{
         .tick = std.mem.readInt(u64, bytes[0..8], .little),
         .total_xp = std.mem.readInt(u32, bytes[8..12], .little),
@@ -275,6 +368,15 @@ pub fn decodeResponse(bytes: []const u8) Error!Response {
         .level = std.mem.readInt(u16, bytes[18..20], .little),
         .momentum = momentum,
         .crowd = crowd,
+        .kit = kit,
+        .reward = reward,
+        .salvage = std.mem.readInt(u16, bytes[24..26], .little),
+        .equipped = .{ .weapon = weapon, .armor = armor, .utility = utility },
+        .item = item,
+        .discovered = bytes[30] == 1,
+        .owned = owned,
+        .capacity = bytes[35],
+        .source = source,
     };
 }
 
@@ -291,6 +393,15 @@ pub fn respond(tick: u64, hp: u16, progress: world.Progress, told: ?tick_mod.Tel
         .level = progress.level,
         .momentum = tell.momentum,
         .crowd = tell.crowd,
+        .kit = progress.kit,
+        .reward = tell.reward,
+        .salvage = progress.salvage,
+        .equipped = progress.equipped,
+        .item = tell.item,
+        .discovered = tell.discovered,
+        .owned = progress.owned,
+        .capacity = loadout.capacityForLevel(progress.level),
+        .source = tell.source,
     };
 }
 
@@ -426,19 +537,23 @@ pub fn decodeWelcome(bytes: []const u8) Error!Welcome {
 
 const testing = std.testing;
 
-test "the client's entire vocabulary is a session and a cell" {
+test "the client's entire vocabulary is identity, location, and bounded equipment intent" {
     // H1. The compiler already refuses to build a Report with any other field (see the
     // comptime block). This asserts the shape a human reads.
     const fields = @typeInfo(Report).@"struct".fields;
-    try testing.expectEqual(@as(usize, 2), fields.len);
+    try testing.expectEqual(@as(usize, 4), fields.len);
     try testing.expectEqualStrings("session", fields[0].name);
     try testing.expectEqualStrings("cell", fields[1].name);
+    try testing.expectEqualStrings("kit", fields[2].name);
+    try testing.expectEqualStrings("equipped", fields[3].name);
 }
 
 test "a report round-trips" {
     const report: Report = .{
         .session = @enumFromInt(0xABCD),
         .cell = spatial.cellFromKey(0xCAFE, spatial.default_precision),
+        .kit = .raider,
+        .equipped = .{ .weapon = .nail_driver, .armor = .riot_vest, .utility = .trauma_pack },
     };
 
     const bytes = encodeReport(report);
@@ -446,6 +561,8 @@ test "a report round-trips" {
 
     try testing.expectEqual(report.session, back.session);
     try testing.expectEqual(report.cell, back.cell);
+    try testing.expectEqual(report.kit, back.kit);
+    try testing.expectEqual(report.equipped, back.equipped);
 }
 
 test "a report from another version is refused" {
@@ -454,6 +571,12 @@ test "a report from another version is refused" {
 
     try testing.expectError(Error.BadVersion, decodeReport(&bytes));
     try testing.expectError(Error.Truncated, decodeReport(bytes[0..4]));
+}
+
+test "a report cannot invent a fourth kit" {
+    var bytes = encodeReport(.{ .session = @enumFromInt(1), .cell = spatial.cellFromKey(1, 39) });
+    bytes[18] = 99;
+    try testing.expectError(Error.BadValue, decodeReport(&bytes));
 }
 
 test "SILENCE IS THE SAME SIZE AS A WAR" {
@@ -482,7 +605,7 @@ test "AN EMPTY FIELD AND A CELL BELOW QUORUM SAY EXACTLY THE SAME THING" {
     //
     // A player standing alone in a field. A player in a cell with two other people, below
     // quorum. A player in a crowded room whose fight has already ended. All three receive the
-    // same sixteen bytes, and there is no branch anywhere that could make them differ.
+    // the same fixed-size frame, and there is no branch anywhere that could make them differ.
     const tick: u64 = 4242;
     const hp: u16 = 87;
 
@@ -509,12 +632,30 @@ test "a response round-trips, fighting or quiet" {
         .level = 3,
         .momentum = .humans_edge,
         .crowd = .dozens,
+        .kit = .raider,
+        .reward = .weapon_parts,
+        .salvage = 12,
+        .equipped = .{ .weapon = .nail_driver, .armor = .riot_vest, .utility = .trauma_pack },
+        .item = @intFromEnum(loadout.ItemId.bloodless_sample_tube),
+        .discovered = true,
+        .owned = loadout.starter_owned | loadout.bit(.nail_driver) | loadout.bit(.riot_vest) |
+            loadout.bit(.trauma_pack) | loadout.bit(.bloodless_sample_tube),
+        .capacity = 8,
+        .source = .players,
     };
 
     const back = try decodeResponse(&encodeResponse(fighting));
     try testing.expectEqual(fighting.hp, back.hp);
     try testing.expectEqual(fighting.momentum, back.momentum);
     try testing.expectEqual(fighting.crowd, back.crowd);
+    try testing.expectEqual(loadout.Kit.raider, back.kit);
+    try testing.expectEqual(loadout.Reward.weapon_parts, back.reward);
+    try testing.expectEqual(@as(u16, 12), back.salvage);
+    try testing.expectEqual(fighting.equipped, back.equipped);
+    try testing.expectEqual(fighting.item, back.item);
+    try testing.expect(back.discovered);
+    try testing.expectEqual(fighting.owned, back.owned);
+    try testing.expectEqual(encounter.Source.players, back.source);
 
     const nothing = try decodeResponse(&encodeResponse(quiet(7, 100, .{ .xp = 0, .level = 1 })));
     try testing.expectEqual(@as(u16, 0), nothing.damage);
@@ -562,8 +703,8 @@ test "a client reporting a finer cell than we asked for is coarsened, not truste
 
     const validated = validate(.{ .session = @enumFromInt(1), .cell = fine }, wanted).?;
 
-    try testing.expectEqual(wanted, spatial.precisionOf(validated));
-    try testing.expectEqual(spatial.coarsen(fine, 2), validated);
+    try testing.expectEqual(wanted, spatial.precisionOf(validated.cell));
+    try testing.expectEqual(spatial.coarsen(fine, 2), validated.cell);
 }
 
 test "a client reporting a coarser cell than we asked for is dropped at the shell" {
@@ -573,7 +714,7 @@ test "a client reporting a coarser cell than we asked for is dropped at the shel
     const coarse = spatial.cellFromKey(0xABC, 35);
 
     try testing.expectEqual(
-        @as(?CellId, null),
+        @as(?ValidatedReport, null),
         validate(.{ .session = @enumFromInt(1), .cell = coarse }, wanted),
     );
 }
@@ -581,7 +722,7 @@ test "a client reporting a coarser cell than we asked for is dropped at the shel
 test "a zeroed packet is not a place" {
     const wanted: u6 = 39;
     try testing.expectEqual(
-        @as(?CellId, null),
+        @as(?ValidatedReport, null),
         validate(.{ .session = @enumFromInt(1), .cell = @enumFromInt(0) }, wanted),
     );
 }
@@ -594,10 +735,9 @@ test "the only lie a modified phone can tell is a false cell" {
     // It cannot claim XP: there is no field for it.
     // It cannot claim loot, a kill, a level, or a capture: there are no fields for them.
     //
-    // The report is 18 bytes and every one of them is either a session it was given or a cell
-    // it claims. There is nothing else on the wire to forge.
-    try testing.expectEqual(@as(usize, 18), report_size);
-    try testing.expectEqual(@as(usize, 2), @typeInfo(Report).@"struct".fields.len);
+    // The additional bytes are bounded item identifiers; they cannot claim stats or an outcome.
+    try testing.expectEqual(@as(usize, 22), report_size);
+    try testing.expectEqual(@as(usize, 4), @typeInfo(Report).@"struct".fields.len);
 
     // And a false cell buys nothing: it is worth nothing without k real humans standing in it
     // (H2), and no exploit conjures strangers into a room.
@@ -620,7 +760,15 @@ test "an attacker-controlled byte is never cast into an enum" {
     bytes[21] = 77; // not a crowd
     try testing.expectError(Error.BadValue, decodeResponse(&bytes));
 
+    bytes[21] = 0;
+    bytes[23] = 99; // not a reward
+    try testing.expectError(Error.BadValue, decodeResponse(&bytes));
+
     // And every legal value still decodes.
     bytes[21] = 4;
+    bytes[23] = 3;
     _ = try decodeResponse(&bytes);
+
+    bytes[36] = 9; // not a source
+    try testing.expectError(Error.BadValue, decodeResponse(&bytes));
 }

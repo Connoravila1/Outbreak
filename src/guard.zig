@@ -184,30 +184,15 @@ const phone_file = "android.zig";
 /// That was true, and it was true by luck: nothing enforced it. Now the directory says it and the
 /// build means it -- a core file that reaches into `render/` does not compile.
 ///
-/// The renderer is also where the ONE sanctioned rendering dependency lives (stb_truetype, F1/F6).
-/// The quarantine is what bounds it: a dependency you can delete by deleting a directory is a
-/// dependency you can actually remove.
+/// The check is dormant while no renderer lives at that path -- the GLES renderer was removed with
+/// the move to DVUI -- and it re-arms the day anything returns there. The DVUI toolkit itself is
+/// quarantined the same way: a core file never imports it, and its boundary is bound here when it
+/// lands.
 const render_dir = "@import(\"render/";
-
-/// THE INTEGER UI CORE DOES NOT IMPORT SPUNKY.
-///
-/// `spunky/` is the interaction-feel module -- float, shell, pure. It animates presentation
-/// values (a drawer fraction, a scroll offset, the war-globe's spin) and hit-tests screen rects.
-/// It is legitimately imported by the shell (the frame loop, the renderer) when a screen is
-/// wired to it. It must NOT be imported by a CORE file.
-///
-/// The coordinate wall (B6) already bans a float TOKEN from a core file, but an inferred-type
-/// float slips past a textual scan: `const v = spunky.gesture.velocity(&ring);` puts no `f32` in
-/// the file yet pulls float motion into the pure integer core. So the import itself is what the
-/// build forbids -- the same shape as the renderer quarantine above, and the same lesson as the
-/// deterministic mixer that looked like a CSPRNG: bind the CATEGORY, not the token.
-///
-/// This was a boundary written only in prose (`src/spunky/spunky.zig`) until this guard bound it.
-const spunky_dir = "@import(\"spunky/";
 
 /// `root.zig` is the module manifest, not a unit of logic -- it re-exports everything so the test
 /// binary can reach it, and it imports the shell too. It is the one file permitted to name the
-/// renderer (and spunky), and it is named here rather than left as an unexplained hole.
+/// renderer, and it is named here rather than left as an unexplained hole.
 const render_importer_exempt = "root.zig";
 
 const Source = struct { name: []const u8, text: []const u8 };
@@ -221,6 +206,10 @@ const core = [_]Source{
     .{ .name = "world.zig", .text = @embedFile("world.zig") },
     .{ .name = "rand.zig", .text = @embedFile("rand.zig") },
     .{ .name = "combat.zig", .text = @embedFile("combat.zig") },
+    .{ .name = "encounter.zig", .text = @embedFile("encounter.zig") },
+    .{ .name = "loadout.zig", .text = @embedFile("loadout.zig") },
+    .{ .name = "playtest.zig", .text = @embedFile("playtest.zig") },
+    .{ .name = "ambient.zig", .text = @embedFile("ambient.zig") },
     .{ .name = "tick.zig", .text = @embedFile("tick.zig") },
     .{ .name = "integrity.zig", .text = @embedFile("integrity.zig") },
     .{ .name = "territory.zig", .text = @embedFile("territory.zig") },
@@ -231,6 +220,8 @@ const core = [_]Source{
     .{ .name = "session.zig", .text = @embedFile("session.zig") },
     .{ .name = "fuzz_test.zig", .text = @embedFile("fuzz_test.zig") },
     .{ .name = "accounts.zig", .text = @embedFile("accounts.zig") },
+    .{ .name = "account_journal.zig", .text = @embedFile("account_journal.zig") },
+    .{ .name = "server_state.zig", .text = @embedFile("server_state.zig") },
     .{ .name = "ui.zig", .text = @embedFile("ui.zig") },
     .{ .name = "gps.zig", .text = @embedFile("gps.zig") },
 };
@@ -254,28 +245,9 @@ const shell = [_]Source{
     // SHELL: it holds a coordinate. `outbreak_quantize` is the only function on EITHER side of
     // the network that accepts a latitude, and the float dies before it returns (B6).
     .{ .name = "ffi.zig", .text = @embedFile("ffi.zig") },
-    // SHELL: the Android host. It holds the NDK, EGL, threads, and the OS lifecycle -- every
-    // impure thing on the phone, in one file, so that nothing else on the phone is impure.
-    .{ .name = "android.zig", .text = @embedFile("android.zig") },
-    // SHELL, and PURE ANYWAY -- the one classification in this list that needs a sentence.
-    //
-    // `quads.zig` turns a draw list into triangles. It has no I/O and no clock, so by B2 it could
-    // be core. It is shell because it speaks the GPU's vocabulary, and that vocabulary is floats:
-    // the coordinate wall forbids a float in a core file, bluntly and textually, and it is not to
-    // be weakened because THESE floats happen to be screen pixels rather than latitudes. The
-    // guard does not read intent. Obey the stricter reading.
-    //
-    // Being pure regardless is the point, not a loophole: the whole transform is tested on a
-    // laptop, and only `gles.zig` needs a GPU.
-    .{ .name = "render/quads.zig", .text = @embedFile("render/quads.zig") },
-    // SHELL: the GLES2 backend. Shaders, a vertex buffer, and one draw call. This is the whole of
-    // what needs a GPU to run, which is why it is the whole of what cannot be tested without one.
-    .{ .name = "render/gles.zig", .text = @embedFile("render/gles.zig") },
-    // SHELL: the glyph engine. The one file that knows what a font is, and the only one that
-    // reaches for the second sanctioned dependency (F1, F6 -- justified in vendor/stb_impl.c).
-    .{ .name = "render/text.zig", .text = @embedFile("render/text.zig") },
-    // SHELL: the glyph atlas. Pure, and tested without a GPU -- it makes a byte array, not pixels.
-    .{ .name = "render/atlas.zig", .text = @embedFile("render/atlas.zig") },
+    // Removed with the move to DVUI, and registered here again if they ever return: the GLES
+    // renderer (render/), the interaction-feel module (spunky/), the portable UI runtime (rover/),
+    // and the NativeActivity host (android.zig -- `phone_file` above re-arms on that name).
     // SHELL, AND THE HIGHEST-STAKES FILE IN THE CLIENT. The coordinate dies here, in one function,
     // in one expression. The phone is the only place in the system where a latitude ever exists,
     // and this is that place in its entirety.
@@ -291,18 +263,6 @@ const shell = [_]Source{
     // it is shell -- but it holds no coordinate (it works in counters, not places), and the guard
     // pins the f64 out of it just the same.
     .{ .name = "governor.zig", .text = @embedFile("governor.zig") },
-    // SHELL: spunky, the interaction-feel module (spring physics, gesture feel, hit testing).
-    // Vendored by copy from our own side-project; first-party, so not an F1 dependency. It is
-    // SHELL for the same reason quads.zig is: it speaks in floats (spring positions, scroll
-    // offsets, screen-pixel rects), and the coordinate wall keeps floats out of core textually,
-    // pixels or not. Pure regardless -- dt and timestamps are parameters, no clock/RNG/I/O -- so
-    // it is fully tested on a laptop. It holds NO f64 (all f32), sees no CellId, and is inert with
-    // respect to Section I. It is not imported by ui.zig (the integer UI core); see the boundary
-    // note in src/spunky/spunky.zig. Unwired today, adopted ahead of the war-globe/menu work.
-    .{ .name = "spunky/spunky.zig", .text = @embedFile("spunky/spunky.zig") },
-    .{ .name = "spunky/spring.zig", .text = @embedFile("spunky/spring.zig") },
-    .{ .name = "spunky/gesture.zig", .text = @embedFile("spunky/gesture.zig") },
-    .{ .name = "spunky/hit.zig", .text = @embedFile("spunky/hit.zig") },
 };
 
 /// ============================================================================
@@ -495,15 +455,6 @@ comptime {
                         "to by it. If the renderer vanished tomorrow, only the renderer should " ++
                         "fail to compile. It is also where the one sanctioned rendering dependency " ++
                         "lives, and the quarantine is what makes that dependency removable at all.");
-                }
-                if (startsWith(src.text[j..], spunky_dir)) {
-                    @compileError("SPUNKY IN CORE: " ++ src.name ++ " imports spunky, and it is " ++
-                        "CORE. Spunky is float, shell interaction-feel -- springs, gesture " ++
-                        "momentum, screen-rect hit testing. It belongs to the shell (the frame " ++
-                        "loop, the renderer), never the pure integer core. The coordinate wall " ++
-                        "catches a float TOKEN in a core file; an inferred-type float from spunky " ++
-                        "would not carry one, so the import itself is what fails here. Animate view " ++
-                        "state in the shell and hand the core plain integer results.");
                 }
             }
         }

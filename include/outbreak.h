@@ -134,13 +134,16 @@ outbreak_status outbreak_decode_welcome(
 /*
  * THE ENTIRE OUTBOUND VOCABULARY OF THE PHONE, AFTER THE HANDSHAKE.
  *
- * A session the server gave you, and a room you claim to be in. There is no
- * third argument. There will never be a third argument — adding a field to the
- * client's message fails the build on purpose.
+ * A session, a room, and bounded equipment intent. The server remains authoritative
+ * over combat, rewards, progression, and whether the selection is currently legal.
  */
 outbreak_status outbreak_encode_report(
     uint64_t session,
     uint64_t cell,
+    uint8_t kit,
+    uint8_t weapon,
+    uint8_t armor,
+    uint8_t utility,
     uint8_t *out,
     int out_len);
 
@@ -165,6 +168,18 @@ typedef struct {
     /* 0 a few | 1 dozens | 2 scores | 3 hundreds | 4 thousands
      * A BAND, never a number. It does not move during a fight. */
     uint8_t crowd;
+    /* 0 field | 1 raider | 2 bulwark */
+    uint8_t kit;
+    /* 0 none | 1 weapon parts | 2 armor parts | 3 field supplies */
+    uint8_t reward;
+    uint16_t salvage;
+    uint32_t owned;    /* bitset of the 24 authored discoveries */
+    uint8_t weapon;    /* equipped catalogue id */
+    uint8_t armor;     /* equipped catalogue id */
+    uint8_t utility;   /* equipped catalogue id */
+    uint8_t item;      /* latest drop id, 255 when none */
+    uint8_t discovered;/* 1 new discovery, 0 duplicate/no item */
+    uint8_t capacity;  /* equipment discoveries available */
 } outbreak_tell;
 
 /*

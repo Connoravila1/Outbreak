@@ -102,6 +102,13 @@ pub const Accounts = struct {
     };
 };
 
+/// Stable account material suitable for a durable snapshot. It contains only a keyed contact
+/// fingerprint and password-verification material—never the contact point or password itself.
+pub const Stored = struct {
+    contact: ContactHash,
+    account: Account,
+};
+
 pub fn deinit(accounts: *Accounts, gpa: Allocator) void {
     accounts.by_contact.deinit(gpa);
     accounts.creations.deinit(gpa);
@@ -165,6 +172,54 @@ pub fn beginLogin(
 /// CORE. A successful login clears the attempt counter for that account.
 pub fn loginSucceeded(accounts: *Accounts, contact: ContactHash) void {
     _ = accounts.logins.remove(contact);
+}
+
+pub fn storedSorted(accounts: *const Accounts, gpa: Allocator) Allocator.Error![]Stored {
+    const entries = try gpa.alloc(Stored, accounts.by_contact.count());
+    var i: usize = 0;
+    var it = accounts.by_contact.iterator();
+    while (it.next()) |entry| : (i += 1) entries[i] = .{
+        .contact = entry.key_ptr.*,
+        .account = entry.value_ptr.*,
+    };
+    const Sort = struct {
+        fn lessThan(_: void, a: Stored, b: Stored) bool {
+            return std.mem.order(u8, &a.contact, &b.contact) == .lt;
+        }
+    };
+    std.mem.sort(Stored, entries, {}, Sort.lessThan);
+    return entries;
+}
+
+pub const RestoreError = Allocator.Error || error{BadValue};
+
+/// Rebuild the durable account index. Login/creation rate counters intentionally start empty;
+/// they are short-lived abuse controls, not player progress.
+pub fn restore(gpa: Allocator, entries: []const Stored, next_player: u32) RestoreError!Accounts {
+    var accounts: Accounts = .empty;
+    errdefer deinit(&accounts, gpa);
+    try accounts.by_contact.ensureTotalCapacity(gpa, @intCast(entries.len));
+
+    var players: std.AutoHashMapUnmanaged(PlayerId, void) = .empty;
+    defer players.deinit(gpa);
+    try players.ensureTotalCapacity(gpa, @intCast(entries.len));
+
+    var highest: u32 = 0;
+    for (entries) |entry| {
+        const id = @intFromEnum(entry.account.player);
+        if (id == 0 or accounts.by_contact.contains(entry.contact) or players.contains(entry.account.player))
+            return error.BadValue;
+        accounts.by_contact.putAssumeCapacity(entry.contact, entry.account);
+        players.putAssumeCapacity(entry.account.player, {});
+        highest = @max(highest, id);
+    }
+    if (next_player == 0 or next_player <= highest) return error.BadValue;
+    accounts.next_player = next_player;
+    return accounts;
+}
+
+pub fn nextPlayer(accounts: *const Accounts) u32 {
+    return accounts.next_player;
 }
 
 /// Has this key exceeded its budget for the current window?

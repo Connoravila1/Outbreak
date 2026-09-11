@@ -39,6 +39,9 @@ pub const Summary = struct {
 pub fn replay(gpa: Allocator, bytes: []const u8, rules: combat.Rules) Error!struct {
     world: World,
     summary: Summary,
+    next_tick: u64,
+    seed: u64,
+    precision: u6,
 } {
     const opened = try journal.open(bytes);
 
@@ -47,6 +50,7 @@ pub fn replay(gpa: Allocator, bytes: []const u8, rules: combat.Rules) Error!stru
 
     var summary: Summary = .{};
     var have_roster = false;
+    var next_tick: u64 = 0;
 
     var cursor = opened.cursor;
     while (try journal.next(&cursor)) |record| switch (record) {
@@ -71,6 +75,7 @@ pub fn replay(gpa: Allocator, bytes: []const u8, rules: combat.Rules) Error!stru
                 });
             }
             have_roster = true;
+            next_tick = roster.index;
         },
 
         .progress => |pr| {
@@ -79,7 +84,7 @@ pub fn replay(gpa: Allocator, bytes: []const u8, rules: combat.Rules) Error!stru
             // players actually keep.
             var i: usize = 0;
             while (i < pr.count) : (i += 1) {
-                const entry = journal.progressEntry(pr.payload, i);
+                const entry = try journal.progressEntry(pr.payload, i);
                 try world.progress.put(gpa, entry.player, entry.progress);
             }
         },
@@ -104,6 +109,7 @@ pub fn replay(gpa: Allocator, bytes: []const u8, rules: combat.Rules) Error!stru
             defer gpa.free(result.tells);
 
             summary.ticks += 1;
+            next_tick = t.index +| 1;
             summary.tells += result.tells.len;
             for (result.tells) |tell| {
                 summary.checksum = summary.checksum *% 31 +%
@@ -117,7 +123,13 @@ pub fn replay(gpa: Allocator, bytes: []const u8, rules: combat.Rules) Error!stru
         },
     };
 
-    return .{ .world = world, .summary = summary };
+    return .{
+        .world = world,
+        .summary = summary,
+        .next_tick = next_tick,
+        .seed = opened.header.seed,
+        .precision = opened.header.precision,
+    };
 }
 
 /// Move everyone to where the journal says they were.

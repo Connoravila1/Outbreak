@@ -3,23 +3,24 @@
 //! ============================================================================
 //! WHAT CROSSES THIS WIRE, AND WHAT DOES NOT
 //!
-//! Up:   a session token and a `u64` room id. NOTHING ELSE. Not a coordinate -- the coordinate
+//! Up:   a session token, a `u64` room id, and bounded kit intent. Not a coordinate -- the coordinate
 //!       died in `location.zig` long before this file sees a thing (H1, B6). The client is
-//!       authoritative over nothing; the only lie a modified phone can tell is a false room.
+//!       authoritative over no outcome; the server owns kit stats and whether a change is legal.
 //!
 //! Down: a fixed-size response -- your own hit points, the crowd BAND, the momentum. Never a count,
 //!       never a bearing, never a who. The response was built to be safe on the server; this file
 //!       only reads it.
 //!
 //! ============================================================================
-//! DEV CREDENTIALS, AND WHY THEY ARE HERE
+//! INSTALL IDENTITY
 //!
-//! There is no text entry yet (O5 is unsolved: register in a browser, sign in with a device code).
-//! So this file logs in with a fixed development credential, and if that account does not exist
-//! yet, registers it. It is scaffolding, it is obviously scaffolding, and O5 replaces it wholesale.
-//! It exists so the socket can be proven end to end before the registration flow is designed.
+//! There is no identifying login surface in the MVP. Each installation instead creates 64 random
+//! bytes in Android's private app directory: half becomes an opaque account key, half a password.
+//! Both cross only inside TLS and the server stores neither plaintext. Separate phones therefore
+//! become separate players without collecting an email, phone number, hardware id, or name.
 
 const std = @import("std");
+const loadout = @import("loadout.zig");
 const protocol = @import("protocol.zig");
 const location = @import("location.zig");
 const world = @import("world.zig");
@@ -48,6 +49,20 @@ var should_run: std.atomic.Value(bool) = .init(false);
 /// one the client sent), so the render thread reconciles the local cache against this. It is the
 /// player's OWN side and nothing about anyone else (I1-I3).
 var server_faction: std.atomic.Value(i32) = .init(-1);
+var selected_kit: std.atomic.Value(u8) = .init(@intFromEnum(loadout.Kit.field));
+var selected_weapon: std.atomic.Value(u8) = .init(@intFromEnum(loadout.ItemId.salvaged_pipe));
+var selected_armor: std.atomic.Value(u8) = .init(@intFromEnum(loadout.ItemId.work_jacket));
+var selected_utility: std.atomic.Value(u8) = .init(@intFromEnum(loadout.ItemId.field_radio));
+
+pub const identity_size = 64;
+var install_identity: [identity_size]u8 = undefined;
+var identity_ready: std.atomic.Value(bool) = .init(false);
+
+/// Set exactly once at process start, before the client thread exists.
+pub fn setInstallIdentity(identity: [identity_size]u8) void {
+    install_identity = identity;
+    identity_ready.store(true, .release);
+}
 
 /// The side the server says you are, or null if no welcome has arrived this run. The render thread
 /// folds this into the UI and persists any correction (android.zig).
@@ -57,6 +72,42 @@ pub fn authoritativeFaction() ?Faction {
         1 => .zombie,
         else => null,
     };
+}
+
+/// The UI may choose a kit; the server confirms or rejects it on the next heartbeat.
+pub fn selectKit(kit: loadout.Kit) void {
+    selected_kit.store(@intFromEnum(kit), .release);
+}
+
+pub fn selectedKit() loadout.Kit {
+    return switch (selected_kit.load(.acquire)) {
+        1 => .raider,
+        2 => .bulwark,
+        else => .field,
+    };
+}
+
+pub fn selectedEquipment() loadout.Loadout {
+    return .{
+        .weapon = loadout.itemFromByte(selected_weapon.load(.acquire)) orelse .salvaged_pipe,
+        .armor = loadout.itemFromByte(selected_armor.load(.acquire)) orelse .work_jacket,
+        .utility = loadout.itemFromByte(selected_utility.load(.acquire)) orelse .field_radio,
+    };
+}
+
+pub fn equipItem(item: loadout.ItemId) void {
+    switch (loadout.definition(item).slot) {
+        .weapon => selected_weapon.store(@intFromEnum(item), .release),
+        .armor => selected_armor.store(@intFromEnum(item), .release),
+        .utility => selected_utility.store(@intFromEnum(item), .release),
+        .evidence => {},
+    }
+}
+
+fn selectEquipment(equipped: loadout.Loadout) void {
+    selected_weapon.store(@intFromEnum(equipped.weapon), .release);
+    selected_armor.store(@intFromEnum(equipped.armor), .release);
+    selected_utility.store(@intFromEnum(equipped.utility), .release);
 }
 
 /// Take the latest response, if there is one. Returns null if nothing new has arrived.
@@ -92,6 +143,7 @@ pub fn stop() void {
 /// for an ambient game is ordinary: the world resolves whether or not any one phone is listening,
 /// and the next attempt reconnects.
 pub fn run(gpa: std.mem.Allocator, faction: Faction, radio: *location.Radio) void {
+    if (!identity_ready.load(.acquire)) return;
     should_run.store(true, .release);
 
     var threaded: Io.Threaded = .init(gpa, .{});
@@ -153,6 +205,8 @@ fn session(io: Io, faction: Faction, radio: *location.Radio) !void {
         const report = protocol.encodeReport(.{
             .session = my,
             .cell = @enumFromInt(room),
+            .kit = selectedKit(),
+            .equipped = selectedEquipment(),
         });
         try writer.interface.writeAll(&report);
         try writer.interface.flush();
@@ -162,6 +216,8 @@ fn session(io: Io, faction: Faction, radio: *location.Radio) !void {
         try reader.interface.readSliceAll(&response_bytes);
         const response = protocol.decodeResponse(&response_bytes) catch continue;
 
+        selectKit(response.kit);
+        selectEquipment(response.equipped);
         latest = response;
         have_response.store(true, .release);
 
@@ -192,7 +248,7 @@ fn welcomeFrom(
     write_buffer: []u8,
 ) !?protocol.SessionId {
     var writer = stream.writer(io, write_buffer);
-    const hello = protocol.encodeHello(devHello(faction, intent));
+    const hello = protocol.encodeHello(installHello(faction, intent));
     try writer.interface.writeAll(&hello);
     try writer.interface.flush();
 
@@ -211,19 +267,26 @@ fn welcomeFrom(
     return welcome.session;
 }
 
-/// THE DEV CREDENTIAL. Replaced wholesale by O5. See the file header.
-///
-/// A fixed contact and password so the socket can be exercised without a registration UI. The
-/// password clears the server's floor (>= 8). It is not a secret and is not pretending to be one.
-fn devHello(faction: Faction, intent: protocol.Hello.Intent) protocol.Hello {
-    var contact: [64]u8 = @splat(0);
-    var password: [64]u8 = @splat(0);
-    @memcpy(contact[0.."dev@outbreak.local".len], "dev@outbreak.local");
-    @memcpy(password[0.."dev-password-0001".len], "dev-password-0001");
+fn installHello(faction: Faction, intent: protocol.Hello.Intent) protocol.Hello {
+    const contact = std.fmt.bytesToHex(install_identity[0..32].*, .lower);
+    const password = std.fmt.bytesToHex(install_identity[32..64].*, .lower);
     return .{
         .contact = contact,
         .password = password,
         .faction = faction,
         .intent = intent,
     };
+}
+
+test "separate installations present separate opaque accounts" {
+    const first: [identity_size]u8 = @splat(1);
+    const second: [identity_size]u8 = @splat(2);
+    setInstallIdentity(first);
+    const a = installHello(.human, .register);
+    setInstallIdentity(second);
+    const b = installHello(.human, .register);
+    try std.testing.expect(!std.mem.eql(u8, &a.contact, &b.contact));
+    try std.testing.expect(!std.mem.eql(u8, &a.password, &b.password));
+    try std.testing.expectEqual(@as(usize, 64), protocol.unpad(&a.contact).len);
+    try std.testing.expectEqual(@as(usize, 64), protocol.unpad(&a.password).len);
 }

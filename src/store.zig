@@ -20,9 +20,24 @@ const Io = std.Io;
 /// why `prune` exists in the first version of the journal.
 pub const max_journal_bytes: Io.Limit = .limited(1 << 30);
 
-/// SHELL. Write a journal to disk, replacing whatever was there.
+/// SHELL. Write bytes atomically, replacing whatever was there.
+///
+/// The old implementation truncated the destination before writing. A process kill or power loss
+/// in that interval turned the only good state into a corrupt partial file. This writes a private
+/// temporary file, flushes it, and atomically renames it over the destination.
 pub fn save(io: Io, path: []const u8, bytes: []const u8) !void {
-    try Dir.cwd().writeFile(io, .{ .sub_path = path, .data = bytes });
+    var atomic = try Dir.cwd().createFileAtomic(io, path, .{
+        .permissions = .fromMode(0o600),
+        .replace = true,
+    });
+    defer atomic.deinit(io);
+
+    var buffer: [4096]u8 = undefined;
+    var writer = atomic.file.writer(io, &buffer);
+    try writer.interface.writeAll(bytes);
+    try writer.interface.flush();
+    try atomic.file.sync(io);
+    try atomic.replace(io);
 }
 
 /// SHELL. Read a journal back. The caller owns the bytes (C1, C5).

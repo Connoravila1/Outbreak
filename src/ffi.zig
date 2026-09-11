@@ -47,6 +47,7 @@
 //! the error IS the return value.
 
 const std = @import("std");
+const loadout = @import("loadout.zig");
 const protocol = @import("protocol.zig");
 const spatial = @import("spatial.zig");
 
@@ -167,15 +168,34 @@ export fn outbreak_decode_welcome(
 
 /// THE ENTIRE OUTBOUND VOCABULARY OF THE PHONE, AFTER THE HANDSHAKE.
 ///
-/// A session it was given, and a room it claims. There is no third argument, and there never
-/// will be -- adding a field to the client's message fails the build (H1, protocol.zig).
-export fn outbreak_encode_report(session: u64, cell: u64, out: [*]u8, out_len: c_int) Status {
+/// Identity and location plus bounded equipment intent. The server still authors every outcome.
+export fn outbreak_encode_report(
+    session: u64,
+    cell: u64,
+    kit: u8,
+    weapon: u8,
+    armor: u8,
+    utility: u8,
+    out: [*]u8,
+    out_len: c_int,
+) Status {
     if (out_len != protocol.report_size) return .bad_buffer;
     if (cell == 0) return .bad_coordinate; // nowhere is not somewhere
+    if (kit > 2) return .bad_value;
+    const equipped: loadout.Loadout = .{
+        .weapon = loadout.itemFromByte(weapon) orelse return .bad_value,
+        .armor = loadout.itemFromByte(armor) orelse return .bad_value,
+        .utility = loadout.itemFromByte(utility) orelse return .bad_value,
+    };
+    if (loadout.definition(equipped.weapon).slot != .weapon or
+        loadout.definition(equipped.armor).slot != .armor or
+        loadout.definition(equipped.utility).slot != .utility) return .bad_value;
 
     const bytes = protocol.encodeReport(.{
         .session = @enumFromInt(session),
         .cell = @enumFromInt(cell),
+        .kit = switch (kit) { 1 => .raider, 2 => .bulwark, else => .field },
+        .equipped = equipped,
     });
     @memcpy(out[0..protocol.report_size], &bytes);
     return .ok;
@@ -194,6 +214,16 @@ pub const Tell = extern struct {
     momentum: u8,
     /// 0 a_few, 1 dozens, 2 scores, 3 hundreds, 4 thousands.
     crowd: u8,
+    kit: u8,
+    reward: u8,
+    salvage: u16,
+    owned: u32,
+    weapon: u8,
+    armor: u8,
+    utility: u8,
+    item: u8,
+    discovered: u8,
+    capacity: u8,
 };
 
 /// Take bytes off the wire and read what we were told.
@@ -221,6 +251,16 @@ export fn outbreak_decode_tell(bytes: [*]const u8, len: c_int, out: *Tell) Statu
         .level = response.level,
         .momentum = @intFromEnum(response.momentum),
         .crowd = @intFromEnum(response.crowd),
+        .kit = @intFromEnum(response.kit),
+        .reward = @intFromEnum(response.reward),
+        .salvage = response.salvage,
+        .owned = response.owned,
+        .weapon = @intFromEnum(response.equipped.weapon),
+        .armor = @intFromEnum(response.equipped.armor),
+        .utility = @intFromEnum(response.equipped.utility),
+        .item = response.item,
+        .discovered = @intFromBool(response.discovered),
+        .capacity = response.capacity,
     };
     return .ok;
 }
@@ -263,20 +303,22 @@ test "a hostile server cannot crash the phone" {
     try testing.expect(status == .bad_value or status == .bad_version);
 }
 
-test "a report is a session and a room, and there is no third argument" {
+test "a report carries bounded equipment intent, never an outcome" {
     var out: [protocol.report_size]u8 = undefined;
 
     const cell = outbreak_quantize(51.5, -0.12, spatial.default_precision);
-    try testing.expectEqual(Status.ok, outbreak_encode_report(0xABCD, cell, &out, protocol.report_size));
+    try testing.expectEqual(Status.ok, outbreak_encode_report(0xABCD, cell, 1, 2, 6, 13, &out, protocol.report_size));
 
     // Nowhere is not somewhere: a phone with no fix does not claim a room.
     try testing.expectEqual(
         Status.bad_coordinate,
-        outbreak_encode_report(0xABCD, 0, &out, protocol.report_size),
+        outbreak_encode_report(0xABCD, 0, 0, 0, 6, 12, &out, protocol.report_size),
     );
 
     // And a caller who lies about the buffer size gets an error, not a smashed stack.
-    try testing.expectEqual(Status.bad_buffer, outbreak_encode_report(0xABCD, cell, &out, 4));
+    try testing.expectEqual(Status.bad_buffer, outbreak_encode_report(0xABCD, cell, 0, 0, 6, 12, &out, 4));
+    try testing.expectEqual(Status.bad_value, outbreak_encode_report(0xABCD, cell, 9, 0, 6, 12, &out, protocol.report_size));
+    try testing.expectEqual(Status.bad_value, outbreak_encode_report(0xABCD, cell, 0, 6, 6, 12, &out, protocol.report_size));
 }
 
 test "an over-long contact point is refused, not written past the end of the frame" {
@@ -309,7 +351,7 @@ test "the round trip: quantize, encode, decode" {
     try testing.expect(cell != 0);
 
     var report: [protocol.report_size]u8 = undefined;
-    try testing.expectEqual(Status.ok, outbreak_encode_report(1234, cell, &report, protocol.report_size));
+    try testing.expectEqual(Status.ok, outbreak_encode_report(1234, cell, 2, 0, 6, 12, &report, protocol.report_size));
 
     // The server would reply with something like this.
     const wire = protocol.encodeResponse(.{

@@ -23,6 +23,7 @@
 //! This module allocates nothing. The caller provides the output buffer (C1, C2).
 
 const std = @import("std");
+const loadout = @import("loadout.zig");
 const rand = @import("rand.zig");
 const spatial = @import("spatial.zig");
 const world = @import("world.zig");
@@ -279,36 +280,94 @@ pub fn resolve(
     rules: Rules,
     out: []Outcome,
 ) Momentum {
+    return resolveConfigured(players, factions, hps, null, cell, seed, tick_index, rules, out);
+}
+
+/// CORE. Resolve using the server-authoritative kit aligned with each player. The compatibility
+/// wrapper above keeps simulations and old tests on the neutral field kit; the real tick calls
+/// this function.
+pub fn resolveEquipped(
+    players: []const PlayerId,
+    factions: []const Faction,
+    hps: []const u16,
+    equipped: []const loadout.Loadout,
+    cell: CellId,
+    seed: u64,
+    tick_index: u64,
+    rules: Rules,
+    out: []Outcome,
+) Momentum {
+    assert(equipped.len == players.len);
+    return resolveConfigured(players, factions, hps, equipped, cell, seed, tick_index, rules, out);
+}
+
+fn resolveConfigured(
+    players: []const PlayerId,
+    factions: []const Faction,
+    hps: []const u16,
+    equipped: ?[]const loadout.Loadout,
+    cell: CellId,
+    seed: u64,
+    tick_index: u64,
+    rules: Rules,
+    out: []Outcome,
+) Momentum {
     assert(players.len == factions.len);
     assert(players.len == hps.len);
     assert(out.len == players.len);
 
     var humans: u32 = 0;
     var zombies: u32 = 0;
-    for (factions) |faction| switch (faction) {
-        .human => humans += 1,
-        .zombie => zombies += 1,
-    };
+    var human_attack: u32 = 0;
+    var zombie_attack: u32 = 0;
+    for (factions, 0..) |faction, i| {
+        const authored = if (equipped) |sets| loadout.equippedStats(sets[i]).attack else loadout.stats(.field).attack;
+        const base: u32 = rules.damage_per_hostile;
+        const geared: u32 = if (authored >= 6) base + (authored - 6) else base -| (6 - authored);
+        const power: u32 = geared + (if (equipped != null and faction == .zombie and geared > 0) @as(u8, 1) else 0);
+        switch (faction) {
+            .human => {
+                humans += 1;
+                human_attack += power;
+            },
+            .zombie => {
+                zombies += 1;
+                zombie_attack += power;
+            },
+        }
+    }
 
     const cell_entropy = spatial.hash(cell);
 
     var damage_to_humans: u64 = 0;
     var damage_to_zombies: u64 = 0;
 
-    for (players, factions, hps, out) |player, faction, hp, *outcome| {
+    for (players, factions, hps, out, 0..) |player, faction, hp, *outcome, i| {
         const hostiles: u32 = switch (faction) {
             .human => zombies,
             .zombie => humans,
         };
 
+        const kit_stats = if (equipped) |sets| loadout.equippedStats(sets[i]) else loadout.stats(.field);
+
         // The draw depends on who you are, not where you sit in the array.
         const roll = rand.draw(&.{ seed, tick_index, cell_entropy, @intFromEnum(player) });
         const jitter: u16 = if (rules.jitter == 0) 0 else @intCast(roll % rules.jitter);
 
-        const raw: u32 = if (hostiles == 0)
-            0
+        const hostile_power: u32 = switch (faction) {
+            .human => zombie_attack,
+            .zombie => human_attack,
+        };
+        // Humans get the defensive half of their faction identity; Zombies received the attack
+        // point while aggregate power was built above. Initiative is a small deterministic evade,
+        // never a real-world movement modifier.
+        const defense: u32 = if (equipped != null)
+            kit_stats.defense + (if (faction == .human) @as(u8, 1) else 0)
         else
-            @as(u32, rules.damage_per_hostile) * hostiles + jitter;
+            0;
+        const initiative_save: u32 = if (equipped != null and hostiles > 0 and roll % 10 < kit_stats.initiative) 1 else 0;
+        const raw: u32 = if (hostiles == 0) 0 else
+            hostile_power + jitter -| defense -| initiative_save;
 
         // Saturate at the presence's remaining hp: a downed player is at zero, never
         // below it, and damage never wraps.
@@ -402,6 +461,25 @@ test "hostiles sharing a cell do damage" {
     try testing.expect(out[0].damage > out[1].damage);
     try testing.expect(out[0].damage > 0);
     try testing.expect(out[1].damage > 0);
+}
+
+test "starter kits materially change the next encounter" {
+    const r = runOf(3, .{ .human, .zombie, .zombie }, .{ 100, 100, 100 });
+    const cell = spatial.cellFromKey(1, 39);
+    const rules: Rules = .{ .jitter = 0 };
+    const neutral = [_]loadout.Loadout{ loadout.preset(.field), loadout.preset(.field), loadout.preset(.field) };
+    const armored = [_]loadout.Loadout{ loadout.preset(.bulwark), loadout.preset(.field), loadout.preset(.field) };
+    const aggressive = [_]loadout.Loadout{ loadout.preset(.raider), loadout.preset(.field), loadout.preset(.field) };
+    var baseline: [3]Outcome = undefined;
+    var defended: [3]Outcome = undefined;
+    var attacking: [3]Outcome = undefined;
+
+    _ = resolveEquipped(&r.players, &r.factions, &r.hps, &neutral, cell, 42, 1, rules, &baseline);
+    _ = resolveEquipped(&r.players, &r.factions, &r.hps, &armored, cell, 42, 1, rules, &defended);
+    _ = resolveEquipped(&r.players, &r.factions, &r.hps, &aggressive, cell, 42, 1, rules, &attacking);
+
+    try std.testing.expect(defended[0].damage < baseline[0].damage);
+    try std.testing.expect(attacking[1].damage > baseline[1].damage);
 }
 
 test "resolution is identical under any ordering of the run" {

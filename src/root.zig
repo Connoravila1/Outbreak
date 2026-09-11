@@ -1,7 +1,7 @@
 //! Outbreak — module root.
 //!
-//! Phase 0: the whole game runs as a test suite. There is no executable, no server, no
-//! network, and no map. `zig build test` is the entire product.
+//! The authoritative game core and its narrow platform shells. Product direction lives in
+//! VISION.md, MVP.md, and CURRENT.md; historical phase documents do not override them.
 
 /// Spatial quantization: the cell, the coarsening rule, and k (D1).
 pub const spatial = @import("spatial.zig");
@@ -11,6 +11,8 @@ pub const world = @import("world.zig");
 
 /// Combat and progression rules: tuned forever, so sealed behind one boundary (D1).
 pub const combat = @import("combat.zig");
+pub const loadout = @import("loadout.zig");
+pub const playtest = @import("playtest.zig");
 
 /// Deterministic mixing. Pinned by us, so a replay never drifts (B8).
 pub const rand = @import("rand.zig");
@@ -29,6 +31,8 @@ pub const city = @import("city.zig");
 
 /// The journal: what the world writes down (CellId only), and when it deletes it (I7).
 pub const journal = @import("journal.zig");
+pub const ambient = @import("ambient.zig");
+pub const encounter = @import("encounter.zig");
 
 /// Replay: rebuild a world from its journal and assert it is the same world (1.4, B8).
 pub const replay = @import("replay.zig");
@@ -36,7 +40,7 @@ pub const replay = @import("replay.zig");
 /// The disk. Four functions, and it does not know what a record is (1.2).
 pub const store = @import("store.zig");
 
-/// The wire protocol: a session and a cell in, sixteen constant bytes out (2.1, H1, I3).
+/// The wire protocol: identity, room, bounded kit intent; constant authoritative replies.
 pub const protocol = @import("protocol.zig");
 
 /// Sessions: the whole server, minus the socket (2.4, E5).
@@ -47,6 +51,8 @@ pub const entropy = @import("entropy.zig");
 
 /// Accounts: one contact point, one account; rate limits at the farm's front door (H5).
 pub const accounts = @import("accounts.zig");
+pub const account_journal = @import("account_journal.zig");
+pub const server_state = @import("server_state.zig");
 
 /// SHELL. Passwords and contact fingerprints. The only file that touches crypto.
 pub const credential = @import("credential.zig");
@@ -63,14 +69,6 @@ pub const ui = @import("ui.zig");
 /// When to turn the GPS on. Battery is a hard constraint, not an optimization (3.3, G5).
 pub const gps = @import("gps.zig");
 
-/// SHELL, and pure anyway: the draw list, turned into triangles. Tested with no phone (M.2).
-///
-/// `gles.zig` -- the GL calls themselves -- is deliberately NOT here. It is reachable only from
-/// `android.zig`, because its `extern fn`s are resolved by the APK's linker and there is no
-/// libGLESv2 on a laptop. Everything about the renderer that can be tested without a GPU was put
-/// in `quads.zig` precisely so that this line could exist.
-pub const quads = @import("render/quads.zig");
-
 /// SHELL. THE COORDINATE DIES HERE. The phone is the only place in the system where a latitude
 /// ever exists, and this is that place (M.5, B6).
 pub const location = @import("location.zig");
@@ -80,12 +78,6 @@ pub const client = @import("client.zig");
 
 /// SHELL. Governs the GPS radio by the pure policy in `gps.zig`.
 pub const governor = @import("governor.zig");
-
-/// SHELL. Interaction feel — spring physics, gesture momentum, hit testing (spunky). Vendored
-/// from our own side-project by copy; first-party, so not an F1 dependency. Float and pure,
-/// tested without a screen. Never sees a `CellId`; not imported by `ui.zig`. Unwired today,
-/// adopted ahead of the war-globe/menu work. See the boundary note in `spunky/spunky.zig`.
-pub const spunky = @import("spunky/spunky.zig");
 
 comptime {
     // The forbidden-construct guard runs at compile time, so a distance function or a
@@ -101,12 +93,16 @@ test {
     _ = @import("spatial/geohash_vectors_test.zig");
     _ = @import("world.zig");
     _ = @import("combat.zig");
+    _ = @import("loadout.zig");
+    _ = @import("playtest.zig");
     _ = @import("rand.zig");
     _ = @import("tick.zig");
     _ = @import("integrity.zig");
     _ = @import("territory.zig");
     _ = @import("city.zig");
     _ = @import("journal.zig");
+    _ = @import("ambient.zig");
+    _ = @import("encounter.zig");
     _ = @import("replay.zig");
     _ = @import("store.zig");
     _ = @import("protocol.zig");
@@ -120,10 +116,7 @@ test {
     _ = @import("ffi.zig");
     _ = @import("ui.zig");
     _ = @import("gps.zig");
-    _ = @import("render/quads.zig");
-    _ = @import("render/gles.zig");
     _ = @import("location.zig");
     _ = @import("client.zig");
     _ = @import("governor.zig");
-    _ = @import("spunky/spunky.zig");
 }

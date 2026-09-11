@@ -31,6 +31,8 @@
 //! So the copy lives here, in the core, next to a test that asserts it never contains a number.
 
 const std = @import("std");
+const encounter = @import("encounter.zig");
+const loadout = @import("loadout.zig");
 const flags = @import("flags");
 const combat = @import("combat.zig");
 const world_mod = @import("world.zig");
@@ -214,6 +216,26 @@ pub const State = struct {
     momentum: Momentum = .even,
     crowd: Crowd = .a_few,
     taking_damage: bool = false,
+    kit: loadout.Kit = .field,
+    salvage: u16 = 0,
+    reward: loadout.Reward = .none,
+    last_reward: loadout.Reward = .none,
+    equipped: loadout.Loadout = loadout.starter_loadout,
+    owned: loadout.ItemMask = loadout.starter_owned,
+    inventory_capacity: u8 = 6,
+    item: u8 = loadout.no_item,
+    last_item: u8 = loadout.no_item,
+    item_discovered: bool = false,
+
+    /// Production contact, labelled by the authority that created it. Ambient means authored
+    /// world pressure; players means a real opposing-faction encounter.
+    encounter_source: encounter.Source = .none,
+    encounter_active: bool = false,
+    encounter_finished: bool = false,
+    encounter_round: u8 = 0,
+    encounter_damage_taken: u16 = 0,
+    encounter_xp: u16 = 0,
+    encounter_last_damage: u16 = 0,
 
     /// Seconds until the next resolution. The shell counts it down; we only render it.
     seconds_to_tick: u8 = 30,
@@ -589,6 +611,73 @@ pub fn told(state: State, hp: u16, level: u16, total_xp: u32, damage: u16, momen
         next = push(next, if (damage > 0) "You are taking damage." else "You are still standing.");
     }
 
+    return next;
+}
+
+/// Fold the complete authoritative game response into presentation state. Kept separate from
+/// `told` so the renderer's focused layout tests can still construct combat moments tersely.
+pub fn toldGame(
+    state: State,
+    hp: u16,
+    level: u16,
+    total_xp: u32,
+    damage: u16,
+    momentum: Momentum,
+    crowd: Crowd,
+    kit: loadout.Kit,
+    salvage: u16,
+    reward: loadout.Reward,
+    equipped: loadout.Loadout,
+    owned: loadout.ItemMask,
+    inventory_capacity: u8,
+    item: u8,
+    item_discovered: bool,
+    source: encounter.Source,
+) State {
+    var next = told(state, hp, level, total_xp, damage, momentum, crowd);
+    next.kit = kit;
+    next.salvage = salvage;
+    next.reward = reward;
+    if (reward != .none) next.last_reward = reward;
+    next.equipped = equipped;
+    next.owned = owned;
+    next.inventory_capacity = inventory_capacity;
+    next.item = item;
+    if (item != loadout.no_item) {
+        next.last_item = item;
+        next.item_discovered = item_discovered;
+    }
+
+    if (source != .none) {
+        if (!state.encounter_active or state.encounter_source != source) {
+            next.encounter_round = 0;
+            next.encounter_damage_taken = 0;
+            next.encounter_xp = 0;
+        }
+        next.encounter_source = source;
+        next.encounter_active = true;
+        next.encounter_finished = false;
+        next.encounter_round +|= 1;
+        next.encounter_damage_taken +|= damage;
+        next.encounter_xp +|= @intCast(@min(total_xp -| state.total_xp, std.math.maxInt(u16)));
+        next.encounter_last_damage = damage;
+    } else if (state.encounter_active) {
+        next.encounter_active = false;
+        next.encounter_finished = true;
+    }
+    return next;
+}
+
+pub fn acknowledgeEncounter(state: State) State {
+    var next = state;
+    if (!next.encounter_active) {
+        next.encounter_finished = false;
+        next.encounter_source = .none;
+        next.encounter_round = 0;
+        next.encounter_damage_taken = 0;
+        next.encounter_xp = 0;
+        next.encounter_last_damage = 0;
+    }
     return next;
 }
 
@@ -1052,19 +1141,7 @@ fn panel(out: *std.ArrayList(Draw), gpa: Allocator, x: i32, y: i32, w: i32, h: i
     try out.append(gpa, .{ .rect = .{ .x = x + w - 2, .y = y + h - b, .w = 2, .h = b, .color = accent } });
 }
 
-/// The war dispatch -- GLOBAL, never local (I3). No numbers yet: the counts that would make it
-/// specific ("14,000 souls at war") need a field on the wire that does not exist, and the phone does
-/// not invent data (H1). Mood only, until that slice lands.
-fn dispatchLine(ms: u32) []const u8 {
-    return switch ((ms / 5000) % 3) {
-        0 => "THE INFECTION IS SPREADING",
-        1 => "THE LINE IS MOVING TONIGHT",
-        else => "IT GETS LOUD AFTER DARK",
-    };
-}
-
 fn drawQuiet(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
-    const t = state.now_ms;
     const faction = state.faction;
     const acc = factionGlow(faction);
     const edge = factionDeep(faction);
@@ -1074,11 +1151,11 @@ fn drawQuiet(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allocator
     try panel(out, gpa, pad, 22, size.w - pad * 2, cmd_h, edge, dim(acc, 180));
     try out.append(gpa, .{ .text = .{ .x = pad + 12, .y = 37, .text = factionLabel(faction), .color = acc, .weight = .label } });
 
-    // 2. THE DISPATCH -- the global war, mood only for now (no invented numbers, H1).
+    // 2. PERSONAL READINESS. No invented global state and no claim about who may be nearby.
     const disp_y: i32 = 22 + cmd_h + 8;
     try panel(out, gpa, pad, disp_y, size.w - pad * 2, 30, .clot, dim(.wound, 160));
-    try out.append(gpa, .{ .text = .{ .x = pad + 12, .y = disp_y + 10, .text = "FRONT", .color = .wound, .weight = .label } });
-    try out.append(gpa, .{ .text = .{ .x = pad + 62, .y = disp_y + 10, .text = dispatchLine(t), .color = .serum, .weight = .label } });
+    try out.append(gpa, .{ .text = .{ .x = pad + 12, .y = disp_y + 10, .text = "FIELD", .color = .wound, .weight = .label } });
+    try out.append(gpa, .{ .text = .{ .x = pad + 62, .y = disp_y + 10, .text = "READY FOR CONTACT", .color = .serum, .weight = .label } });
 
     // 3. THE SCOPE CONSOLE -- the hero. Geometry is shared with the touch handler, so a tap ripples
     // where the flesh is drawn.
@@ -1228,13 +1305,6 @@ fn drawCredits(size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.
     try out.append(gpa, .{ .text = .{ .x = pad, .y = y, .text = "Inter by Rasmus Andersson", .color = .smoke, .weight = .body } });
     y += line;
     try out.append(gpa, .{ .text = .{ .x = pad, .y = y, .text = "Both under the SIL Open Font License.", .color = .dust, .weight = .body } });
-
-    y += 60;
-    try out.append(gpa, .{ .text = .{ .x = pad, .y = y, .text = "Code", .color = .bone, .weight = .heading } });
-    y += 40;
-    try out.append(gpa, .{ .text = .{ .x = pad, .y = y, .text = "stb_truetype by Sean Barrett", .color = .smoke, .weight = .body } });
-    y += line;
-    try out.append(gpa, .{ .text = .{ .x = pad, .y = y, .text = "Public domain.", .color = .dust, .weight = .body } });
 
     const back = backButton(size);
     try out.append(gpa, .{ .rect = .{ .x = back.x, .y = back.y, .w = back.w, .h = back.h, .color = .carrion } });
@@ -1991,6 +2061,17 @@ test "a quiet tick shows nothing, and shows it forever" {
     }
 }
 
+test "Record retains the latest reward after the transient debrief clears" {
+    var state: State = .{ .screen = .quiet, .faction = .human };
+    state = toldGame(state, 90, 2, 120, 10, .even, .a_few, .field, 1, .weapon_parts, loadout.starter_loadout, loadout.starter_owned, 7, @intFromEnum(loadout.ItemId.riot_vest), true, .players);
+    try testing.expectEqual(loadout.Reward.weapon_parts, state.reward);
+    try testing.expectEqual(loadout.Reward.weapon_parts, state.last_reward);
+
+    state = toldGame(state, 92, 2, 120, 0, .even, .a_few, .field, 1, .none, loadout.starter_loadout, loadout.starter_owned, 7, loadout.no_item, false, .none);
+    try testing.expectEqual(loadout.Reward.none, state.reward);
+    try testing.expectEqual(loadout.Reward.weapon_parts, state.last_reward);
+}
+
 test "damage wakes the screen, and the first thing it says is the scale of it" {
     var state: State = .{ .screen = .quiet, .faction = .human };
 
@@ -2176,7 +2257,6 @@ test "THE CREDIT IS REACHABLE, AND IT NAMES THE PEOPLE" {
     var has_site = false;
     var has_licence = false;
     var has_fonts = false;
-    var has_stb = false;
 
     for (out.items) |item| switch (item) {
         .text => |t| {
@@ -2184,7 +2264,6 @@ test "THE CREDIT IS REACHABLE, AND IT NAMES THE PEOPLE" {
             if (std.mem.eql(u8, t.text, "timbeek.com")) has_site = true;
             if (std.mem.indexOf(u8, t.text, "CC BY 4.0") != null) has_licence = true;
             if (std.mem.indexOf(u8, t.text, "Open Font License") != null) has_fonts = true;
-            if (std.mem.indexOf(u8, t.text, "stb_truetype") != null) has_stb = true;
         },
         .rect, .sprite => {},
     };
@@ -2193,7 +2272,6 @@ test "THE CREDIT IS REACHABLE, AND IT NAMES THE PEOPLE" {
     try testing.expect(has_site);
     try testing.expect(has_licence); // CC BY also requires us to say whether we changed the work
     try testing.expect(has_fonts);
-    try testing.expect(has_stb);
 
     // And there is a way out. A screen you cannot leave is a screen nobody opens twice.
     const back = backButton(size);

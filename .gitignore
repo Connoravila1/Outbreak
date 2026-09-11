@@ -1,10 +1,15 @@
 # Zig build artifacts
 zig-out/
 .zig-cache/
+/outbreak.journal*
 
 # Local-only: design and governing documents. Not published.
 /OPENING.md
 /THE_RULESET.md
+/FRONTEND_RULESET.md
+/VISION.md
+/MVP.md
+/CURRENT.md
 /DESIGN_PHILOSOPHY.md
 /GAME_DESIGN.md
 /EXPERIENCE_DESIGN.md

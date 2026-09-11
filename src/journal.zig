@@ -25,6 +25,7 @@
 //! the only reason to keep a cell history at all; past those windows it is deleted.
 
 const std = @import("std");
+const loadout = @import("loadout.zig");
 const spatial = @import("spatial.zig");
 const world_mod = @import("world.zig");
 
@@ -37,7 +38,7 @@ const PlayerId = world_mod.PlayerId;
 
 /// "OBRK", little-endian.
 pub const magic: u32 = 0x4B52_424F;
-pub const version: u32 = 1;
+pub const version: u32 = 3;
 
 pub const Error = error{
     BadMagic,
@@ -205,6 +206,12 @@ pub fn writeProgress(
         try appendInt(out, gpa, u32, @intFromEnum(player));
         try appendInt(out, gpa, u32, p.xp);
         try appendInt(out, gpa, u16, p.level);
+        try appendInt(out, gpa, u16, p.salvage);
+        try appendInt(out, gpa, u32, p.owned);
+        try appendInt(out, gpa, u8, @intFromEnum(p.equipped.weapon));
+        try appendInt(out, gpa, u8, @intFromEnum(p.equipped.armor));
+        try appendInt(out, gpa, u8, @intFromEnum(p.equipped.utility));
+        try appendInt(out, gpa, u8, @intFromEnum(p.kit));
     }
 }
 
@@ -333,7 +340,7 @@ pub fn next(cursor: *Cursor) Error!?Record {
 const roster_entry_size = 4 + 1 + 2;
 const report_size = 4 + 8;
 const engagement_size = 8 + 8 + 2 + 2;
-const progress_size = 4 + 4 + 2;
+const progress_size = 4 + 4 + 2 + 2 + 4 + 1 + 1 + 1 + 1;
 
 /// CORE. The i-th entry of a roster payload.
 ///
@@ -368,13 +375,32 @@ pub fn engagementEntry(payload: []const u8, i: usize) struct { cell: CellId, eng
 }
 
 /// CORE. The i-th player's earnings.
-pub fn progressEntry(payload: []const u8, i: usize) struct { player: PlayerId, progress: world_mod.Progress } {
+pub fn progressEntry(payload: []const u8, i: usize) Error!struct { player: PlayerId, progress: world_mod.Progress } {
     const at = i * progress_size;
+    const owned = readInt(payload, at + 12, u32);
+    if (owned & ~((@as(loadout.ItemMask, 1) << loadout.item_count) - 1) != 0) return Error.BadValue;
+
+    const weapon = loadout.itemFromByte(readInt(payload, at + 16, u8)) orelse return Error.BadValue;
+    const armor = loadout.itemFromByte(readInt(payload, at + 17, u8)) orelse return Error.BadValue;
+    const utility = loadout.itemFromByte(readInt(payload, at + 18, u8)) orelse return Error.BadValue;
+    const equipped: loadout.Loadout = .{ .weapon = weapon, .armor = armor, .utility = utility };
+    if (!loadout.validEquipped(equipped, owned)) return Error.BadValue;
+
+    const kit: loadout.Kit = switch (readInt(payload, at + 19, u8)) {
+        0 => .field,
+        1 => .raider,
+        2 => .bulwark,
+        else => return Error.BadValue,
+    };
     return .{
         .player = @enumFromInt(readInt(payload, at, u32)),
         .progress = .{
             .xp = readInt(payload, at + 4, u32),
             .level = readInt(payload, at + 8, u16),
+            .salvage = readInt(payload, at + 10, u16),
+            .owned = owned,
+            .equipped = equipped,
+            .kit = kit,
         },
     };
 }
@@ -545,6 +571,36 @@ test "a journal round-trips" {
     try testing.expectEqual(players[2], report(second.tick.payload, 2).player);
 
     try testing.expectEqual(@as(?Record, null), try next(&cursor));
+}
+
+test "a progress snapshot preserves discoveries and equipped items" {
+    const gpa = testing.allocator;
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(gpa);
+
+    try writeHeader(&out, gpa, .{ .seed = 8, .precision = spatial.default_precision });
+    const players = [_]PlayerId{@enumFromInt(42)};
+    const owned = loadout.starter_owned |
+        loadout.bit(.nail_driver) |
+        loadout.bit(.riot_vest) |
+        loadout.bit(.trauma_pack) |
+        loadout.bit(.torn_evacuation_order);
+    const progress = [_]world_mod.Progress{.{
+        .xp = 640,
+        .level = 4,
+        .salvage = 3,
+        .owned = owned,
+        .equipped = .{ .weapon = .nail_driver, .armor = .riot_vest, .utility = .trauma_pack },
+        .kit = .bulwark,
+    }};
+    try writeProgress(&out, gpa, 11, &players, &progress);
+
+    const opened = try open(out.items);
+    var cursor = opened.cursor;
+    const record = (try next(&cursor)).?.progress;
+    const entry = try progressEntry(record.payload, 0);
+    try testing.expectEqual(players[0], entry.player);
+    try testing.expectEqual(progress[0], entry.progress);
 }
 
 test "a truncated journal is an error, not a shrug" {
