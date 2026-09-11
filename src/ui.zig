@@ -41,7 +41,7 @@ const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 
 const Crowd = combat.Crowd;
-const Faction = world_mod.Faction;
+pub const Faction = world_mod.Faction;
 const Momentum = combat.Momentum;
 
 /// Packed RGBA. Near-black, bone, and blood.
@@ -243,6 +243,11 @@ pub const State = struct {
     /// WHICH PAGE OF THE BRIEFING IS UP. The briefing is a one-way corridor out of the seal -- it
     /// is entered exactly once, at the moment the vow lands, and left forever.
     brief_page: u8 = 0,
+
+    /// WHEN THE QUESTION WAS ASKED. The choosing screen does not dump its words on the glass; the
+    /// machine types them, and the futures fade in after -- so the screen needs to know when it
+    /// was entered. Null on every other screen.
+    choose_since: ?u32 = null,
 
     /// A tap on an inventory row is not an equip -- it is a REQUEST to equip, written here for the
     /// shell to hand to the authority (client.equipItem, or the deterministic driver standing in
@@ -466,6 +471,7 @@ pub fn advance(state: State, ms: u32) State {
         if (state.leaving_ms) |began| {
             if (ms -| began >= boot_exit_ms) {
                 next.screen = if (state.faction == null) .choose_side else .quiet;
+                next.choose_since = if (state.faction == null) ms else null;
                 next.leaving_ms = null;
             }
         }
@@ -479,6 +485,7 @@ pub fn advance(state: State, ms: u32) State {
             if (ms -| sealed >= seal_flood_ms) {
                 next.screen = .briefing;
                 next.sealed_ms = null;
+                next.choose_since = null;
             }
         } else if (state.holding_since) |began| {
             // THE SEAL. A thumb held on HOLD TO COMMIT for the whole ceremony. Time is a parameter,
@@ -501,114 +508,90 @@ pub fn advance(state: State, ms: u32) State {
 
 // ============================================================================ input
 
-/// CORE. The player touched the screen. Returns the new state.
+/// What the player did, as a meaning -- not a pixel. The shell's widgets turn pointer events into
+/// these; the core never hit-tests a rectangle of its own. Pixel geometry survives only for the
+/// dial itself, where the touch lands ON the instrument (`.dial`).
+pub const Action = union(enum) {
+    /// Boot: the tap that ends the overture.
+    enter,
+    /// Choose: a finger on a future. Reversible until the hold.
+    arm: Faction,
+    /// Choose: the thumb comes down on the vow.
+    hold_begin,
+    /// Choose: the thumb lifts before the ceremony finishes.
+    hold_release,
+    /// Briefing: one page forward.
+    brief_next,
+    /// The three surfaces under the tab bar.
+    nav: Screen,
+    /// Gear: carry this (a request -- the authority answers).
+    equip: loadout.ItemId,
+    /// Live: walk away. The fight resolves unwatched.
+    leave_live,
+    credits_open,
+    credits_back,
+    /// A touch on the dial itself -- leaves a ripple where it landed.
+    dial: Touch,
+};
+
+/// CORE. The player did something. Returns the new state.
 ///
-/// Pure: same state, same touch, same result. No clock, no randomness, no I/O.
-pub fn touch(state: State, at: Touch, size: Size) State {
+/// Pure: same state, same action, same result. No clock, no randomness, no I/O. The guards all
+/// live here -- a hold means nothing without an armed side, a page turns only inside the
+/// briefing, and the vow, once sealing, cannot be un-touched.
+pub fn act(state: State, action: Action, size: Size) State {
     var next = state;
 
-    switch (state.screen) {
-        // THE TAP DOES NOT WORK UNTIL THE SEQUENCE HAS FINISHED.
-        //
-        // "Tap to enter" is an invitation, and it is not extended until the screen has actually
-        // said everything it has to say. A tap landing mid-terminal would cut the game off in the
-        // middle of introducing itself -- and the player has not been asked for anything yet, so
-        // there is nothing for them to be impatient about.
-        //
-        // Once it IS offered, the tap begins the ending rather than jumping: the screen takes four
-        // hundred milliseconds to get out of the way, and `advance` finishes the job.
-        .boot => if (afterWake(state.boot_ms) >= boot_settle_end and state.leaving_ms == null) {
+    switch (action) {
+        .enter => if (state.screen == .boot and afterWake(state.boot_ms) >= boot_settle_end and state.leaving_ms == null) {
             next.leaving_ms = state.boot_ms;
         },
-
-        .choose_side => {
-            // THE VOW IS SEALING, OR SEALED. The choosing is locked: no tap changes it, and there is
-            // no back button on this screen -- the HOLD was the "are you sure" (OPENING §3). This is
-            // the one-way door, stated in code.
-            if (state.sealed_ms != null) return next;
-
-            // A RELEASE CANCELS AN INCOMPLETE HOLD. The thumb lifted before the ceremony finished, so
-            // the vow was not taken and you are still free. (A completed hold seals in `advance`,
-            // before this release arrives, and is caught by the lock above.)
-            if (state.holding_since != null) {
-                next.holding_since = null;
-                return next;
-            }
-
-            // ARM a side by tapping its card. Reversible -- tap the other to change your mind, right
-            // up to the hold. No default, no pre-selection: the terminal waits (OPENING §2).
-            if (within(at, factionButton(size, .human))) next.hovering = .human;
-            if (within(at, factionButton(size, .zombie))) next.hovering = .zombie;
-
-            if (within(at, creditsLink(size))) next.screen = .credits;
+        .arm => |f| if (state.screen == .choose_side and state.sealed_ms == null and state.holding_since == null and
+            chooseReveal(state) >= choose_halves_at)
+        {
+            next.hovering = f;
         },
-
-        .briefing => {
-            // One tap, one page. The briefing is read the way it is meant to be read -- forward,
-            // or not at all.
-            next.brief_page += 1;
+        .hold_begin => if (state.screen == .choose_side and state.sealed_ms == null and state.holding_since == null and state.hovering != null and
+            chooseReveal(state) >= choose_bar_at)
+        {
+            next.holding_since = state.now_ms;
+        },
+        .hold_release => if (state.screen == .choose_side and state.sealed_ms == null) {
+            next.holding_since = null;
+        },
+        .brief_next => if (state.screen == .briefing) {
+            next.brief_page +%= 1;
             if (next.brief_page >= briefing_pages.len) {
                 next.screen = .quiet;
                 next.brief_page = 0;
             }
         },
-
-        .quiet => {
-            if (navHit(at, size)) |to| {
-                next.screen = to;
-            } else if (within(at, creditsLink(size))) {
-                next.screen = .credits;
-            } else {
-                // A tap on the dial leaves a ripple. This is SCREEN-pixel geometry -- "did the
-                // finger land inside the circle drawn on the glass" -- integer, no float, and
-                // nothing to do with a cell. A9 forbids geometry on `CellId`, which has no
-                // coordinate to measure; a drawn circle on a touchscreen is not that.
-                const g = sonarGeometry(size);
-                const dx = at.x - g.cx;
-                const dy = at.y - g.cy;
-                if (dx * dx + dy * dy <= g.r * g.r) {
-                    next.ripples[next.ripple_head % State.max_ripples] = .{ .x = at.x, .y = at.y, .born_ms = state.now_ms };
-                    next.ripple_head +%= 1;
-                }
-            }
+        .nav => |to| if (state.faction != null and (to == .quiet or to == .gear or to == .record) and
+            (state.screen == .quiet or state.screen == .gear or state.screen == .record))
+        {
+            next.screen = to;
         },
-
-        .credits => {
-            // Back to wherever they were. A player who has not chosen a side has not chosen one;
-            // reading the credits is not a way to skip that.
-            if (within(at, backButton(size))) {
-                next.screen = if (state.faction == null) .choose_side else .quiet;
-            }
+        .equip => |item| if (state.screen == .gear and loadout.owns(state.owned, item) and loadout.definition(item).slot != .evidence) {
+            next.equip_request = @intFromEnum(item);
         },
-
-        .gear => {
-            if (navHit(at, size)) |to| {
-                next.screen = to;
-                return next;
-            }
-            // A tap on an owned item asks to carry it. The request is written down for the shell;
-            // the screen does not change -- the answer, when it comes, does (H1).
-            var i: u8 = 0;
-            for (loadout.catalogue) |def| {
-                if (def.slot == .evidence or !loadout.owns(state.owned, def.id)) continue;
-                if (within(at, invRow(size, i))) {
-                    next.equip_request = @intFromEnum(def.id);
-                    return next;
-                }
-                i += 1;
-            }
+        .leave_live => if (state.screen == .live) {
+            next.screen = .quiet;
+            next.tell_count = 0;
         },
-
-        .record => {
-            if (navHit(at, size)) |to| next.screen = to;
+        .credits_open => if (state.screen == .choose_side or state.screen == .quiet) {
+            next.screen = .credits;
         },
-
-        .live => {
-            if (within(at, leaveButton(size))) {
-                // "Walk away." It changes nothing about the fight -- the tick resolves the world
-                // whether you are looking at it or not (I4). It only stops you watching.
-                next.screen = .quiet;
-                next.tell_count = 0;
+        .credits_back => if (state.screen == .credits) {
+            next.screen = if (state.faction == null) .choose_side else .quiet;
+            next.choose_since = if (state.faction == null) state.now_ms else null;
+        },
+        .dial => |at| if (state.screen == .quiet) {
+            const g = sonarGeometry(size);
+            const dx = at.x - g.cx;
+            const dy = at.y - g.cy;
+            if (dx * dx + dy * dy <= g.r * g.r) {
+                next.ripples[next.ripple_head % State.max_ripples] = .{ .x = at.x, .y = at.y, .born_ms = state.now_ms };
+                next.ripple_head +%= 1;
             }
         },
     }
@@ -616,27 +599,6 @@ pub fn touch(state: State, at: Touch, size: Size) State {
     return next;
 }
 
-/// CORE. The player put a finger DOWN. Returns the new state.
-///
-/// The companion to `touch`, which is the finger coming UP (a tap). Almost every screen cares only
-/// about the tap; the ONE thing that needs the press is the vow, where the machine measures how long
-/// the thumb stays down before it binds you (OPENING §3). Pure: same state, same press, same result.
-pub fn press(state: State, at: Touch, size: Size) State {
-    var next = state;
-
-    if (state.screen == .choose_side) {
-        // Begin the ceremony ONLY when a side is armed and the thumb comes down on HOLD TO COMMIT.
-        // No armed side, no hold: a permanent choice is never begun by a stray press on nothing
-        // (OPENING §2). Already sealing, or already holding? Then this press is not the start of one.
-        if (state.sealed_ms == null and state.holding_since == null) {
-            if (state.hovering != null and within(at, confirmButton(size))) {
-                next.holding_since = state.now_ms;
-            }
-        }
-    }
-
-    return next;
-}
 
 /// CORE. The server said something. Fold it into what we show.
 ///
@@ -755,85 +717,56 @@ fn push(state: State, sentence: []const u8) State {
 
 // ============================================================================ layout
 
-const Rect = struct { x: i32, y: i32, w: i32, h: i32 };
-
-fn overlaps(a: Rect, b: Rect) bool {
-    return a.x < b.x + b.w and b.x < a.x + a.w and
-        a.y < b.y + b.h and b.y < a.y + a.h;
-}
-
-fn within(at: Touch, rect: Rect) bool {
-    return at.x >= rect.x and at.x < rect.x + rect.w and
-        at.y >= rect.y and at.y < rect.y + rect.h;
-}
+pub const Rect = struct { x: i32, y: i32, w: i32, h: i32 };
 
 const pad: i32 = 22;
 const line: i32 = 26;
 
-/// The card a tap arms, and the button a hold seals. `pub` so the desktop harness's scripted
-/// touch driver can land on the REAL rectangles rather than a copy that drifts.
+// ============================================================================ the choosing, laid out
+//
+// The two futures are not cards; they are the two lives, full height -- each a tall window onto
+// the way of being you would be swearing to. The rects are `pub`: the shell lays its invisible
+// hit-widgets over the same rectangles, so a tap and the paint under it can never drift.
+
 pub fn factionButton(size: Size, faction: Faction) Rect {
-    const h: i32 = 96;
-    const y: i32 = @divTrunc(size.h, 3) + (if (faction == .zombie) h + 12 else 0);
+    const h: i32 = @divTrunc(size.h * 24, 100);
+    const gap: i32 = 14;
+    const y0: i32 = @divTrunc(size.h * 27, 100);
+    const y: i32 = y0 + (if (faction == .zombie) h + gap else 0);
     return .{ .x = pad, .y = y, .w = size.w - pad * 2, .h = h };
 }
 
 pub fn confirmButton(size: Size) Rect {
-    return .{ .x = pad, .y = size.h - 120, .w = size.w - pad * 2, .h = 52 };
+    return .{ .x = pad, .y = size.h - 148, .w = size.w - pad * 2, .h = 54 };
 }
 
-fn leaveButton(size: Size) Rect {
-    return .{ .x = pad, .y = size.h - 60, .w = size.w - pad * 2, .h = 40 };
+/// The tab bar's height, reserved at the bottom of every surface. The shell's nav bar is a real
+/// widget now; this is how much of the glass belongs to it.
+pub const nav_h: i32 = 56;
+
+/// THE REVEAL, in milliseconds since `choose_since`. The machine does not dump its question on the
+/// glass: it speaks the lines one at a time, then lets the futures rise, then the vow. Context is
+/// not optional -- the player is being asked something permanent, and the screen earns it first.
+const choose_line0_at: u32 = 300;
+const choose_line_gap: u32 = 550;
+const choose_halves_at: u32 = 2500;
+const choose_bar_at: u32 = 3100;
+const choose_dread_at: u32 = 3600;
+
+/// How far into the reveal the screen is -- 0 on other screens, or before the machine speaks.
+pub fn chooseReveal(state: State) u32 {
+    const since = state.choose_since orelse return 99999;
+    return state.now_ms -| since;
 }
 
-/// The credit, bottom right. Small, quiet, and always reachable.
-///
-/// It is on `choose_side` and on `quiet` -- the two screens a player is looking at when nothing is
-/// happening -- and NOT on `live`. A fight is not the moment to advertise the soundtrack, and a
-/// licence obligation does not entitle us to interrupt the one thing the game is for.
-fn creditsLink(size: Size) Rect {
-    // TOP RIGHT, and it took two tries to get here.
-    //
-    // The bottom of the screen is crowded: `confirmButton` holds size.h-120..-68, `leaveButton`
-    // holds -60..-20, and the tagline sits at -50. There is no honest 24px band left down there,
-    // and both of my first two attempts LANDED ON A BUTTON -- invisible, because the link is not
-    // drawn on the screen whose button it covered, and therefore a tap that would quietly have
-    // done the wrong thing on the day someone moved either rectangle.
-    //
-    // The top-right corner is empty on every screen: the faction label and the game's name are
-    // left-aligned. The test below asserts this collides with nothing, and it earned its keep.
-    const w: i32 = 150;
-    const h: i32 = 26;
-    return .{ .x = size.w - pad - w, .y = 34, .w = w, .h = h };
-}
-
-fn backButton(size: Size) Rect {
-    return .{ .x = pad, .y = size.h - 60, .w = 120, .h = 40 };
-}
-
-// ============================================================================ the three surfaces
-//
-// HERE is the instrument, GEAR is what you carry, RECORD is what the war did. The tab bar sits at
-// the very bottom of the glass and is drawn on all three screens from one rectangle, so a tap and
-// a label can never disagree.
-
-const nav_h: i32 = 56;
-
-fn navZone(size: Size, i: u8) Rect {
-    const w = @divTrunc(size.w, 3);
-    return .{ .x = w * @as(i32, i), .y = size.h - nav_h, .w = w, .h = nav_h };
-}
-
-fn navHit(at: Touch, size: Size) ?Screen {
-    if (at.y < size.h - nav_h) return null;
-    const third = @divTrunc(size.w, 3);
-    if (at.x < third) return .quiet;
-    if (at.x < third * 2) return .gear;
-    return .record;
+/// 0..255: how faded-in the thing scheduled for `at` is, over 320ms.
+fn revealAlpha(reveal: u32, at: u32) u8 {
+    const e = reveal -| at;
+    return @intCast(@min(@as(u32, e) * 255 / 320, 255));
 }
 
 /// The three things the machine tells you once. One page per tap; a returning player never sees it.
-const briefing_pages = [_]struct { head: []const u8, lines: []const []const u8 }{
+pub const briefing_pages = [_]struct { head: []const u8, lines: []const []const u8 }{
     .{ .head = "THE INSTRUMENT LISTENS.", .lines = &.{
         "It never says where you are.",
         "It never says who else is near.",
@@ -841,7 +774,8 @@ const briefing_pages = [_]struct { head: []const u8, lines: []const []const u8 }
         "is close enough to touch.",
     } },
     .{ .head = "THE WAR FINDS YOU.", .lines = &.{
-        "You do not aim. You do not chase.",
+        "You do not aim.",
+        "You do not chase.",
         "A live cell resolves on its own.",
         "What you carry decides",
         "what you survive.",
@@ -854,12 +788,27 @@ const briefing_pages = [_]struct { head: []const u8, lines: []const []const u8 }
     } },
 };
 
-/// An inventory row on GEAR. `i` counts only owned equipment -- evidence is recovered, not carried.
-fn invRow(size: Size, i: u8) Rect {
-    return .{ .x = pad, .y = inv_y0 + @as(i32, i) * inv_row_h, .w = size.w - pad * 2, .h = inv_row_h - 6 };
-}
-const inv_row_h: i32 = 52;
-const inv_y0: i32 = 330;
+/// THE CREDITS, AS DATA. The shell renders these as widgets; the licences require them and the
+/// requirement is the point.
+///
+/// CC BY 4.0 obliges us to name the creator, link the licence, and say whether we changed the
+/// work. The SIL Open Font License obliges the same for the typefaces. None of those obligations
+/// are discharged by a file in a repository -- they are discharged in front of a person, or not
+/// at all. So the credit lives in the app, reachable from the screens a player sees when nothing
+/// is happening, and a test below keeps it there.
+pub const credits = struct {
+    pub const music_head = "Music";
+    pub const music_title = "Piano Zombie";
+    pub const music_author = "Tim Beek";
+    pub const music_site = "timbeek.com";
+    pub const music_licence = "Licensed CC BY 4.0.";
+    pub const music_modified = "Not modified.";
+    pub const type_head = "Type";
+    pub const font_oxanium = "Oxanium by Severin Meyer";
+    pub const font_inter = "Inter by Rasmus Andersson";
+    pub const font_licence = "Under the SIL Open Font License.";
+};
+
 
 // ============================================================================ draw
 
@@ -882,18 +831,17 @@ pub fn draw(state: State, size: Size, insets: Insets, out: *std.ArrayList(Draw),
     switch (state.screen) {
         .boot => try drawBoot(state, size, insets, out, gpa),
         .choose_side => try drawChooseSide(state, size, out, gpa),
-        .briefing => try drawBriefing(state, size, out, gpa),
         .quiet => try drawQuiet(state, size, out, gpa),
         .live => try drawLive(state, size, out, gpa),
-        .gear => try drawGear(state, size, out, gpa),
-        .record => try drawRecord(state, size, out, gpa),
-        .credits => try drawCredits(size, out, gpa),
+        // The briefing, gear, record, and credits are WIDGET screens -- the shell builds them out
+        // of real widgets over this background; the core emits no ops for them.
+        else => {},
     }
 }
 
 /// The record the machine stamps when the vow seals. ASCII only -- the atlas bakes the game's copy,
 /// and a stray glyph it never saw renders as a hole.
-fn sealLine(faction: ?Faction) []const u8 {
+pub fn sealLine(faction: ?Faction) []const u8 {
     return switch (faction orelse return "ALLEGIANCE SEALED / IRREVERSIBLE") {
         .human => "ALLEGIANCE SEALED / HUMAN / IRREVERSIBLE",
         .zombie => "ALLEGIANCE SEALED / ZOMBIE / IRREVERSIBLE",
@@ -902,20 +850,35 @@ fn sealLine(faction: ?Faction) []const u8 {
 
 fn drawChooseSide(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
     // THE QUESTION, the two lives, and the vow (OPENING §2-4). The machine asks once and never
-    // again; the cards are living previews of the two ways to exist in this war, and the seal is a
-    // flood the whole screen drowns in.
+    // again; the futures are living previews of the two ways to exist in this war, and the seal is
+    // a flood the whole screen drowns in.
+    const reveal = chooseReveal(state);
+    const sealed = state.sealed_ms != null;
+
     try out.append(gpa, .{ .text = .{ .x = pad, .y = 40, .text = "OUTBREAK", .color = .grave, .weight = .label } });
 
-    // THE MACHINE'S VOICE. Contamination detected; it cannot proceed until it classifies the
-    // operator. Cold, procedural, and the weight is entirely in what it withholds.
-    try out.append(gpa, .{ .text = .{ .x = pad, .y = 104, .text = "OPERATOR UNCLASSIFIED", .color = .wound, .weight = .heading } });
-    try out.append(gpa, .{ .text = .{ .x = pad, .y = 104 + line, .text = "DECLARE ALLEGIANCE.", .color = .bone, .weight = .body } });
-    try out.append(gpa, .{ .text = .{ .x = pad, .y = 104 + line * 2, .text = "THIS RECORD IS PERMANENT.", .color = .dust, .weight = .body } });
-    try out.append(gpa, .{ .text = .{ .x = pad, .y = 104 + line * 3, .text = "IT CANNOT BE AMENDED.", .color = .dust, .weight = .body } });
+    // THE MACHINE'S VOICE, one line at a time. Contamination detected; it cannot proceed until it
+    // classifies the operator. Cold, procedural -- the weight is entirely in what it withholds.
+    const lines = [_]struct { text: []const u8, color: Color, weight: Weight }{
+        .{ .text = "OPERATOR UNCLASSIFIED", .color = .wound, .weight = .heading },
+        .{ .text = "DECLARE ALLEGIANCE.", .color = .bone, .weight = .body },
+        .{ .text = "THIS RECORD IS PERMANENT.", .color = .dust, .weight = .body },
+        .{ .text = "IT CANNOT BE AMENDED.", .color = .dust, .weight = .body },
+    };
+    for (lines, 0..) |l, i| {
+        const a = revealAlpha(reveal, choose_line0_at + choose_line_gap * @as(u32, @intCast(i)));
+        if (a == 0) continue;
+        try out.append(gpa, .{ .text = .{
+            .x = pad,
+            .y = 96 + @as(i32, @intCast(i)) * line,
+            .text = l.text,
+            .color = dim(l.color, a),
+            .weight = l.weight,
+        } });
+    }
 
     // THE LEAN. With a side armed, the whole screen tilts its way -- a wash of its deep colour and
     // the edges glowing faintly in it. Trying a life on, not yet swearing to it.
-    const sealed = state.sealed_ms != null;
     if (state.hovering) |armed| {
         if (!sealed) {
             try out.append(gpa, .{ .rect = .{ .x = 0, .y = 0, .w = size.w, .h = size.h, .color = dim(factionDeep(armed), 64) } });
@@ -931,8 +894,11 @@ fn drawChooseSide(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allo
         }
     }
 
-    try drawFaction(state, factionButton(size, .human), .human, "HUMAN", "You hold.", "Outnumbered, and you know it.", out, gpa);
-    try drawFaction(state, factionButton(size, .zombie), .zombie, "ZOMBIE", "You persist.", "You were already here.", out, gpa);
+    const half_alpha = revealAlpha(reveal, choose_halves_at);
+    if (half_alpha > 0) {
+        try drawFaction(state, factionButton(size, .human), .human, "HUMAN", "You hold.", "Outnumbered,", "and you know it.", half_alpha, out, gpa);
+        try drawFaction(state, factionButton(size, .zombie), .zombie, "ZOMBIE", "You persist.", "You were", "already here.", half_alpha, out, gpa);
+    }
 
     // THE COMMIT, IN THREE STATES -- inert (nothing armed), holding (the fill grows on the clock),
     // sealed (the colour has taken the bar). All pure functions of holding_since / sealed_ms.
@@ -973,22 +939,29 @@ fn drawChooseSide(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allo
         }
         try out.append(gpa, .{ .text = .{ .x = confirm.x + 16, .y = confirm.y + 18, .text = "HOLD TO COMMIT", .color = .bone, .weight = .body } });
     } else {
-        try out.append(gpa, .{ .rect = .{ .x = confirm.x, .y = confirm.y, .w = confirm.w, .h = confirm.h, .color = .carrion } });
-        try out.append(gpa, .{ .text = .{ .x = confirm.x + 16, .y = confirm.y + 18, .text = "SELECT A SIDE", .color = .grave, .weight = .body } });
+        const bar_a = revealAlpha(reveal, choose_bar_at);
+        if (bar_a > 0) {
+            try out.append(gpa, .{ .rect = .{ .x = confirm.x, .y = confirm.y, .w = confirm.w, .h = confirm.h, .color = dim(.carrion, bar_a) } });
+            try out.append(gpa, .{ .text = .{ .x = confirm.x + 16, .y = confirm.y + 18, .text = "SELECT A SIDE", .color = dim(.grave, bar_a), .weight = .body } });
+        }
     }
 
     // The dread line, quiet and true -- the choice is who you are, not which wins. Yielded to the
     // seal record once the vow is taken.
     if (state.sealed_ms == null) {
-        try out.append(gpa, .{ .text = .{ .x = pad, .y = size.h - 50, .text = "No faction is stronger. Only different.", .color = .grave, .weight = .body } });
+        const a = revealAlpha(reveal, choose_dread_at);
+        if (a > 0) {
+            try out.append(gpa, .{ .text = .{ .x = @divTrunc(size.w, 2), .y = size.h - 88, .text = "No faction is stronger.", .color = dim(.grave, a), .weight = .body, .alignment = .center } });
+            try out.append(gpa, .{ .text = .{ .x = @divTrunc(size.w, 2), .y = size.h - 66, .text = "Only different.", .color = dim(.grave, a), .weight = .body, .alignment = .center } });
+        }
     }
-
-    try drawCreditsLink(size, out, gpa);
 }
 
-/// A card is not a button; it is a preview of a life (OPENING §2). Each carries its faction's
-/// instrument, alive: the ring, the sweep, the heartbeat. Human's is cold and slow with the red
-/// held at the rim; Zombie's is flooded and racing, the flesh already inside the glass.
+/// A future is not a button; it is a window onto a life (OPENING §2). Each carries its faction's
+/// instrument, alive and large: the ring, the sweep, the heartbeat. Human's is cold and slow with
+/// the red held at the rim; Zombie's is flooded and racing, the flesh already inside the glass.
+///
+/// `reveal_alpha` scales everything -- the futures rise into view after the machine has spoken.
 fn drawFaction(
     state: State,
     rect: Rect,
@@ -996,63 +969,77 @@ fn drawFaction(
     name: []const u8,
     blurb1: []const u8,
     blurb2: []const u8,
+    blurb3: []const u8,
+    reveal_alpha: u8,
     out: *std.ArrayList(Draw),
     gpa: Allocator,
 ) Allocator.Error!void {
     const armed = state.hovering == faction;
     const receded = state.hovering != null and !armed;
 
+    // Every colour emitted below is composed with the reveal.
+    const ra: u32 = reveal_alpha;
+    const fa = struct {
+        fn f(colour: Color, base: u32, scale: u32) Color {
+            return dim(colour, @intCast(@min(base * scale / 255, 255)));
+        }
+    }.f;
+
     const fill: Color = if (armed) factionDeep(faction) else .carrion;
-    try out.append(gpa, .{ .rect = .{ .x = rect.x, .y = rect.y, .w = rect.w, .h = rect.h, .color = fill } });
+    try out.append(gpa, .{ .rect = .{ .x = rect.x, .y = rect.y, .w = rect.w, .h = rect.h, .color = fa(fill, 255, ra) } });
     if (faction == .zombie) {
-        // The zombie card is already a little wrong: a red haze sits inside the glass whether or
-        // not it is armed. The human card stays clean metal.
-        try out.append(gpa, .{ .rect = .{ .x = rect.x, .y = rect.y, .w = rect.w, .h = rect.h, .color = dim(.clot, 70) } });
+        // The zombie side is already a little wrong: a red haze sits inside the glass whether or
+        // not it is armed. The human side stays clean metal.
+        try out.append(gpa, .{ .rect = .{ .x = rect.x, .y = rect.y, .w = rect.w, .h = rect.h, .color = fa(.clot, 70, ra) } });
     }
+    // A hairline in the faction colour along the top, armed or not -- the future has a border the
+    // way a door does.
+    try out.append(gpa, .{ .rect = .{ .x = rect.x, .y = rect.y, .w = rect.w, .h = 1, .color = fa(if (armed) factionBright(faction) else factionDeep(faction), if (armed) 230 else 150, ra) } });
     if (armed) {
-        try out.append(gpa, .{ .rect = .{ .x = rect.x, .y = rect.y, .w = rect.w, .h = 2, .color = dim(factionBright(faction), 220) } });
+        try out.append(gpa, .{ .rect = .{ .x = rect.x, .y = rect.y + rect.h - 1, .w = rect.w, .h = 1, .color = fa(factionBright(faction), 160, ra) } });
     }
 
     const name_color: Color = if (receded) .smoke else if (armed) factionBright(faction) else .bone;
     const blurb_color: Color = if (receded) .grave else if (armed) .bone else if (faction == .zombie) .serum else .dust;
-    try out.append(gpa, .{ .text = .{ .x = rect.x + 16, .y = rect.y + 18, .text = name, .color = name_color, .weight = .heading } });
-    // Two short lines: the instrument owns the right side of the card.
-    try out.append(gpa, .{ .text = .{ .x = rect.x + 16, .y = rect.y + 50, .text = blurb1, .color = blurb_color, .weight = .body } });
-    try out.append(gpa, .{ .text = .{ .x = rect.x + 16, .y = rect.y + 50 + 22, .text = blurb2, .color = blurb_color, .weight = .body } });
+    try out.append(gpa, .{ .text = .{ .x = rect.x + 18, .y = rect.y + 20, .text = name, .color = fa(name_color, 255, ra), .weight = .heading } });
+    // Three short lines, hard left -- the instrument owns the right half of the window.
+    try out.append(gpa, .{ .text = .{ .x = rect.x + 18, .y = rect.y + 64, .text = blurb1, .color = fa(blurb_color, 255, ra), .weight = .body } });
+    try out.append(gpa, .{ .text = .{ .x = rect.x + 18, .y = rect.y + 64 + 24, .text = blurb2, .color = fa(blurb_color, 255, ra), .weight = .body } });
+    try out.append(gpa, .{ .text = .{ .x = rect.x + 18, .y = rect.y + 64 + 48, .text = blurb3, .color = fa(blurb_color, 255, ra), .weight = .body } });
 
-    // THE INSTRUMENT IN MINIATURE. Its temperament is the faction's: the human heart beats slow
-    // and the beam sweeps steadily; the zombie heart races and the beam jitters.
+    // THE INSTRUMENT, LARGE. Its temperament is the faction's: the human heart beats slow and the
+    // beam sweeps steadily; the zombie heart races and the beam jitters.
     const now = state.now_ms;
-    const cx = rect.x + rect.w - 56;
+    const cx = rect.x + rect.w - 92;
     const cy = rect.y + @divTrunc(rect.h, 2);
-    const r: i32 = 36;
+    const r: i32 = 58;
     const heart_period: u32 = if (faction == .human) 1500 else 620;
     const hb: u32 = heartbeat(now, heart_period);
 
     const rim: Color = if (receded) .grave else if (armed) factionGlow(faction) else factionDeep(faction);
-    try out.append(gpa, .{ .sprite = .{ .x = cx - r, .y = cy - r, .w = r * 2, .h = r * 2, .color = rim, .sprite = .ring } });
+    try out.append(gpa, .{ .sprite = .{ .x = cx - r, .y = cy - r, .w = r * 2, .h = r * 2, .color = fa(rim, 255, ra), .sprite = .ring } });
 
-    const beam_alpha: u8 = if (receded) 30 else if (armed) 150 else 70;
+    const beam_alpha: u32 = if (receded) 30 else if (armed) 150 else 70;
     const sweep_period: u32 = if (faction == .human) 6000 else 2200;
     const phase: i32 = @intCast((now % sweep_period) * 65536 / sweep_period);
     const jitter: i32 = if (faction == .zombie) wander(now, 700, 2400, 0) else 0;
     const angle: u16 = @intCast(@mod(phase + jitter, 65536));
-    try out.append(gpa, .{ .sprite = .{ .x = cx - r, .y = cy - r, .w = r * 2, .h = r * 2, .color = dim(factionBright(faction), beam_alpha), .sprite = .beam, .angle = angle } });
+    try out.append(gpa, .{ .sprite = .{ .x = cx - r, .y = cy - r, .w = r * 2, .h = r * 2, .color = fa(factionBright(faction), beam_alpha, ra), .sprite = .beam, .angle = angle } });
 
-    const heart_size: i32 = 14 + @divTrunc(@as(i32, @intCast(hb)) * 20, 255);
-    const heart_alpha: u8 = if (receded) 50 else @intCast(90 + hb * 140 / 255);
-    try out.append(gpa, .{ .sprite = .{ .x = cx - @divTrunc(heart_size, 2), .y = cy - @divTrunc(heart_size, 2), .w = heart_size, .h = heart_size, .color = dim(factionBright(faction), heart_alpha), .sprite = .disc } });
+    const heart_size: i32 = 18 + @divTrunc(@as(i32, @intCast(hb)) * 26, 255);
+    const heart_alpha: u32 = if (receded) 50 else 90 + hb * 140 / 255;
+    try out.append(gpa, .{ .sprite = .{ .x = cx - @divTrunc(heart_size, 2), .y = cy - @divTrunc(heart_size, 2), .w = heart_size, .h = heart_size, .color = fa(factionBright(faction), heart_alpha, ra), .sprite = .disc } });
 
     if (faction == .human) {
         // The infection is real, but it is at the rim, held -- a single red spore pinned to the
         // scope's edge by the line you are choosing to hold.
-        try out.append(gpa, .{ .sprite = .{ .x = cx - 33 - 7, .y = cy + 14 - 7, .w = 14, .h = 14, .color = dim(.blood, 190), .sprite = .disc } });
+        try out.append(gpa, .{ .sprite = .{ .x = cx - 52 - 8, .y = cy + 22 - 8, .w = 16, .h = 16, .color = fa(.blood, 190, ra), .sprite = .disc } });
     } else {
         // The flesh is already inside the glass: three blooms that beat with the racing heart.
-        const a: u8 = if (receded) 40 else @intCast(80 + hb * 120 / 255);
-        try out.append(gpa, .{ .sprite = .{ .x = cx - 16 - 8, .y = cy - 10 - 8, .w = 16, .h = 16, .color = dim(.blood_glow, a), .sprite = .disc } });
-        try out.append(gpa, .{ .sprite = .{ .x = cx + 8 - 10, .y = cy + 12 - 10, .w = 20, .h = 20, .color = dim(.blood_glow, a), .sprite = .disc } });
-        try out.append(gpa, .{ .sprite = .{ .x = cx + 16 - 6, .y = cy - 14 - 6, .w = 12, .h = 12, .color = dim(.blood_glow, a), .sprite = .disc } });
+        const a: u32 = if (receded) 40 else 80 + hb * 120 / 255;
+        try out.append(gpa, .{ .sprite = .{ .x = cx - 26 - 10, .y = cy - 16 - 10, .w = 20, .h = 20, .color = fa(.blood_glow, a, ra), .sprite = .disc } });
+        try out.append(gpa, .{ .sprite = .{ .x = cx + 12 - 12, .y = cy + 18 - 12, .w = 24, .h = 24, .color = fa(.blood_glow, a, ra), .sprite = .disc } });
+        try out.append(gpa, .{ .sprite = .{ .x = cx + 24 - 7, .y = cy - 22 - 7, .w = 14, .h = 14, .color = fa(.blood_glow, a, ra), .sprite = .disc } });
     }
 }
 
@@ -1170,16 +1157,13 @@ const ripple_life_ms: u32 = 950;
 /// The console rectangle and the scope's centre and radius for a given screen. ONE definition,
 /// shared by the layout that draws the terminal and the touch handler that answers a tap -- so a
 /// ripple is always born where the flesh actually is, and the two can never drift.
-const SonarGeom = struct { cx: i32, cy: i32, r: i32, con_y: i32, con_h: i32 };
+const SonarGeom = struct { cx: i32, cy: i32, r: i32 };
 fn sonarGeometry(size: Size) SonarGeom {
-    const cmd_h: i32 = 44;
-    const disp_y: i32 = 22 + cmd_h + 8;
-    const con_y: i32 = disp_y + 30 + 10;
-    const con_h: i32 = size.h - con_y - 190;
+    // THE WELL IS THE SCREEN. It owns the top two-thirds; the words live at its feet.
     const cx = @divTrunc(size.w, 2);
-    const cy = con_y + @divTrunc(con_h, 2) + 8;
-    const r = @min(@divTrunc(size.w * 36, 100), @divTrunc(con_h * 38, 100));
-    return .{ .cx = cx, .cy = cy, .r = r, .con_y = con_y, .con_h = con_h };
+    const r = @min(@divTrunc(size.w * 44, 100), @divTrunc(size.h * 26, 100));
+    const cy = @max(r + 80, @divTrunc(size.h * 40, 100));
+    return .{ .cx = cx, .cy = cy, .r = r };
 }
 
 /// A soft dot of the disc sprite, centred on a point.
@@ -1211,13 +1195,13 @@ fn softRing(out: *std.ArrayList(Draw), gpa: Allocator, x: i32, y: i32, radius: i
 
 /// THE FACTION GLOW. Blue for the human holding a line, blood for the zombie. Null before a side is
 /// chosen reads as the zombie red -- the app's own colour.
-fn factionGlow(faction: ?Faction) Color {
+pub fn factionGlow(faction: ?Faction) Color {
     return if (faction == .human) .human else .wound;
 }
-fn factionBright(faction: ?Faction) Color {
+pub fn factionBright(faction: ?Faction) Color {
     return if (faction == .human) .human_glow else .blood_glow;
 }
-fn factionDeep(faction: ?Faction) Color {
+pub fn factionDeep(faction: ?Faction) Color {
     return if (faction == .human) .human_deep else .blood_deep;
 }
 
@@ -1328,75 +1312,34 @@ fn drawScope(state: State, cx: i32, cy: i32, r: i32, live: bool, out: *std.Array
     }
 }
 
-/// A framed console panel: dark fill, a hairline border in the faction's dim, and corner brackets.
-/// This is the chrome that makes the screen read as a salvaged instrument, not text on black.
-fn panel(out: *std.ArrayList(Draw), gpa: Allocator, x: i32, y: i32, w: i32, h: i32, edge: Color, accent: Color) Allocator.Error!void {
-    try out.append(gpa, .{ .rect = .{ .x = x, .y = y, .w = w, .h = h, .color = .carrion } });
-    try out.append(gpa, .{ .rect = .{ .x = x, .y = y, .w = w, .h = 1, .color = edge } });
-    try out.append(gpa, .{ .rect = .{ .x = x, .y = y + h - 1, .w = w, .h = 1, .color = edge } });
-    try out.append(gpa, .{ .rect = .{ .x = x, .y = y, .w = 1, .h = h, .color = edge } });
-    try out.append(gpa, .{ .rect = .{ .x = x + w - 1, .y = y, .w = 1, .h = h, .color = edge } });
-    const b: i32 = 8;
-    try out.append(gpa, .{ .rect = .{ .x = x, .y = y, .w = b, .h = 2, .color = accent } });
-    try out.append(gpa, .{ .rect = .{ .x = x, .y = y, .w = 2, .h = b, .color = accent } });
-    try out.append(gpa, .{ .rect = .{ .x = x + w - b, .y = y + h - 2, .w = b, .h = 2, .color = accent } });
-    try out.append(gpa, .{ .rect = .{ .x = x + w - 2, .y = y + h - b, .w = 2, .h = b, .color = accent } });
-}
-
 fn drawQuiet(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
     const faction = state.faction;
-    const acc = factionGlow(faction);
-    const edge = factionDeep(faction);
 
-    // 1. THE COMMAND BAR -- who you are, on the left; the licence credit rides its right side.
-    const cmd_h: i32 = 44;
-    try panel(out, gpa, pad, 22, size.w - pad * 2, cmd_h, edge, dim(acc, 180));
-    try out.append(gpa, .{ .text = .{ .x = pad + 12, .y = 37, .text = factionLabel(faction), .color = acc, .weight = .label } });
+    // Who you are, and nothing else up top. No bar, no strip -- the instrument does the talking.
+    try out.append(gpa, .{ .text = .{ .x = pad, .y = 40, .text = factionLabel(faction), .color = .smoke, .weight = .label } });
 
-    // 2. PERSONAL READINESS. No invented global state and no claim about who may be nearby.
-    const disp_y: i32 = 22 + cmd_h + 8;
-    try panel(out, gpa, pad, disp_y, size.w - pad * 2, 30, .clot, dim(.wound, 160));
-    try out.append(gpa, .{ .text = .{ .x = pad + 12, .y = disp_y + 10, .text = "FIELD", .color = .wound, .weight = .label } });
-    try out.append(gpa, .{ .text = .{ .x = pad + 74, .y = disp_y + 10, .text = "READY FOR CONTACT", .color = .serum, .weight = .label } });
-
-    // 3. THE SCOPE CONSOLE -- the hero. Geometry is shared with the touch handler, so a tap ripples
-    // where the flesh is drawn.
+    // THE WELL. The whole upper screen is the instrument -- flesh, veins, the slow sweep, the heart.
     const g = sonarGeometry(size);
-    const con_y = g.con_y;
-    const con_h = g.con_h;
     const cx = g.cx;
     const cy = g.cy;
     const r = g.r;
-    try panel(out, gpa, pad, con_y, size.w - pad * 2, con_h, edge, dim(acc, 180));
-    try out.append(gpa, .{ .text = .{ .x = pad + 12, .y = con_y + 11, .text = "FIELD SCAN", .color = .dust, .weight = .label } });
-    try out.append(gpa, .{ .text = .{ .x = size.w - pad - 12, .y = con_y + 11, .text = "SCANNING", .color = acc, .weight = .label, .alignment = .right } });
-
     try drawScope(state, cx, cy, r, false, out, gpa);
 
-    // The reading, centred. "QUIET" is shown identically for an empty field, a sub-quorum cell, and a
-    // quiet one above quorum -- the whole of I3 on the glass: the phone is told nothing that could
-    // tell the three apart.
+    // The reading, centred in the heart. "QUIET" is shown identically for an empty field, a
+    // sub-quorum cell, and a quiet one above quorum -- the whole of I3 on the glass.
     try out.append(gpa, .{ .text = .{ .x = cx, .y = cy - 9, .text = "QUIET", .color = .bone, .weight = .label, .alignment = .center } });
 
-    // 4. THE VITALS -- both real, both number-free: your CONDITION (a word) and the binary THREAT.
-    const vit_y: i32 = con_y + con_h + 8;
-    const gap: i32 = 8;
-    const half = @divTrunc(size.w - pad * 2 - gap, 2);
-    try panel(out, gpa, pad, vit_y, half, 46, edge, dim(acc, 150));
-    try out.append(gpa, .{ .text = .{ .x = pad + 11, .y = vit_y + 9, .text = "CONDITION", .color = .dust, .weight = .label } });
-    try out.append(gpa, .{ .text = .{ .x = pad + 11, .y = vit_y + 25, .text = conditionWord(state.hp), .color = .bone, .weight = .body } });
-    const rx = pad + half + gap;
-    try panel(out, gpa, rx, vit_y, half, 46, edge, dim(acc, 150));
-    try out.append(gpa, .{ .text = .{ .x = rx + 11, .y = vit_y + 9, .text = "THREAT", .color = .dust, .weight = .label } });
-    try out.append(gpa, .{ .text = .{ .x = rx + 11, .y = vit_y + 25, .text = "QUIET", .color = .smoke, .weight = .body } });
+    // The legend beneath the well: one word for how you are. Number-free -- a digit on this screen
+    // is how a count could ever leak.
+    const legend_y = @min(cy + r + 44, size.h - 190);
+    try out.append(gpa, .{ .text = .{ .x = pad, .y = legend_y, .text = "CONDITION", .color = .dust, .weight = .label } });
+    try out.append(gpa, .{ .text = .{ .x = size.w - pad, .y = legend_y, .text = conditionWord(state.hp), .color = .bone, .weight = .body, .alignment = .right } });
 
-    // 5. THE FOOTER -- the human voice. Mood, never occupancy (I3): only that the quiet is temporary.
-    try out.append(gpa, .{ .text = .{ .x = cx, .y = size.h - 112, .text = "The room is quiet.", .color = .smoke, .weight = .body, .alignment = .center } });
-    try out.append(gpa, .{ .text = .{ .x = cx, .y = size.h - 88, .text = "It won't stay that way.", .color = .grave, .weight = .body, .alignment = .center } });
+    // The human voice. Mood, never occupancy (I3): only that the quiet is temporary.
+    try out.append(gpa, .{ .text = .{ .x = cx, .y = size.h - 116, .text = "The room is quiet.", .color = .smoke, .weight = .body, .alignment = .center } });
+    try out.append(gpa, .{ .text = .{ .x = cx, .y = size.h - 92, .text = "It won't stay that way.", .color = .grave, .weight = .body, .alignment = .center } });
 
-    try drawCreditsLink(size, out, gpa);
     try drawDiagnostic(state, size, out, gpa);
-    try drawNav(state, size, out, gpa);
 }
 
 /// The diagnostic readout's text, formatted into these each frame. See the long note in
@@ -1472,142 +1415,64 @@ fn drawDiagnostic(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allo
     } });
 }
 
-fn drawCreditsLink(size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
-    const link = creditsLink(size);
-    try out.append(gpa, .{ .text = .{ .x = link.x, .y = link.y, .text = "Music: Tim Beek", .color = .grave, .weight = .label } });
-}
-
-/// THE CREDITS. The licences require this, and the requirement is the point.
-///
-/// CC BY 4.0 obliges us to name the creator, link the licence, and say whether we changed the work.
-/// The SIL Open Font License obliges the same for the typefaces. None of those obligations are
-/// discharged by a file in a repository -- they are discharged in front of a person, or not at all.
-///
-/// So this screen exists BEFORE the music does. If we cannot put a credit on a screen, we do not
-/// get to use the track.
-fn drawCredits(size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
-    try out.append(gpa, .{ .text = .{ .x = pad, .y = 40, .text = "CREDITS", .color = .dust, .weight = .label } });
-
-    var y: i32 = 100;
-
-    try out.append(gpa, .{ .text = .{ .x = pad, .y = y, .text = "Music", .color = .bone, .weight = .heading } });
-    y += 40;
-    try out.append(gpa, .{ .text = .{ .x = pad, .y = y, .text = "Piano Zombie", .color = .smoke, .weight = .body } });
-    y += line;
-    try out.append(gpa, .{ .text = .{ .x = pad, .y = y, .text = "Tim Beek", .color = .bone, .weight = .body } });
-    y += line;
-    try out.append(gpa, .{ .text = .{ .x = pad, .y = y, .text = "timbeek.com", .color = .dust, .weight = .body } });
-    y += line;
-    try out.append(gpa, .{ .text = .{ .x = pad, .y = y, .text = "Licensed CC BY 4.0. Not modified.", .color = .dust, .weight = .body } });
-
-    y += 60;
-    try out.append(gpa, .{ .text = .{ .x = pad, .y = y, .text = "Type", .color = .bone, .weight = .heading } });
-    y += 40;
-    try out.append(gpa, .{ .text = .{ .x = pad, .y = y, .text = "Oxanium by Severin Meyer", .color = .smoke, .weight = .body } });
-    y += line;
-    try out.append(gpa, .{ .text = .{ .x = pad, .y = y, .text = "Inter by Rasmus Andersson", .color = .smoke, .weight = .body } });
-    y += line;
-    try out.append(gpa, .{ .text = .{ .x = pad, .y = y, .text = "Both under the SIL Open Font License.", .color = .dust, .weight = .body } });
-
-    const back = backButton(size);
-    try out.append(gpa, .{ .rect = .{ .x = back.x, .y = back.y, .w = back.w, .h = back.h, .color = .carrion } });
-    try out.append(gpa, .{ .text = .{ .x = back.x + 16, .y = back.y + 10, .text = "Back", .color = .bone, .weight = .body } });
-}
 
 fn drawLive(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
     try out.append(gpa, .{ .text = .{ .x = pad, .y = 40, .text = factionLabel(state.faction), .color = .serum, .weight = .label } });
 
-    try out.append(gpa, .{ .text = .{ .x = pad, .y = 80, .text = "THIS CELL IS LIVE", .color = .wound, .weight = .alarm } });
+    try out.append(gpa, .{ .text = .{ .x = pad, .y = 76, .text = "THIS CELL IS LIVE", .color = .wound, .weight = .alarm } });
 
-    // The scale of it. A band, never a number -- and at body size, so the sentence fits the glass.
-    try out.append(gpa, .{ .text = .{ .x = pad, .y = 124, .text = crowdSentence(state.crowd), .color = .bone, .weight = .body } });
+    // The scale of it. A band, never a number -- wrapped at its clause break so the sentence never
+    // runs off the glass.
+    var crowd = std.mem.splitSequence(u8, crowdSentence(state.crowd), ", ");
+    const first = crowd.next().?;
+    if (crowd.next()) |rest| {
+        const joined = try std.fmt.allocPrint(gpa, "{s},", .{first});
+        try out.append(gpa, .{ .text = .{ .x = pad, .y = 112, .text = joined, .color = .bone, .weight = .body } });
+        try out.append(gpa, .{ .text = .{ .x = pad, .y = 136, .text = rest, .color = .bone, .weight = .body } });
+    } else {
+        try out.append(gpa, .{ .text = .{ .x = pad, .y = 112, .text = first, .color = .bone, .weight = .body } });
+    }
 
-    // Your condition, as a word. Never as a number.
-    try out.append(gpa, .{ .rect = .{ .x = pad, .y = 190, .w = size.w - pad * 2, .h = 72, .color = .scab } });
-    try out.append(gpa, .{ .text = .{ .x = pad + 14, .y = 206, .text = "CONDITION", .color = .serum, .weight = .label } });
-    try out.append(gpa, .{ .text = .{ .x = size.w - pad - 90, .y = 206, .text = conditionWord(state.hp), .color = .bone, .weight = .body } });
-    try out.append(gpa, .{ .text = .{ .x = pad + 14, .y = 236, .text = momentumSentence(state.momentum, state.faction orelse .human), .color = .serum, .weight = .body } });
+    // THE WELL, BLOOMED. The same instrument you watch all day, flooded -- the flesh under it races
+    // and the red is inside the glass now. It says HERE, and never where (I2, I3).
+    const bx = @divTrunc(size.w, 2);
+    const br = @min(@divTrunc(size.w * 30, 100), 150);
+    const by: i32 = 330;
+    try drawScope(state, bx, by, br, true, out, gpa);
+    try out.append(gpa, .{ .text = .{ .x = bx, .y = by - 9, .text = conditionWord(state.hp), .color = .bone, .weight = .label, .alignment = .center } });
+
+    // Beneath it: the tide, in words. Your condition already lives inside the heart.
+    const tide_y = by + br + 26;
+    try out.append(gpa, .{ .text = .{ .x = bx, .y = tide_y, .text = momentumSentence(state.momentum, state.faction orelse .human), .color = .serum, .weight = .body, .alignment = .center } });
 
     // What you know. The tells, seeping in.
-    try out.append(gpa, .{ .text = .{ .x = pad, .y = 290, .text = "WHAT YOU KNOW", .color = .grave, .weight = .label } });
+    const tells_y = tide_y + 40;
+    try out.append(gpa, .{ .text = .{ .x = pad, .y = tells_y, .text = "WHAT YOU KNOW", .color = .grave, .weight = .label } });
 
     var i: u8 = 0;
+    var y: i32 = tells_y + 26;
     while (i < state.tell_count) : (i += 1) {
-        const y = 320 + @as(i32, i) * line;
+        if (y > size.h - 110) break;
         try out.append(gpa, .{ .rect = .{ .x = pad, .y = y, .w = 2, .h = 18, .color = .ash } });
-        try out.append(gpa, .{ .text = .{ .x = pad + 14, .y = y, .text = state.tells[i], .color = .smoke, .weight = .body } });
+        // A tell wraps at its clause break rather than running off the glass.
+        var parts = std.mem.splitSequence(u8, state.tells[i], ", ");
+        const head = parts.next().?;
+        if (parts.next()) |rest| {
+            const joined = try std.fmt.allocPrint(gpa, "{s},", .{head});
+            try out.append(gpa, .{ .text = .{ .x = pad + 14, .y = y, .text = joined, .color = .smoke, .weight = .body } });
+            try out.append(gpa, .{ .text = .{ .x = pad + 14, .y = y + 22, .text = rest, .color = .smoke, .weight = .body } });
+            y += line + 22;
+        } else {
+            try out.append(gpa, .{ .text = .{ .x = pad + 14, .y = y, .text = head, .color = .smoke, .weight = .body } });
+            y += line;
+        }
     }
 
-    const leave = leaveButton(size);
-    try out.append(gpa, .{ .text = .{ .x = pad, .y = size.h - 100, .text = "There is nothing to do but stay.", .color = .grave, .weight = .body } });
-    try out.append(gpa, .{ .text = .{ .x = leave.x, .y = leave.y, .text = "Walk away", .color = .grave, .weight = .body } });
+    try out.append(gpa, .{ .text = .{ .x = pad, .y = size.h - 84, .text = "There is nothing to do but stay.", .color = .grave, .weight = .body } });
 }
 
-// ============================================================================ briefing, gear, record
 
-/// THE BRIEFING. One page of the three, in the sworn colour -- the machine hands over the field
-/// manual on the way out of the flood.
-fn drawBriefing(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
-    const faction = state.faction;
-    const acc = factionGlow(faction);
-
-    try out.append(gpa, .{ .text = .{ .x = pad, .y = 40, .text = "FIELD BRIEFING", .color = .grave, .weight = .label } });
-    try out.append(gpa, .{ .text = .{ .x = size.w - pad, .y = 40, .text = factionLabel(faction), .color = acc, .weight = .label, .alignment = .right } });
-
-    const page = briefing_pages[@min(state.brief_page, briefing_pages.len - 1)];
-    const top = @divTrunc(size.h, 3) - 30;
-    try out.append(gpa, .{ .text = .{ .x = pad, .y = top, .text = page.head, .color = factionBright(faction), .weight = .heading } });
-    for (page.lines, 0..) |s, i| {
-        try out.append(gpa, .{ .text = .{ .x = pad, .y = top + 50 + @as(i32, @intCast(i)) * line, .text = s, .color = .smoke, .weight = .body } });
-    }
-
-    // The bar you press to turn the page. Last page says so.
-    const btn: Rect = .{ .x = pad, .y = size.h - 120, .w = size.w - pad * 2, .h = 52 };
-    try panel(out, gpa, btn.x, btn.y, btn.w, btn.h, factionDeep(faction), dim(acc, 180));
-    const last = state.brief_page == briefing_pages.len - 1;
-    try out.append(gpa, .{ .text = .{ .x = @divTrunc(size.w, 2), .y = btn.y + 18, .text = if (last) "TO THE FIELD" else "CONTINUE", .color = .bone, .weight = .label, .alignment = .center } });
-
-    // Where you are in it, as a hairline of ticks.
-    var i: u8 = 0;
-    while (i < briefing_pages.len) : (i += 1) {
-        const w: i32 = 40;
-        const x = @divTrunc(size.w, 2) + (@as(i32, i) - 1) * (w + 8);
-        const on: Color = if (i == state.brief_page) acc else .grave;
-        try out.append(gpa, .{ .rect = .{ .x = x, .y = size.h - 148, .w = w, .h = 2, .color = on } });
-    }
-}
-
-/// The tab bar: HERE / GEAR / RECORD, one rectangle per zone, the active one underlined in the
-/// faction colour. Drawn last on the three surfaces so it always reads as chrome, never content.
-fn drawNav(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
-    const acc = factionGlow(state.faction);
-    const names = [_][]const u8{ "HERE", "GEAR", "RECORD" };
-    const screens = [_]Screen{ .quiet, .gear, .record };
-
-    try out.append(gpa, .{ .rect = .{ .x = 0, .y = size.h - nav_h, .w = size.w, .h = nav_h, .color = .char_deep } });
-    try out.append(gpa, .{ .rect = .{ .x = 0, .y = size.h - nav_h, .w = size.w, .h = 1, .color = .grave } });
-    for (names, screens, 0..) |name, scr, i| {
-        const z = navZone(size, @intCast(i));
-        const on = state.screen == scr;
-        try out.append(gpa, .{ .text = .{
-            .x = z.x + @divTrunc(z.w, 2),
-            .y = z.y + 22,
-            .text = name,
-            .color = if (on) .bone else .dust,
-            .weight = .label,
-            .alignment = .center,
-        } });
-        if (on) try out.append(gpa, .{ .rect = .{ .x = z.x + @divTrunc(z.w, 2) - 18, .y = z.y + 10, .w = 36, .h = 2, .color = acc } });
-    }
-}
-
-/// Formatted strings the screens own. The draw list holds slices into these -- they are module
-/// buffers overwritten each frame and read within it, the same rule as the diagnostic's (which
-/// exists for exactly this reason).
-var gear_scratch: [14][56]u8 = undefined;
-var record_scratch: [6][64]u8 = undefined;
-
-fn slotLabel(slot: loadout.Slot) []const u8 {
+pub fn slotLabel(slot: loadout.Slot) []const u8 {
     return switch (slot) {
         .weapon => "WEAPON",
         .armor => "ARMOR",
@@ -1616,7 +1481,7 @@ fn slotLabel(slot: loadout.Slot) []const u8 {
     };
 }
 
-fn rarityLabel(rarity: loadout.Rarity) []const u8 {
+pub fn rarityLabel(rarity: loadout.Rarity) []const u8 {
     return switch (rarity) {
         .common => "COMMON",
         .uncommon => "UNCOMMON",
@@ -1625,7 +1490,7 @@ fn rarityLabel(rarity: loadout.Rarity) []const u8 {
     };
 }
 
-fn rarityColor(rarity: loadout.Rarity) Color {
+pub fn rarityColor(rarity: loadout.Rarity) Color {
     return switch (rarity) {
         .common => .smoke,
         .uncommon => .serum,
@@ -1634,7 +1499,7 @@ fn rarityColor(rarity: loadout.Rarity) Color {
     };
 }
 
-fn rewardLabel(reward: loadout.Reward) []const u8 {
+pub fn rewardLabel(reward: loadout.Reward) []const u8 {
     return switch (reward) {
         .none => "NOTHING",
         .weapon_parts => "WEAPON PARTS",
@@ -1642,130 +1507,6 @@ fn rewardLabel(reward: loadout.Reward) []const u8 {
         .field_supplies => "FIELD SUPPLIES",
     };
 }
-
-/// GEAR -- what you carry, and what you could carry instead.
-fn drawGear(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
-    const faction = state.faction;
-    const acc = factionGlow(faction);
-    const edge = factionDeep(faction);
-
-    // Command bar: who you are, and which surface this is.
-    try panel(out, gpa, pad, 22, size.w - pad * 2, 44, edge, dim(acc, 180));
-    try out.append(gpa, .{ .text = .{ .x = pad + 12, .y = 37, .text = factionLabel(faction), .color = acc, .weight = .label } });
-    try out.append(gpa, .{ .text = .{ .x = size.w - pad - 12, .y = 37, .text = "GEAR", .color = .dust, .weight = .label, .alignment = .right } });
-
-    // CARRIED -- the three slots, each its item.
-    try out.append(gpa, .{ .text = .{ .x = pad, .y = 92, .text = "CARRIED", .color = .dust, .weight = .label } });
-    const slots = [_]struct { label: []const u8, id: loadout.ItemId }{
-        .{ .label = "WEAPON", .id = state.equipped.weapon },
-        .{ .label = "ARMOR", .id = state.equipped.armor },
-        .{ .label = "UTILITY", .id = state.equipped.utility },
-    };
-    var y: i32 = 108;
-    for (slots, 0..) |slot, si| {
-        const def = loadout.definition(slot.id);
-        try panel(out, gpa, pad, y, size.w - pad * 2, 50, edge, dim(acc, 140));
-        try out.append(gpa, .{ .text = .{ .x = pad + 12, .y = y + 9, .text = slot.label, .color = .grave, .weight = .label } });
-        try out.append(gpa, .{ .text = .{ .x = pad + 12, .y = y + 26, .text = def.name, .color = .bone, .weight = .body } });
-        const st = std.fmt.bufPrint(&gear_scratch[si], "ATK {d}  DEF {d}  INI {d}", .{ def.attack, def.defense, def.initiative }) catch "";
-        try out.append(gpa, .{ .text = .{ .x = size.w - pad - 12, .y = y + 9, .text = st, .color = dim(acc, 220), .weight = .label, .alignment = .right } });
-        y += 56;
-    }
-
-    // INVENTORY -- everything owned that can be carried, in catalogue order. A tap asks to carry
-    // it; the row of whatever is in the slot now wears the faction edge. The list is capped at
-    // what fits the glass: deeper stock is a scroll the MVP has not earned yet.
-    const inv_y = inv_y0 - 34;
-    const n_owned = loadout.equipmentCount(state.owned);
-    const cap = std.fmt.bufPrint(&gear_scratch[3], "{d} / {d} CARRIED", .{ n_owned, state.inventory_capacity }) catch "";
-    try out.append(gpa, .{ .text = .{ .x = pad, .y = inv_y, .text = "INVENTORY", .color = .dust, .weight = .label } });
-    try out.append(gpa, .{ .text = .{ .x = size.w - pad, .y = inv_y, .text = cap, .color = .grave, .weight = .label, .alignment = .right } });
-
-    var i: u8 = 0;
-    for (loadout.catalogue) |def| {
-        if (def.slot == .evidence or !loadout.owns(state.owned, def.id)) continue;
-        const row = invRow(size, i);
-        if (row.y + row.h > size.h - nav_h - 8) break;
-        const equipped_now = (def.slot == .weapon and state.equipped.weapon == def.id) or
-            (def.slot == .armor and state.equipped.armor == def.id) or
-            (def.slot == .utility and state.equipped.utility == def.id);
-        try panel(out, gpa, row.x, row.y, row.w, row.h, if (equipped_now) acc else .grave, if (equipped_now) dim(acc, 200) else dim(.grave, 120));
-        try out.append(gpa, .{ .text = .{ .x = row.x + 12, .y = row.y + 7, .text = def.name, .color = rarityColor(def.rarity), .weight = .body } });
-        if (equipped_now) {
-            try out.append(gpa, .{ .text = .{ .x = row.x + row.w - 12, .y = row.y + 8, .text = "CARRIED", .color = acc, .weight = .label, .alignment = .right } });
-        }
-        const st = std.fmt.bufPrint(&gear_scratch[4 + i], "{s} · {s} · ATK {d} DEF {d} INI {d}", .{ slotLabel(def.slot), rarityLabel(def.rarity), def.attack, def.defense, def.initiative }) catch "";
-        try out.append(gpa, .{ .text = .{ .x = row.x + 12, .y = row.y + 28, .text = st, .color = .dust, .weight = .label } });
-        i += 1;
-    }
-
-    try drawNav(state, size, out, gpa);
-}
-
-/// RECORD -- what the war has done to you, and what it left behind.
-fn drawRecord(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
-    const faction = state.faction;
-    const acc = factionGlow(faction);
-    const edge = factionDeep(faction);
-
-    try panel(out, gpa, pad, 22, size.w - pad * 2, 44, edge, dim(acc, 180));
-    try out.append(gpa, .{ .text = .{ .x = pad + 12, .y = 37, .text = factionLabel(faction), .color = acc, .weight = .label } });
-    try out.append(gpa, .{ .text = .{ .x = size.w - pad - 12, .y = 37, .text = "RECORD", .color = .dust, .weight = .label, .alignment = .right } });
-
-    try out.append(gpa, .{ .text = .{ .x = pad, .y = 96, .text = "THE WAR, AS WRITTEN.", .color = .bone, .weight = .heading } });
-
-    // Standing -- level, experience, condition. Words where the law wants words, numbers where it
-    // permits them: these are all YOURS, and the privacy rules only ever protected OTHER people.
-    var y: i32 = 140;
-    const half = @divTrunc(size.w - pad * 2 - 8, 2);
-    try panel(out, gpa, pad, y, half, 56, edge, dim(acc, 150));
-    const lvl = std.fmt.bufPrint(&record_scratch[0], "LVL {d}", .{state.level}) catch "";
-    try out.append(gpa, .{ .text = .{ .x = pad + 12, .y = y + 10, .text = lvl, .color = acc, .weight = .label } });
-    const xp = std.fmt.bufPrint(&record_scratch[1], "{d} XP", .{state.total_xp}) catch "";
-    try out.append(gpa, .{ .text = .{ .x = pad + 12, .y = y + 30, .text = xp, .color = .smoke, .weight = .body } });
-    try panel(out, gpa, pad + half + 8, y, half, 56, edge, dim(acc, 150));
-    try out.append(gpa, .{ .text = .{ .x = pad + half + 20, .y = y + 10, .text = "CONDITION", .color = .grave, .weight = .label } });
-    try out.append(gpa, .{ .text = .{ .x = pad + half + 20, .y = y + 30, .text = conditionWord(state.hp), .color = .bone, .weight = .body } });
-
-    // LAST CONTACT -- the most recent thing the war did to you, kept after the debrief clears.
-    y += 72;
-    try out.append(gpa, .{ .text = .{ .x = pad, .y = y, .text = "LAST CONTACT", .color = .dust, .weight = .label } });
-    y += 16;
-    try panel(out, gpa, pad, y, size.w - pad * 2, 64, edge, dim(acc, 150));
-    if (state.encounter_xp > 0 or state.last_reward != .none) {
-        const src = if (state.encounter_source == .players) "the other side" else "the field";
-        const line1 = std.fmt.bufPrint(&record_scratch[2], "Contact with {s}.", .{src}) catch "";
-        const line2 = std.fmt.bufPrint(&record_scratch[3], "+{d} XP · {s}", .{ state.encounter_xp, rewardLabel(state.last_reward) }) catch "";
-        try out.append(gpa, .{ .text = .{ .x = pad + 12, .y = y + 12, .text = line1, .color = .bone, .weight = .body } });
-        try out.append(gpa, .{ .text = .{ .x = pad + 12, .y = y + 36, .text = line2, .color = .serum, .weight = .body } });
-    } else {
-        try out.append(gpa, .{ .text = .{ .x = pad + 12, .y = y + 12, .text = "Nothing has found you yet.", .color = .smoke, .weight = .body } });
-        try out.append(gpa, .{ .text = .{ .x = pad + 12, .y = y + 36, .text = "Stay where it can find you.", .color = .grave, .weight = .body } });
-    }
-
-    // RECOVERED -- evidence the war left in your hands. Not carried, not spent; kept.
-    y += 82;
-    try out.append(gpa, .{ .text = .{ .x = pad, .y = y, .text = "RECOVERED", .color = .dust, .weight = .label } });
-    y += 14;
-    var shown: u8 = 0;
-    for (loadout.catalogue) |def| {
-        if (def.slot != .evidence or !loadout.owns(state.owned, def.id)) continue;
-        if (y + 30 > size.h - nav_h - 10) break;
-        const fresh = state.last_item == @intFromEnum(def.id) and state.item_discovered;
-        try out.append(gpa, .{ .text = .{ .x = pad + 12, .y = y, .text = def.name, .color = rarityColor(def.rarity), .weight = .body } });
-        if (fresh) {
-            try out.append(gpa, .{ .text = .{ .x = size.w - pad - 12, .y = y, .text = "NEW", .color = acc, .weight = .label, .alignment = .right } });
-        }
-        y += 30;
-        shown += 1;
-    }
-    if (shown == 0) {
-        try out.append(gpa, .{ .text = .{ .x = pad + 12, .y = y, .text = "Nothing recovered yet.", .color = .grave, .weight = .body } });
-    }
-
-    try drawNav(state, size, out, gpa);
-}
-
 // ============================================================================ the boot sequence
 
 /// The phases, in milliseconds since the app opened.
@@ -2324,7 +2065,7 @@ fn drawScanlines(size: Size, insets: Insets, alpha: u8, out: *std.ArrayList(Draw
     }
 }
 
-fn factionLabel(faction: ?Faction) []const u8 {
+pub fn factionLabel(faction: ?Faction) []const u8 {
     const f = faction orelse return "";
     return switch (f) {
         .human => "HUMAN",
@@ -2384,19 +2125,17 @@ test "the fight reads the same to both sides" {
 
 test "the vow: arm, hold to commit, seal, and it cannot be taken back" {
     const size: Size = .{ .w = 380, .h = 760 };
-    const human = factionButton(size, .human);
-    const confirm = confirmButton(size);
 
     var state: State = .{ .screen = .choose_side, .now_ms = 1000 };
     try testing.expectEqual(Screen.choose_side, state.screen);
 
-    // Tapping a card ARMS it. It does not commit -- there is no faction yet.
-    state = touch(state, .{ .x = human.x + 10, .y = human.y + 10 }, size);
+    // Tapping a future ARMS it. It does not commit -- there is no faction yet.
+    state = act(state, .{ .arm = .human }, size);
     try testing.expectEqual(Faction.human, state.hovering.?);
     try testing.expectEqual(@as(?Faction, null), state.faction);
 
     // Pressing HOLD TO COMMIT begins the ceremony. It does not finish it.
-    state = press(state, .{ .x = confirm.x + 10, .y = confirm.y + 10 }, size);
+    state = act(state, .hold_begin, size);
     try testing.expect(state.holding_since != null);
     try testing.expectEqual(@as(?Faction, null), state.faction);
 
@@ -2420,37 +2159,35 @@ test "the vow: arm, hold to commit, seal, and it cannot be taken back" {
     var page: u8 = 0;
     while (page < briefing_pages.len) : (page += 1) {
         try testing.expectEqual(Screen.briefing, state.screen);
-        state = touch(state, .{ .x = 10, .y = 10 }, size);
+        state = act(state, .brief_next, size);
     }
     try testing.expectEqual(Screen.quiet, state.screen);
 
     // And there is no way back. Nothing returns you, and nothing changes the side -- the vow is
     // the one door that does not open from this side. The tab bar moves you between surfaces; it
     // does not move you between lives.
-    state = touch(state, .{ .x = 10, .y = 10 }, size);
+    state = act(state, .{ .dial = .{ .x = 10, .y = 10 } }, size);
     try testing.expectEqual(Screen.quiet, state.screen);
     try testing.expectEqual(Faction.human, state.faction.?);
-    state = touch(state, .{ .x = @divTrunc(size.w, 2), .y = size.h - 20 }, size);
+    state = act(state, .{ .nav = .gear }, size);
     try testing.expectEqual(Screen.gear, state.screen);
     try testing.expectEqual(Faction.human, state.faction.?);
-    state = touch(state, .{ .x = size.w - 10, .y = size.h - 20 }, size);
+    state = act(state, .{ .nav = .record }, size);
     try testing.expectEqual(Screen.record, state.screen);
-    state = touch(state, .{ .x = 10, .y = size.h - 20 }, size);
+    state = act(state, .{ .nav = .quiet }, size);
     try testing.expectEqual(Screen.quiet, state.screen);
 }
 
 test "the vow: releasing early leaves you free" {
     const size: Size = .{ .w = 380, .h = 760 };
-    const zombie = factionButton(size, .zombie);
-    const confirm = confirmButton(size);
 
     var state: State = .{ .screen = .choose_side, .now_ms = 500 };
-    state = touch(state, .{ .x = zombie.x + 10, .y = zombie.y + 10 }, size); // arm
-    state = press(state, .{ .x = confirm.x + 10, .y = confirm.y + 10 }, size); // begin the hold
+    state = act(state, .{ .arm = .zombie }, size); // arm
+    state = act(state, .hold_begin, size); // begin the hold
     try testing.expect(state.holding_since != null);
 
     // Lift the thumb before the ceremony finishes: the release cancels it.
-    state = touch(state, .{ .x = confirm.x + 10, .y = confirm.y + 10 }, size);
+    state = act(state, .hold_release, size);
     try testing.expectEqual(@as(?u32, null), state.holding_since);
 
     // Time passes, and nothing seals -- the hold was let go. Still armed, still free.
@@ -2462,17 +2199,40 @@ test "the vow: releasing early leaves you free" {
 
 test "the vow: no side armed, a press commits to nothing" {
     const size: Size = .{ .w = 380, .h = 760 };
-    const confirm = confirmButton(size);
 
     // No default, no pre-selection: a press on HOLD TO COMMIT with nothing armed begins no hold, so
     // the terminal waits forever and no side is ever sworn by accident (OPENING §2, the gravity).
     var state: State = .{ .screen = .choose_side, .now_ms = 0 };
-    state = press(state, .{ .x = confirm.x + 10, .y = confirm.y + 10 }, size);
+    state = act(state, .hold_begin, size);
     try testing.expectEqual(@as(?u32, null), state.holding_since);
 
     state = advance(state, hold_commit_ms * 5);
     try testing.expectEqual(@as(?Faction, null), state.faction);
     try testing.expectEqual(Screen.choose_side, state.screen);
+}
+
+test "the choosing is earned: futures and the vow stay inert until they have risen" {
+    // The machine speaks first. A tap that lands while the lines are still being said must not arm
+    // a life, and a press before the vow bar exists must not begin one -- a permanent choice is
+    // never made by a finger on a thing the player has not seen.
+    const size: Size = .{ .w = 380, .h = 760 };
+    var state: State = .{ .screen = .choose_side, .now_ms = 0, .choose_since = 0 };
+
+    state = act(state, .{ .arm = .human }, size);
+    try testing.expectEqual(@as(?Faction, null), state.hovering);
+    state = act(state, .hold_begin, size);
+    try testing.expectEqual(@as(?u32, null), state.holding_since);
+
+    // Once the futures have risen, they can be armed -- and the vow begins once the bar has risen.
+    state = advance(state, choose_halves_at + 400);
+    state = act(state, .{ .arm = .human }, size);
+    try testing.expectEqual(Faction.human, state.hovering.?);
+    state = act(state, .hold_begin, size);
+    try testing.expectEqual(@as(?u32, null), state.holding_since);
+
+    state = advance(state, choose_bar_at + 400);
+    state = act(state, .hold_begin, size);
+    try testing.expect(state.holding_since != null);
 }
 
 test "a restored faction skips the choice and wakes into the terminal" {
@@ -2535,8 +2295,7 @@ test "walking away changes nothing about the fight" {
     state = told(state, 60, 1, 0, 10, .zombies_winning, .a_few);
     try testing.expectEqual(Screen.live, state.screen);
 
-    const leave = leaveButton(size);
-    state = touch(state, .{ .x = leave.x + 4, .y = leave.y + 4 }, size);
+    state = act(state, .leave_live, size);
 
     try testing.expectEqual(Screen.quiet, state.screen);
 
@@ -2661,68 +2420,34 @@ test "THE CREDIT IS REACHABLE, AND IT NAMES THE PEOPLE" {
     // Left to a comment, this is the kind of thing that silently stops being true -- someone
     // reworks a screen, the line goes, and we are shipping someone else's music with no credit on
     // it. So it is a test, and it fails if the names leave the app.
-    const gpa = testing.allocator;
     const size: Size = .{ .w = 360, .h = 800 };
-
-    var out: std.ArrayList(Draw) = .empty;
-    defer out.deinit(gpa);
 
     // Reachable from the two screens a player looks at when nothing is happening.
     for ([_]State{
         .{ .screen = .choose_side },
         .{ .screen = .quiet, .faction = .human },
     }) |start| {
-        const link = creditsLink(size);
-        const opened = touch(start, .{ .x = link.x + 4, .y = link.y + 4 }, size);
-        try testing.expectEqual(Screen.credits, opened.screen);
+        try testing.expectEqual(Screen.credits, act(start, .credits_open, size).screen);
     }
 
     // NOT reachable from a live cell. A fight is not the moment to advertise the soundtrack, and a
     // licence obligation does not entitle us to interrupt the one thing the game is for.
     const fighting: State = .{ .screen = .live, .faction = .human };
-    const link = creditsLink(size);
-    try testing.expectEqual(Screen.live, touch(fighting, .{ .x = link.x + 4, .y = link.y + 4 }, size).screen);
+    try testing.expectEqual(Screen.live, act(fighting, .credits_open, size).screen);
 
-    // AND THE LINK MUST NOT SIT ON TOP OF A CONTROL THAT DOES EXIST THERE.
-    //
-    // The first version of it did: it overlapped "Walk away" on the live screen. It was invisible,
-    // because the link is not drawn during a fight -- so the only symptom would have been a tap
-    // that quietly did the wrong thing on the day someone moved either rectangle.
-    const leave = leaveButton(size);
-    const confirm = confirmButton(size);
-    try testing.expect(!overlaps(link, leave));
-    try testing.expect(!overlaps(link, confirm));
-
-    // And the screen itself carries the credits the licences actually require.
-    try draw(.{ .screen = .credits, .faction = .human }, size, .{}, &out, gpa);
-
-    var has_creator = false;
-    var has_site = false;
-    var has_licence = false;
-    var has_fonts = false;
-
-    for (out.items) |item| switch (item) {
-        .text => |t| {
-            if (std.mem.eql(u8, t.text, "Tim Beek")) has_creator = true;
-            if (std.mem.eql(u8, t.text, "timbeek.com")) has_site = true;
-            if (std.mem.indexOf(u8, t.text, "CC BY 4.0") != null) has_licence = true;
-            if (std.mem.indexOf(u8, t.text, "Open Font License") != null) has_fonts = true;
-        },
-        .rect, .sprite => {},
-    };
-
-    try testing.expect(has_creator);
-    try testing.expect(has_site);
-    try testing.expect(has_licence); // CC BY also requires us to say whether we changed the work
-    try testing.expect(has_fonts);
+    // And the copy itself carries the credits the licences actually require. It lives as DATA the
+    // shell renders -- if the names leave the app, this fails.
+    try testing.expectEqualStrings("Tim Beek", credits.music_author);
+    try testing.expectEqualStrings("timbeek.com", credits.music_site);
+    try testing.expect(std.mem.indexOf(u8, credits.music_licence, "CC BY 4.0") != null); // also says whether we changed it
+    try testing.expect(std.mem.indexOf(u8, credits.font_licence, "Open Font License") != null);
 
     // And there is a way out. A screen you cannot leave is a screen nobody opens twice.
-    const back = backButton(size);
-    const left = touch(.{ .screen = .credits, .faction = .human }, .{ .x = back.x + 4, .y = back.y + 4 }, size);
+    const left = act(.{ .screen = .credits, .faction = .human }, .credits_back, size);
     try testing.expectEqual(Screen.quiet, left.screen);
 
     // Reading the credits is not a way to skip choosing a side.
-    const undecided = touch(.{ .screen = .credits, .faction = null }, .{ .x = back.x + 4, .y = back.y + 4 }, size);
+    const undecided = act(.{ .screen = .credits, .faction = null }, .credits_back, size);
     try testing.expectEqual(Screen.choose_side, undecided.screen);
     try testing.expectEqual(@as(?Faction, null), undecided.faction);
 }
@@ -2777,13 +2502,13 @@ test "EVERY MILLISECOND OF THE BOOT SEQUENCE, NOT A SAMPLE OF THEM" {
 
     // A tap at 900ms is a tap DURING the terminal boot, and the invitation has not been extended
     // yet. It does nothing -- the game is still introducing itself.
-    const too_early = touch(.{ .screen = .boot, .boot_ms = boot_wake_ms + 900 }, .{ .x = 10, .y = 10 }, .{ .w = 360, .h = 800 });
+    const too_early = act(.{ .screen = .boot, .boot_ms = boot_wake_ms + 900 }, .enter, .{ .w = 360, .h = 800 });
     try testing.expectEqual(Screen.boot, too_early.screen);
     try testing.expectEqual(@as(?u32, null), too_early.leaving_ms);
 
     // Once the sequence has finished, it begins the exit rather than jumping.
     const offered = boot_wake_ms + boot_settle_end + 10;
-    const tapped = touch(.{ .screen = .boot, .boot_ms = offered }, .{ .x = 10, .y = 10 }, .{ .w = 360, .h = 800 });
+    const tapped = act(.{ .screen = .boot, .boot_ms = offered }, .enter, .{ .w = 360, .h = 800 });
     try testing.expectEqual(Screen.boot, tapped.screen);
     try testing.expectEqual(@as(?u32, offered), tapped.leaving_ms);
 }
@@ -2916,27 +2641,27 @@ test "THE BOOT SEQUENCE IS A PURE FUNCTION OF A MILLISECOND" {
     // exists rather than the ending being done inside `touch`.
     // THE TAP DOES NOT WORK UNTIL THE SEQUENCE HAS FINISHED. "Tap to enter" is an invitation, and
     // it is not extended until the screen has said everything it has to say.
-    const too_soon = touch(.{ .screen = .boot, .boot_ms = boot_wake_ms + 200 }, .{ .x = 100, .y = 100 }, size);
+    const too_soon = act(.{ .screen = .boot, .boot_ms = boot_wake_ms + 200 }, .enter, size);
     try testing.expectEqual(@as(?u32, null), too_soon.leaving_ms);
     try testing.expectEqual(Screen.boot, advance(too_soon, 900).screen);
 
-    const mid_infection = touch(.{ .screen = .boot, .boot_ms = boot_wake_ms + boot_infection_end - 1 }, .{ .x = 100, .y = 100 }, size);
+    const mid_infection = act(.{ .screen = .boot, .boot_ms = boot_wake_ms + boot_infection_end - 1 }, .enter, size);
     try testing.expectEqual(@as(?u32, null), mid_infection.leaving_ms);
 
     // Once it IS offered, the tap begins the ending -- it does not jump. The four hundred
     // milliseconds after it are not touches, which is why `advance` exists at all.
     const ready = boot_wake_ms + boot_settle_end + 500;
-    const tapped = touch(.{ .screen = .boot, .boot_ms = ready }, .{ .x = 100, .y = 100 }, size);
+    const tapped = act(.{ .screen = .boot, .boot_ms = ready }, .enter, size);
     try testing.expectEqual(Screen.boot, tapped.screen);
     try testing.expectEqual(@as(?u32, ready), tapped.leaving_ms);
     try testing.expectEqual(Screen.choose_side, advance(tapped, ready + boot_exit_ms).screen);
 
     // A returning player, who has already chosen, lands back in the quiet.
-    const returning = touch(.{ .screen = .boot, .boot_ms = ready, .faction = .human }, .{ .x = 100, .y = 100 }, size);
+    const returning = act(.{ .screen = .boot, .boot_ms = ready, .faction = .human }, .enter, size);
     try testing.expectEqual(Screen.quiet, advance(returning, ready + boot_exit_ms).screen);
 
     // Tapping twice does not restart the exit. The player is already leaving.
-    const twice = touch(tapped, .{ .x = 50, .y = 50 }, size);
+    const twice = act(tapped, .enter, size);
     try testing.expectEqual(@as(?u32, ready), twice.leaving_ms);
 }
 
@@ -3147,7 +2872,7 @@ test "THE SCREEN WAKES BEFORE IT SPEAKS" {
     try testing.expect(anyText(out.items));
 
     // And a tap during the wake does nothing. There is not yet anything to skip.
-    const early = touch(.{ .screen = .boot, .boot_ms = 100 }, .{ .x = 10, .y = 10 }, size);
+    const early = act(.{ .screen = .boot, .boot_ms = 100 }, .enter, size);
     try testing.expectEqual(@as(?u32, null), early.leaving_ms);
 }
 
