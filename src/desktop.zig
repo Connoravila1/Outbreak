@@ -83,21 +83,21 @@ fn outbreakTheme() dvui.Theme {
         .name = "outbreak",
         .dark = true,
         .focus = c(.human_glow),
-        .fill = c(.void_black),
-        .fill_hover = c(.ash),
+        .fill = c(.surface),
+        .fill_hover = c(.surface_hi),
         .fill_press = c(.clot),
-        .text = c(.bone),
-        .text_hover = c(.bone),
-        .text_press = c(.bone),
-        .border = c(.grave),
+        .text = c(.ink),
+        .text_hover = c(.ink),
+        .text_press = c(.ink),
+        .border = c(.edge),
         .control = .{
-            .fill = c(.carrion),
-            .fill_hover = c(.ash),
+            .fill = c(.surface),
+            .fill_hover = c(.surface_hi),
             .fill_press = c(.clot),
-            .text = c(.bone),
-            .border = c(.grave),
+            .text = c(.ink),
+            .border = c(.edge),
         },
-        .window = .{ .fill = c(.void_black), .text = c(.bone), .border = c(.grave) },
+        .window = .{ .fill = c(.canvas), .text = c(.ink), .border = c(.edge) },
         .highlight = .{ .fill = c(.human_deep), .text = c(.bone) },
         .err = .{ .fill = c(.clot), .text = c(.bone) },
         .font_body = .find(.{ .family = "Inter", .size = 16 }),
@@ -651,22 +651,22 @@ fn cardOpts() dvui.Options {
         .expand = .horizontal,
         .padding = .{ .x = 16, .y = 14, .w = 16, .h = 14 },
         .background = true,
-        .color_fill = toColor(ui.dim(.char_deep, 235)),
+        .color_fill = toColor(.surface),
         .border = .all(1),
-        .color_border = toColor(ui.dim(.bone, 22)),
+        .color_border = toColor(ui.dim(.edge, 160)),
         .corner_radius = .all(14),
         .box_shadow = .{ .color = .black, .offset = .{ .x = 0, .y = 5 }, .fade = 16, .alpha = 0.5 },
     };
 }
 
-/// A pill: fully rounded, used for the status capsule and the nav segments' home.
+/// A pill: fully rounded, used for the status capsule.
 fn pillOpts() dvui.Options {
     return .{
         .padding = .{ .x = 14, .y = 8, .w = 14, .h = 8 },
         .background = true,
-        .color_fill = toColor(ui.dim(.char_deep, 238)),
+        .color_fill = toColor(ui.dim(.surface, 245)),
         .border = .all(1),
-        .color_border = toColor(ui.dim(.bone, 22)),
+        .color_border = toColor(ui.dim(.edge, 200)),
         .corner_radius = .all(1000),
         .box_shadow = .{ .color = .black, .offset = .{ .x = 0, .y = 3 }, .fade = 10, .alpha = 0.45 },
     };
@@ -753,7 +753,7 @@ fn creditsTop(size: ui.Size) void {
     defer top.deinit();
     if (dvui.labelClick(@src(), "Music: Tim Beek", .{}, .{}, .{
         .font = fontFor(.label),
-        .color_text = toColor(.grave),
+        .color_text = toColor(.faint_txt),
         .gravity_x = 1.0,
         .padding = .{},
     })) {
@@ -771,43 +771,52 @@ fn statusPill() void {
     defer pill.deinit();
     const acc = ui.factionGlow(state.faction);
     iconW(@src(), dvui.entypo.location_pin, acc, .{ .min_size_content = .{ .h = 16 } });
-    labelW(@src(), ui.factionLabel(state.faction), .label, .bone, .{ .margin = .{ .x = 8 } });
+    labelW(@src(), ui.factionLabel(state.faction), .label, .ink, .{ .margin = .{ .x = 8 } });
 }
 
-/// THE TAB BAR -- a segmented control floating over the map's lower edge: one glass pill, three
-/// segments, the active one filled in the faction's colour. The toolkit owns hover and press.
+/// THE TAB BAR -- a real bottom bar: solid surface, a hairline of edge across the top, three
+/// tabs that are icon-over-word the way a real app's are. Active tab glows in the faction colour.
 fn navBar(size: ui.Size) void {
-    var bar = dvui.box(@src(), .{ .dir = .horizontal }, pillOpts().override(.{
-        .rect = nat(14, size.h - ui.nav_h - 6, size.w - 28, ui.nav_h - 10),
-        .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
+    var bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .rect = nat(0, size.h - ui.nav_h, size.w, ui.nav_h),
+        .background = true,
+        .color_fill = toColor(.surface),
+        .border = .{ .x = 0, .y = 1, .w = 0, .h = 0 },
+        .color_border = toColor(.edge),
+        .padding = .{ .y = 8 },
         .name = "nav",
-    }));
+    });
     defer bar.deinit();
 
-    const acc = ui.factionGlow(state.faction);
-    const tabs = [_]struct { name: []const u8, scr: ui.Screen }{
-        .{ .name = "HERE", .scr = .quiet },
-        .{ .name = "GEAR", .scr = .gear },
-        .{ .name = "RECORD", .scr = .record },
+    const acc = ui.factionBright(state.faction);
+    const tabs = [_]struct { name: []const u8, scr: ui.Screen, glyph: []const u8 }{
+        .{ .name = "HERE", .scr = .quiet, .glyph = dvui.entypo.compass },
+        .{ .name = "GEAR", .scr = .gear, .glyph = dvui.entypo.suitcase },
+        .{ .name = "RECORD", .scr = .record, .glyph = dvui.entypo.text_document },
     };
     for (tabs, 0..) |t, i| {
         const active = state.screen == t.scr;
-        if (dvui.button(@src(), t.name, .{}, .{
+        const fg: ui.Color = if (active) acc else .faint_txt;
+
+        var bw: dvui.ButtonWidget = undefined;
+        bw.init(@src(), .{}, .{
             .id_extra = i,
-            // .both splits the pill into thirds; a non-edge gravity would turn the child into an
-            // overlay and stack all three on top of each other.
             .expand = .both,
-            .font = fontFor(.label),
-            .color_text = if (active) toColor(.bone) else toColor(.dust),
-            .color_text_hover = toColor(.bone),
-            .color_fill = if (active) toColor(ui.dim(acc, 110)) else toColor(ui.dim(.char_deep, 0)),
-            .color_fill_hover = toColor(ui.dim(acc, 60)),
-            .color_fill_press = toColor(acc),
-            .color_text_press = toColor(.void_black),
-            .corner_radius = .all(1000),
-        })) {
-            state = ui.act(state, .{ .nav = t.scr }, size);
-        }
+            .color_fill = toColor(.surface),
+            .color_fill_hover = toColor(.surface_hi),
+            .color_fill_press = toColor(.surface_hi),
+            .corner_radius = .all(10),
+        });
+        defer bw.deinit();
+        bw.processEvents();
+        bw.drawBackground();
+        const clicked = bw.clicked();
+
+        var col = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .background = false });
+        iconW(@src(), t.glyph, fg, .{ .min_size_content = .{ .h = 18 }, .gravity_x = 0.5 });
+        labelW(@src(), t.name, .label, fg, .{ .gravity_x = 0.5, .margin = .{ .y = 3 } });
+        col.deinit();
+        if (clicked) state = ui.act(state, .{ .nav = t.scr }, size);
     }
 }
 
@@ -819,9 +828,9 @@ fn quietSheet(size: ui.Size) void {
         .rect = nat(0, sy, size.w, 190),
         .padding = .{ .x = 22, .y = 10, .w = 22, .h = 16 },
         .background = true,
-        .color_fill = toColor(ui.dim(.char_deep, 246)),
+        .color_fill = toColor(ui.dim(.surface_hi, 250)),
         .border = .all(1),
-        .color_border = toColor(ui.dim(.bone, 20)),
+        .color_border = toColor(ui.dim(.edge, 160)),
         // {x=topleft, y=topright, w=botright, h=botleft} -- a sheet rounds only its top edge.
         .corner_radius = .{ .x = 20, .y = 20, .w = 0, .h = 0 },
         .box_shadow = .{ .color = .black, .offset = .{ .x = 0, .y = -4 }, .fade = 18, .alpha = 0.55 },
@@ -835,7 +844,7 @@ fn quietSheet(size: ui.Size) void {
         .gravity_x = 0.5,
         .margin = .{ .y = 4 },
         .background = true,
-        .color_fill = toColor(.ash),
+        .color_fill = toColor(.edge),
         .corner_radius = .all(1000),
     });
     handle.deinit();
@@ -847,26 +856,26 @@ fn quietSheet(size: ui.Size) void {
     // The condition, as a chip.
     var chip = dvui.box(@src(), .{}, .{
         .background = true,
-        .color_fill = toColor(ui.dim(acc, 46)),
+        .color_fill = toColor(ui.dim(acc, 55)),
         .border = .all(1),
-        .color_border = toColor(ui.dim(acc, 90)),
+        .color_border = toColor(ui.dim(acc, 120)),
         .corner_radius = .all(1000),
         .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
     });
-    labelW(@src(), ui.conditionWord(state.hp), .label, .bone, .{});
+    labelW(@src(), ui.conditionWord(state.hp), .label, .ink, .{});
     chip.deinit();
     row.deinit();
 
-    labelW(@src(), "The room is quiet.", .body, .smoke, .{ .margin = .{ .y = 6 } });
-    labelW(@src(), "It won't stay that way.", .body, .grave, .{ .margin = .{ .y = 2 } });
+    labelW(@src(), "The room is quiet.", .body, .sub, .{ .margin = .{ .y = 6 } });
+    labelW(@src(), "It won't stay that way.", .body, .faint_txt, .{ .margin = .{ .y = 2 } });
 }
 
 /// THE BANNER, live -- the alarm card at the top of the map.
 fn liveBanner(size: ui.Size) void {
     var card = dvui.box(@src(), .{ .dir = .vertical }, cardOpts().override(.{
         .rect = nat(10, 84, size.w - 20, 164),
-        .color_fill = toColor(ui.dim(.char_deep, 240)),
-        .color_border = toColor(ui.dim(.wound, 90)),
+        .color_fill = toColor(ui.dim(.surface, 246)),
+        .color_border = toColor(ui.dim(.wound, 110)),
     }));
     defer card.deinit();
 
@@ -879,12 +888,12 @@ fn liveBanner(size: ui.Size) void {
     const first = crowd.next().?;
     if (crowd.next()) |rest| {
         const joined = std.fmt.allocPrint(dvui.currentWindow().arena(), "{s},", .{first}) catch first;
-        labelW(@src(), joined, .body, .bone, .{ .margin = .{ .y = 10 } });
-        labelW(@src(), rest, .body, .bone, .{});
+        labelW(@src(), joined, .body, .ink, .{ .margin = .{ .y = 10 } });
+        labelW(@src(), rest, .body, .ink, .{});
     } else {
-        labelW(@src(), first, .body, .bone, .{ .margin = .{ .y = 10 } });
+        labelW(@src(), first, .body, .ink, .{ .margin = .{ .y = 10 } });
     }
-    labelW(@src(), ui.momentumSentence(state.momentum, state.faction orelse .human), .label, .serum, .{ .margin = .{ .y = 12 }, .gravity_x = 1.0 });
+    labelW(@src(), ui.momentumSentence(state.momentum, state.faction orelse .human), .label, .amber, .{ .margin = .{ .y = 12 }, .gravity_x = 1.0 });
 }
 
 /// THE SHEET, live -- what you know, and the way out.
@@ -894,9 +903,9 @@ fn liveSheet(size: ui.Size) void {
         .rect = nat(0, sy, size.w, 268),
         .padding = .{ .x = 22, .y = 10, .w = 22, .h = 26 },
         .background = true,
-        .color_fill = toColor(ui.dim(.char_deep, 246)),
+        .color_fill = toColor(ui.dim(.surface_hi, 250)),
         .border = .all(1),
-        .color_border = toColor(ui.dim(.bone, 20)),
+        .color_border = toColor(ui.dim(.edge, 160)),
         .corner_radius = .{ .x = 20, .y = 20, .w = 0, .h = 0 },
         .box_shadow = .{ .color = .black, .offset = .{ .x = 0, .y = -4 }, .fade = 18, .alpha = 0.55 },
         .name = "sheet_live",
@@ -908,19 +917,19 @@ fn liveSheet(size: ui.Size) void {
         .gravity_x = 0.5,
         .margin = .{ .y = 4 },
         .background = true,
-        .color_fill = toColor(.ash),
+        .color_fill = toColor(.edge),
         .corner_radius = .all(1000),
     });
     handle.deinit();
 
-    labelW(@src(), "WHAT YOU KNOW", .label, .grave, .{ .margin = .{ .y = 8 } });
+    labelW(@src(), "WHAT YOU KNOW", .label, .faint_txt, .{ .margin = .{ .y = 8 } });
     var i: u8 = 0;
     while (i < state.tell_count) : (i += 1) {
         var parts = std.mem.splitSequence(u8, state.tells[i], ", ");
         const head_s = parts.next().?;
-        labelW(@src(), head_s, .label, .smoke, .{ .margin = .{ .y = 2 }, .id_extra = i });
+        labelW(@src(), head_s, .label, .sub, .{ .margin = .{ .y = 2 }, .id_extra = i });
         if (parts.next()) |rest| {
-            labelW(@src(), rest, .label, .smoke, .{ .margin = .{ .y = 0 }, .id_extra = i + 100 });
+            labelW(@src(), rest, .label, .sub, .{ .margin = .{ .y = 0 }, .id_extra = i + 100 });
         }
     }
 
@@ -930,12 +939,12 @@ fn liveSheet(size: ui.Size) void {
         .font = fontFor(.label),
         .padding = .{ .y = 14 },
         .margin = .{ .y = 6 },
-        .color_fill = toColor(ui.dim(.ash, 90)),
-        .color_fill_hover = toColor(.ash),
+        .color_fill = toColor(.surface),
+        .color_fill_hover = toColor(.surface_hi),
         .color_fill_press = toColor(.wound),
-        .color_text = toColor(.bone),
+        .color_text = toColor(.ink),
         .border = .all(1),
-        .color_border = toColor(.ash),
+        .color_border = toColor(.edge),
         .corner_radius = .all(12),
     })) {
         state = ui.act(state, .leave_live, size);
@@ -955,7 +964,7 @@ fn briefingChrome(size: ui.Size) void {
     defer outer.deinit();
 
     var head = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
-    labelW(@src(), "FIELD BRIEFING", .label, .grave, .{});
+    labelW(@src(), "FIELD BRIEFING", .label, .faint_txt, .{});
     _ = dvui.spacer(@src(), .{ .expand = .horizontal });
     labelW(@src(), ui.factionLabel(faction), .label, ui.factionGlow(faction), .{});
     head.deinit();
@@ -975,7 +984,7 @@ fn briefingChrome(size: ui.Size) void {
         lw.deinit();
     }
     for (page.lines, 0..) |l, i| {
-        labelW(@src(), l, .body, .smoke, .{ .margin = .{ .y = 3 }, .id_extra = i });
+        labelW(@src(), l, .body, .sub, .{ .margin = .{ .y = 3 }, .id_extra = i });
     }
     card.deinit();
 
@@ -989,7 +998,7 @@ fn briefingChrome(size: ui.Size) void {
             .id_extra = i,
             .min_size_content = .{ .w = if (i == state.brief_page) 22 else 8, .h = 8 },
             .background = true,
-            .color_fill = toColor(if (i == state.brief_page) ui.factionGlow(faction) else .ash),
+            .color_fill = toColor(if (i == state.brief_page) ui.factionGlow(faction) else .edge),
             .corner_radius = .all(1000),
             .margin = .{ .x = 4 },
         });
@@ -1006,7 +1015,7 @@ fn briefingChrome(size: ui.Size) void {
         .color_fill_hover = toColor(ui.factionGlow(faction)),
         .color_fill_press = toColor(ui.factionBright(faction)),
         .color_text = toColor(.bone),
-        .color_text_press = toColor(.void_black),
+        .color_text_press = toColor(.canvas),
         .corner_radius = .all(12),
         .box_shadow = .{ .color = .black, .offset = .{ .x = 0, .y = 3 }, .fade = 10, .alpha = 0.4 },
     })) {
@@ -1021,19 +1030,20 @@ fn gearScreen(size: ui.Size, arena: std.mem.Allocator) void {
 
     var page = dvui.box(@src(), .{ .dir = .vertical }, .{
         .rect = nat(0, 0, size.w, size.h - ui.nav_h),
-        .padding = .{ .x = 22, .y = 40, .w = 22, .h = 10 },
-        .background = false,
+        .padding = .{ .x = 18, .y = 34, .w = 18, .h = 10 },
+        .background = true,
+        .color_fill = toColor(.canvas),
     });
     defer page.deinit();
 
     var head = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
-    labelW(@src(), ui.factionLabel(faction), .label, .smoke, .{});
+    labelW(@src(), ui.factionLabel(faction), .label, .sub, .{});
     _ = dvui.spacer(@src(), .{ .expand = .horizontal });
-    labelW(@src(), "GEAR", .label, .dust, .{});
+    labelW(@src(), "GEAR", .label, .faint_txt, .{});
     head.deinit();
 
-    labelW(@src(), "CARRIED", .label, .dust, .{ .margin = .{ .y = 18 } });
-    _ = dvui.separator(@src(), .{ .expand = .horizontal, .color_fill = toColor(.grave) });
+    labelW(@src(), "CARRIED", .label, .faint_txt, .{ .margin = .{ .y = 18 } });
+    _ = dvui.separator(@src(), .{ .expand = .horizontal, .color_fill = toColor(.faint_txt) });
 
     const slots = [_]struct { label: []const u8, id: loadout.ItemId }{
         .{ .label = "WEAPON", .id = state.equipped.weapon },
@@ -1044,23 +1054,23 @@ fn gearScreen(size: ui.Size, arena: std.mem.Allocator) void {
     for (slots, 0..) |slot, i| {
         const def = loadout.definition(slot.id);
         var row = dvui.box(@src(), .{ .dir = .horizontal }, cardOpts().override(.{ .id_extra = i, .margin = .{ .y = 5 } }));
-        iconW(@src(), slot_glyph[i], ui.dim(acc, 200), .{ .min_size_content = .{ .h = 20 } });
-        labelW(@src(), slot.label, .label, .grave, .{ .min_size_content = .{ .w = 70 }, .margin = .{ .x = 12 } });
-        var mid = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .background = false });
-        labelW(@src(), def.name, .body, .bone, .{});
+        iconW(@src(), slot_glyph[i], ui.dim(acc, 200), .{ .min_size_content = .{ .h = 22 }, .gravity_y = 0.5 });
+        var mid = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .margin = .{ .x = 14 }, .background = false });
+        labelW(@src(), slot.label, .label, .faint_txt, .{});
+        labelW(@src(), def.name, .body, .ink, .{ .margin = .{ .y = 3 } });
         const st = std.fmt.allocPrint(arena, "ATK {d}  DEF {d}  INI {d}", .{ def.attack, def.defense, def.initiative }) catch "";
-        labelW(@src(), st, .label, ui.dim(acc, 200), .{ .margin = .{ .y = 2 } });
+        labelW(@src(), st, .label, ui.dim(acc, 200), .{ .margin = .{ .y = 1 } });
         mid.deinit();
         row.deinit();
     }
 
     var inv_head = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .y = 16 } });
-    labelW(@src(), "INVENTORY", .label, .dust, .{});
+    labelW(@src(), "INVENTORY", .label, .faint_txt, .{});
     _ = dvui.spacer(@src(), .{ .expand = .horizontal });
     const cap = std.fmt.allocPrint(arena, "{d} / {d}", .{ loadout.equipmentCount(state.owned), state.inventory_capacity }) catch "";
-    labelW(@src(), cap, .label, .grave, .{});
+    labelW(@src(), cap, .label, .faint_txt, .{});
     inv_head.deinit();
-    _ = dvui.separator(@src(), .{ .expand = .horizontal, .color_fill = toColor(.grave) });
+    _ = dvui.separator(@src(), .{ .expand = .horizontal, .color_fill = toColor(.faint_txt) });
 
     // The stock, scrollable. A row is a button -- a tap asks to carry it.
     var scroller = dvui.scrollArea(@src(), .{}, .{ .expand = .both });
@@ -1078,11 +1088,11 @@ fn gearScreen(size: ui.Size, arena: std.mem.Allocator) void {
             .expand = .horizontal,
             .margin = .{ .y = 5 },
             .padding = .{ .x = 14, .y = 12, .w = 14, .h = 12 },
-            .color_fill = toColor(ui.dim(.char_deep, 235)),
-            .color_fill_hover = toColor(.ash),
+            .color_fill = toColor(.surface),
+            .color_fill_hover = toColor(.surface_hi),
             .color_fill_press = toColor(ui.factionDeep(faction)),
             .border = .all(1),
-            .color_border = toColor(ui.dim(.bone, 22)),
+            .color_border = toColor(ui.dim(.edge, 160)),
             .corner_radius = .all(14),
             .box_shadow = .{ .color = .black, .offset = .{ .x = 0, .y = 4 }, .fade = 12, .alpha = 0.4 },
         });
@@ -1105,7 +1115,7 @@ fn gearScreen(size: ui.Size, arena: std.mem.Allocator) void {
         }
         namerow.deinit();
         const det = std.fmt.allocPrint(arena, "{s} · {s} · ATK {d} DEF {d} INI {d}", .{ ui.slotLabel(def.slot), ui.rarityLabel(def.rarity), def.attack, def.defense, def.initiative }) catch "";
-        labelW(@src(), det, .label, .grave, .{});
+        labelW(@src(), det, .label, .faint_txt, .{});
         col.deinit();
         if (clicked) state = ui.act(state, .{ .equip = def.id }, size);
     }
@@ -1118,18 +1128,19 @@ fn recordScreen(size: ui.Size, arena: std.mem.Allocator) void {
 
     var page = dvui.box(@src(), .{ .dir = .vertical }, .{
         .rect = nat(0, 0, size.w, size.h - ui.nav_h),
-        .padding = .{ .x = 22, .y = 40, .w = 22, .h = 10 },
-        .background = false,
+        .padding = .{ .x = 18, .y = 34, .w = 18, .h = 10 },
+        .background = true,
+        .color_fill = toColor(.canvas),
     });
     defer page.deinit();
 
     var head = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
-    labelW(@src(), ui.factionLabel(faction), .label, .smoke, .{});
+    labelW(@src(), ui.factionLabel(faction), .label, .sub, .{});
     _ = dvui.spacer(@src(), .{ .expand = .horizontal });
-    labelW(@src(), "RECORD", .label, .dust, .{});
+    labelW(@src(), "RECORD", .label, .faint_txt, .{});
     head.deinit();
 
-    labelW(@src(), "THE WAR, AS WRITTEN.", .heading, .bone, .{ .margin = .{ .y = 22 } });
+    labelW(@src(), "THE WAR, AS WRITTEN.", .heading, .ink, .{ .margin = .{ .y = 22 } });
 
     const card = cardOpts();
 
@@ -1137,29 +1148,29 @@ fn recordScreen(size: ui.Size, arena: std.mem.Allocator) void {
     var left = dvui.box(@src(), .{ .dir = .vertical }, card.override(.{ .margin = .{ .w = 4 } }));
     labelW(@src(), "STANDING", .label, acc, .{});
     const lvl = std.fmt.allocPrint(arena, "LVL {d} · {d} XP", .{ state.level, state.total_xp }) catch "";
-    labelW(@src(), lvl, .body, .bone, .{});
+    labelW(@src(), lvl, .body, .ink, .{});
     left.deinit();
     var right = dvui.box(@src(), .{ .dir = .vertical }, card.override(.{ .margin = .{ .x = 4 } }));
-    labelW(@src(), "CONDITION", .label, .grave, .{});
-    labelW(@src(), ui.conditionWord(state.hp), .body, .bone, .{});
+    labelW(@src(), "CONDITION", .label, .faint_txt, .{});
+    labelW(@src(), ui.conditionWord(state.hp), .body, .ink, .{});
     right.deinit();
     stats.deinit();
 
-    labelW(@src(), "LAST CONTACT", .label, .dust, .{ .margin = .{ .y = 14 } });
+    labelW(@src(), "LAST CONTACT", .label, .faint_txt, .{ .margin = .{ .y = 14 } });
     var contact = dvui.box(@src(), .{ .dir = .vertical }, card);
     if (state.encounter_xp > 0 or state.last_reward != .none) {
         const src = if (state.encounter_source == .players) "the other side" else "the field";
         const line1 = std.fmt.allocPrint(arena, "Contact with {s}.", .{src}) catch "";
         const line2 = std.fmt.allocPrint(arena, "+{d} XP · {s}", .{ state.encounter_xp, ui.rewardLabel(state.last_reward) }) catch "";
-        labelW(@src(), line1, .body, .bone, .{});
+        labelW(@src(), line1, .body, .ink, .{});
         labelW(@src(), line2, .body, .serum, .{ .margin = .{ .y = 4 } });
     } else {
-        labelW(@src(), "Nothing has found you yet.", .body, .smoke, .{});
-        labelW(@src(), "Stay where it can find you.", .body, .grave, .{ .margin = .{ .y = 4 } });
+        labelW(@src(), "Nothing has found you yet.", .body, .sub, .{});
+        labelW(@src(), "Stay where it can find you.", .body, .faint_txt, .{ .margin = .{ .y = 4 } });
     }
     contact.deinit();
 
-    labelW(@src(), "RECOVERED", .label, .dust, .{ .margin = .{ .y = 14 } });
+    labelW(@src(), "RECOVERED", .label, .faint_txt, .{ .margin = .{ .y = 14 } });
     var shown: u8 = 0;
     for (loadout.catalogue, 0..) |def, i| {
         if (def.slot != .evidence or !loadout.owns(state.owned, def.id)) continue;
@@ -1174,7 +1185,7 @@ fn recordScreen(size: ui.Size, arena: std.mem.Allocator) void {
     }
     if (shown == 0) {
         var empty = dvui.box(@src(), .{ .dir = .vertical }, card);
-        labelW(@src(), "Nothing recovered yet.", .body, .grave, .{});
+        labelW(@src(), "Nothing recovered yet.", .body, .faint_txt, .{});
         empty.deinit();
     }
 }
@@ -1183,32 +1194,33 @@ fn recordScreen(size: ui.Size, arena: std.mem.Allocator) void {
 fn creditsScreen(size: ui.Size) void {
     var page = dvui.box(@src(), .{ .dir = .vertical }, .{
         .rect = nat(0, 0, size.w, size.h),
-        .padding = .{ .x = 22, .y = 40, .w = 22, .h = 40 },
-        .background = false,
+        .padding = .{ .x = 18, .y = 34, .w = 18, .h = 40 },
+        .background = true,
+        .color_fill = toColor(.canvas),
     });
     defer page.deinit();
 
-    labelW(@src(), "CREDITS", .label, .dust, .{ .margin = .{ .y = 20 } });
+    labelW(@src(), "CREDITS", .label, .faint_txt, .{ .margin = .{ .y = 20 } });
 
-    labelW(@src(), ui.credits.music_head, .heading, .bone, .{ .margin = .{ .y = 12 } });
-    labelW(@src(), ui.credits.music_title, .body, .smoke, .{});
-    labelW(@src(), ui.credits.music_author, .body, .bone, .{});
-    labelW(@src(), ui.credits.music_site, .body, .dust, .{});
-    labelW(@src(), ui.credits.music_licence, .body, .dust, .{});
-    labelW(@src(), ui.credits.music_modified, .body, .dust, .{});
+    labelW(@src(), ui.credits.music_head, .heading, .ink, .{ .margin = .{ .y = 12 } });
+    labelW(@src(), ui.credits.music_title, .body, .sub, .{});
+    labelW(@src(), ui.credits.music_author, .body, .ink, .{});
+    labelW(@src(), ui.credits.music_site, .body, .faint_txt, .{});
+    labelW(@src(), ui.credits.music_licence, .body, .faint_txt, .{});
+    labelW(@src(), ui.credits.music_modified, .body, .faint_txt, .{});
 
-    labelW(@src(), ui.credits.type_head, .heading, .bone, .{ .margin = .{ .y = 28 } });
-    labelW(@src(), ui.credits.font_oxanium, .body, .smoke, .{});
-    labelW(@src(), ui.credits.font_inter, .body, .smoke, .{});
-    labelW(@src(), ui.credits.font_licence, .body, .dust, .{});
+    labelW(@src(), ui.credits.type_head, .heading, .ink, .{ .margin = .{ .y = 28 } });
+    labelW(@src(), ui.credits.font_oxanium, .body, .sub, .{});
+    labelW(@src(), ui.credits.font_inter, .body, .sub, .{});
+    labelW(@src(), ui.credits.font_licence, .body, .faint_txt, .{});
 
     _ = dvui.spacer(@src(), .{ .expand = .vertical });
     if (dvui.button(@src(), "BACK", .{}, .{
         .expand = .horizontal,
         .font = fontFor(.label),
         .padding = .{ .y = 16 },
-        .color_fill = toColor(.carrion),
-        .color_fill_hover = toColor(.ash),
+        .color_fill = toColor(.surface),
+        .color_fill_hover = toColor(.surface_hi),
         .color_text = toColor(.bone),
         .corner_radius = .all(0),
     })) {
@@ -1224,13 +1236,13 @@ fn liveChrome(size: ui.Size) void {
         .expand = .both,
         .font = fontFor(.label),
         .gravity_x = 0.5, .gravity_y = 0.5,
-        .color_fill = toColor(.void_black),
+        .color_fill = toColor(.canvas),
         .color_fill_hover = toColor(.clot),
         .color_text = toColor(.smoke),
         .color_text_hover = toColor(.bone),
         .corner_radius = .all(0),
         .border = .all(1),
-        .color_border = toColor(.grave),
+        .color_border = toColor(.faint_txt),
     })) {
         state = ui.act(state, .leave_live, size);
     }
