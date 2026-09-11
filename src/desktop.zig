@@ -539,6 +539,20 @@ fn frame(arena: std.mem.Allocator) bool {
     ui.draw(state, size, .{}, &out, arena) catch return true;
     for (out.items) |op| drawOp(op, s);
 
+    // FILM GRAIN over the world layer -- tooth, so a flat fill stops reading as a flat fill.
+    // Tiled at native size; the widget chrome floats above it.
+    {
+        const g = sprites[@intFromEnum(ui.Sprite.grain)];
+        const step: f32 = 256;
+        var gy: f32 = 0;
+        while (gy < rs.r.h) : (gy += step) {
+            var gx: f32 = 0;
+            while (gx < rs.r.w) : (gx += step) {
+                dvui.renderTexture(g, .{ .r = .{ .x = gx, .y = gy, .w = step, .h = step }, .s = s }, .{ .colormod = toColor(ui.dim(.ink, 13)) }) catch {};
+            }
+        }
+    }
+
     chrome(s, size, arena);
 
     // Scene-level input the widget layer does not own: the boot's tap-anywhere, the map's drag
@@ -727,12 +741,9 @@ fn chrome(s: f32, size: ui.Size, arena: std.mem.Allocator) void {
 /// THE CHOOSING, as input: two invisible regions over the painted futures, the vow region over the
 /// painted bar, and the credit top-right. The paint is the scene's; the meaning is the widgets'.
 fn chooseChrome(size: ui.Size) void {
-    if (hitRegion(@src(), ui.factionButton(size, .human))) state = ui.act(state, .{ .arm = .human }, size);
-    if (hitRegion(@src(), ui.factionButton(size, .zombie))) state = ui.act(state, .{ .arm = .zombie }, size);
-
-    // The region reports its OWN edges -- a press it captured begins the hold, the release it saw
-    // ends it. Never infer release from the state alone, or a hold begun another way (the scripted
-    // driver, the touch path on the phone) would be cancelled by a finger that was never down.
+    // The vow region claims the press FIRST: its rect sits inside the zombie half, and a half that
+    // heard the finger before the bar did would arm a side the player meant to seal. `hold_begin`
+    // is a no-op while nothing is armed, so an inert tap on SELECT A SIDE stays inert.
     const held = holdRegion(@src(), ui.confirmButton(size));
     if (held and !vow_held) {
         vow_held = true;
@@ -741,6 +752,9 @@ fn chooseChrome(size: ui.Size) void {
         vow_held = false;
         state = ui.act(state, .hold_release, size);
     }
+
+    if (hitRegion(@src(), ui.factionButton(size, .human))) state = ui.act(state, .{ .arm = .human }, size);
+    if (hitRegion(@src(), ui.factionButton(size, .zombie))) state = ui.act(state, .{ .arm = .zombie }, size);
 
     creditsTop(size);
 }
@@ -1336,10 +1350,13 @@ fn bakeSprites() !void {
     sprites[@intFromEnum(ui.Sprite.vignette)] = try bake(128, vignetteCoverage);
     sprites[@intFromEnum(ui.Sprite.ring)] = try bake(128, annulusCoverage);
     sprites[@intFromEnum(ui.Sprite.beam)] = try bake(128, beamCoverage);
+    sprites[@intFromEnum(ui.Sprite.grain)] = try bake(256, grainCoverage);
+    sprites[@intFromEnum(ui.Sprite.gradient)] = try bake(64, gradientCoverage);
+    sprites[@intFromEnum(ui.Sprite.corner)] = try bake(64, cornerCoverage);
 }
 
 fn bake(dim: u32, comptime coverage: fn (f32, f32) u8) !dvui.Texture {
-    var pixels: [128 * 128 * 4]u8 = undefined;
+    var pixels: [256 * 256 * 4]u8 = undefined;
     const half: f32 = @as(f32, @floatFromInt(dim)) / 2.0;
     var row: u32 = 0;
     while (row < dim) : (row += 1) {
@@ -1415,4 +1432,41 @@ fn beamCoverage(dx: f32, dy: f32) u8 {
     const radial = if (r > 0.94) (1.0 - r) / 0.06 else 0.35 + 0.65 * r;
 
     return @intFromFloat(@max(0.0, @min(255.0, glow * radial * 255.0)));
+}
+
+/// Speckle noise: an integer hash per texel, a few bright grains in a field of faint ones. Tiled
+/// at native size it reads as film grain, not a pattern.
+fn grainCoverage(dx: f32, dy: f32) u8 {
+    const x: u32 = @intFromFloat(@round((dx + 1.0) * 127.5));
+    const y: u32 = @intFromFloat(@round((dy + 1.0) * 127.5));
+    var h: u32 = x *% 374761393 +% y *% 668265263;
+    h = (h ^ (h >> 13)) *% 1274126177;
+    h ^= h >> 16;
+    const v: u8 = @intCast(h & 0xFF);
+    if (v < 200) return v / 6; // a low bed of noise
+    return v; // and the occasional bright grain
+}
+
+/// Transparent at top, opaque at bottom -- a vertical falloff.
+fn gradientCoverage(dx: f32, dy: f32) u8 {
+    _ = dx;
+    const t = (dy + 1.0) / 2.0;
+    const smooth = t * t * (3.0 - 2.0 * t);
+    return @intFromFloat(@round(@max(0.0, @min(255.0, smooth * 255.0))));
+}
+
+/// An L-bracket hugging the top-left: a horizontal arm along the top edge and a vertical arm
+/// down the left, each stopping partway. Rotated, it brackets all four corners of a panel.
+fn cornerCoverage(dx: f32, dy: f32) u8 {
+    const arm_t: f32 = 0.06; // arm thickness
+    const reach: f32 = 0.55; // how far along the edge the arm runs
+    const nx = (dx + 1.0) / 2.0; // 0 left .. 1 right
+    const ny = (dy + 1.0) / 2.0; // 0 top  .. 1 bottom
+    const in_h = ny < arm_t and nx < reach;
+    const in_v = nx < arm_t and ny < reach;
+    if (!in_h and !in_v) return 0;
+    // Fade the arm tips so the bracket trails off rather than ending in a hard stop.
+    const tip = if (in_h) nx / reach else ny / reach;
+    const fade = 1.0 - tip * tip;
+    return @intFromFloat(@round(fade * 255.0));
 }

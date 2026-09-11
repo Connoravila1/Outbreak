@@ -122,6 +122,15 @@ pub const Sprite = enum {
     /// the quad (floats live there), it turns smoothly, not in the integer steps a core-drawn fan of
     /// dots was stuck with. The wake is baked in, so one draw is the whole sweep and its afterglow.
     beam,
+    /// SPECKLE NOISE, baked per-pixel. Drawn tiled at native size under the whole scene, it is the
+    /// film grain that keeps a flat fill from reading as a flat fill.
+    grain,
+    /// A LINEAR WASH, transparent at top to opaque at bottom. Stretched over a rect it is the
+    /// cheap gradient that gives a surface depth; rotated 180 it darkens the top instead.
+    gradient,
+    /// A CORNER BRACKET -- two arms meeting at the top-left, ending partway along each edge. The
+    /// dossier frame's corner; rotated four ways it brackets a whole panel.
+    corner,
 };
 
 pub const Weight = enum(u8) { label, body, heading, alarm, wordmark };
@@ -1020,7 +1029,13 @@ fn drawFaction(
     // THE ATMOSPHERE, full-bleed. The living half is cold water; the dead half is already warm
     // with it. Neither is a panel -- the whole half of the glass is the world you'd swear to.
     const base: Color = if (faction == .human) .abyss else .scab;
-    try out.append(gpa, .{ .rect = .{ .x = rect.x, .y = rect.y, .w = rect.w, .h = rect.h, .color = fa(if (armed) factionDeep(faction) else base, 255, ra) } });
+    try out.append(gpa, .{ .rect = .{ .x = rect.x, .y = rect.y, .w = rect.w, .h = rect.h, .color = fa(base, 255, ra) } });
+    // Arming does not flood the half flat -- it heats the same world: a glow that gathers at the
+    // instrument's middle while the edges stay dark.
+    if (armed) {
+        const big = @max(rect.w, rect.h);
+        try out.append(gpa, .{ .sprite = .{ .x = cx - @divTrunc(big, 2), .y = rect.y + @divTrunc(rect.h, 2) - @divTrunc(big, 2), .w = big, .h = big, .color = fa(factionGlow(faction), 46, ra), .sprite = .disc } });
+    }
 
     // Drift: slow motes in the cold water, or haze blooms in the red. Both move on the clock.
     var i: u8 = 0;
@@ -1033,10 +1048,29 @@ fn drawFaction(
         try out.append(gpa, .{ .sprite = .{ .x = mx - @divTrunc(msize, 2), .y = my - @divTrunc(msize, 2), .w = msize, .h = msize, .color = mcol, .sprite = .disc } });
     }
 
+    // Depth: a gradient wash darkening the half's lower edge, so the base stops being a fill.
+    try out.append(gpa, .{ .sprite = .{ .x = rect.x, .y = rect.y, .w = rect.w, .h = rect.h, .color = fa(.void_black, 110, ra), .sprite = .gradient } });
+
     // The seam-facing edge gets a hairline in the faction colour -- the two worlds pressed
     // against each other.
     const seam_y = if (faction == .human) rect.y + rect.h - 1 else rect.y;
     try out.append(gpa, .{ .rect = .{ .x = rect.x, .y = seam_y, .w = rect.w, .h = 1, .color = fa(if (armed) factionBright(faction) else factionDeep(faction), if (armed) 235 else 170, ra) } });
+
+    // THE DOSSIER FRAME: a bracket at each corner of the half -- the panel a file wears.
+    {
+        const inset: i32 = 12;
+        const bs: i32 = 46;
+        const bcol = fa(if (armed) factionBright(faction) else factionDeep(faction), if (armed) 200 else 170, ra);
+        const corners = [4]struct { x: i32, y: i32, a: u16 }{
+            .{ .x = rect.x + inset, .y = rect.y + inset, .a = 0 },
+            .{ .x = rect.x + rect.w - inset - bs, .y = rect.y + inset, .a = 16384 },
+            .{ .x = rect.x + rect.w - inset - bs, .y = rect.y + rect.h - inset - bs, .a = 32768 },
+            .{ .x = rect.x + inset, .y = rect.y + rect.h - inset - bs, .a = 49152 },
+        };
+        for (corners) |cnr| {
+            try out.append(gpa, .{ .sprite = .{ .x = cnr.x, .y = cnr.y, .w = bs, .h = bs, .color = bcol, .sprite = .corner, .angle = cnr.a } });
+        }
+    }
 
     // THE INSTRUMENT, the hero of the half. Big, centred, alive: the human heart beats slow and
     // the beam sweeps steadily; the zombie heart races and the beam jitters.
@@ -1047,6 +1081,9 @@ fn drawFaction(
     const hb: u32 = heartbeat(now, heart_period);
 
     const rim: Color = if (receded) .grave else if (armed) factionGlow(faction) else factionDeep(faction);
+    // A second, fainter ring outside the first -- the instrument reads as a machined bezel,
+    // not a circle drawn once.
+    try out.append(gpa, .{ .sprite = .{ .x = cx - r - 18, .y = cy - r - 18, .w = (r + 18) * 2, .h = (r + 18) * 2, .color = fa(factionDeep(faction), 90, ra), .sprite = .ring } });
     try out.append(gpa, .{ .sprite = .{ .x = cx - r, .y = cy - r, .w = r * 2, .h = r * 2, .color = fa(rim, 255, ra), .sprite = .ring } });
 
     const beam_alpha: u32 = if (receded) 30 else if (armed) 160 else 80;
@@ -1072,10 +1109,14 @@ fn drawFaction(
         try out.append(gpa, .{ .sprite = .{ .x = cx + 28 - 7, .y = cy - 26 - 7, .w = 14, .h = 14, .color = fa(.blood_glow, a, ra), .sprite = .disc } });
     }
 
-    // THE NAME, huge and centred -- the word is the identity, not a label on a card.
+    // THE NAME, huge and centred -- the word is the identity. Above it, the file's stamp: a
+    // classification line and its rule, the way a dossier heads a page.
     const name_color: Color = if (receded) .faint_txt else if (armed) factionBright(faction) else .ink;
     const blurb_color: Color = if (receded) .grave else if (armed) .ink else .sub;
-    const ny = if (name_top) rect.y + 42 else rect.y + rect.h - 96;
+    const ny = if (name_top) rect.y + 56 else rect.y + rect.h - 108;
+    const tag: []const u8 = if (faction == .human) "SUBJECT FILE — CLASS: LIVING" else "SUBJECT FILE — CLASS: DEAD";
+    try out.append(gpa, .{ .text = .{ .x = cx, .y = ny - 30, .text = tag, .color = fa(if (receded) .grave else factionGlow(faction), 200, ra), .weight = .label, .alignment = .center } });
+    try out.append(gpa, .{ .rect = .{ .x = cx - 110, .y = ny - 8, .w = 220, .h = 1, .color = fa(factionDeep(faction), if (receded) 60 else 140, ra) } });
     try out.append(gpa, .{ .text = .{ .x = cx, .y = ny, .text = name, .color = fa(name_color, 255, ra), .weight = .alarm, .alignment = .center } });
     try out.append(gpa, .{ .text = .{ .x = cx, .y = ny + 46, .text = blurb1, .color = fa(blurb_color, 255, ra), .weight = .body, .alignment = .center } });
     try out.append(gpa, .{ .text = .{ .x = cx, .y = ny + 70, .text = blurb2, .color = fa(blurb_color, 210, ra), .weight = .body, .alignment = .center } });
