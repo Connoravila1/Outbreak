@@ -173,9 +173,43 @@ fn driveCeremony(ms: u32, size: ui.Size, side: world.Faction) void {
                 state = ui.press(state, .{ .x = btn.x + @divTrunc(btn.w, 2), .y = btn.y + @divTrunc(btn.h, 2) }, size);
             }
         },
+        // The briefing turns a page per tap; the driver reads one page every two seconds.
+        .briefing => if (ms -| last_brief_tap > 2000) {
+            last_brief_tap = ms;
+            state = ui.touch(state, .{ .x = @divTrunc(size.w, 2), .y = @divTrunc(size.h, 2) }, size);
+        },
+        // A player looks around once: gear, then record, then back to the instrument. Scripted so
+        // the whole shell is exercised headless -- and so a screenshot can land on either surface.
+        .quiet => if (ms -| last_nav_tap > 2500 and nav_leg == 0) {
+            last_nav_tap = ms;
+            nav_leg = 1;
+            state = ui.touch(state, .{ .x = @divTrunc(size.w, 2), .y = size.h - 20 }, size);
+        },
+        .gear => {
+            // Tap the first inventory row once -- the equip REQUEST travels the real intent path
+            // even though, with only the starter stock owned, the answer is the same loadout.
+            if (nav_leg == 1 and !inv_tapped) {
+                inv_tapped = true;
+                state = ui.touch(state, .{ .x = @divTrunc(size.w, 2), .y = 340 }, size);
+            } else if (ms -| last_nav_tap > 2500 and nav_leg == 1) {
+                last_nav_tap = ms;
+                nav_leg = 2;
+                state = ui.touch(state, .{ .x = size.w - 10, .y = size.h - 20 }, size);
+            }
+        },
+        .record => if (ms -| last_nav_tap > 2500 and nav_leg == 2) {
+            last_nav_tap = ms;
+            nav_leg = 3;
+            state = ui.touch(state, .{ .x = 10, .y = size.h - 20 }, size);
+        },
         else => {},
     }
 }
+
+var last_brief_tap: u32 = 0;
+var last_nav_tap: u32 = 0;
+var nav_leg: u8 = 0;
+var inv_tapped = false;
 
 /// The stand-in server: `playtest.zig` resolves the accelerated encounter on the frame clock and
 /// each round lands as a `toldGame` -- the same fold a real response takes. Its figures never enter
@@ -288,6 +322,18 @@ fn frame(arena: std.mem.Allocator) bool {
     }
 
     if (faction_arg) |side| driveCeremony(ms, size, side);
+
+    // A tap on GEAR wrote a request. The intent travels the real path: client.equipItem carries it
+    // to the authority; in --demo the deterministic driver stands in for one and answers the same
+    // way, through toldGame.
+    if (state.equip_request != loadout.no_item) {
+        const req = state.equip_request;
+        state.equip_request = loadout.no_item;
+        if (loadout.itemFromByte(req)) |item| {
+            client.equipItem(item);
+            if (demo_mode) pt = playtest.prepareEquipment(pt, client.selectedEquipment());
+        }
+    }
 
     if (state.faction) |faction| {
         if (!client_started) {

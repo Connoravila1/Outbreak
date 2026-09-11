@@ -318,7 +318,7 @@ comptime {
     // Measured, then fixed (G1, G2). This version walks each file's bytes once and only
     // consults the forbidden list where a `fn ` actually appears, which is a few dozen
     // places per file rather than every byte. The guard is not negotiable; its price was.
-    @setEvalBranchQuota(10_000_000);
+    @setEvalBranchQuota(40_000_000);
 
     for (core ++ shell, 0..) |src, file_index| {
         const is_core = file_index < core.len;
