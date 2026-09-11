@@ -76,10 +76,11 @@ pub const Placement = struct {
     h: i32,
 };
 
-/// The zoom the map runs at: close enough that street blocks read, wide enough that a cell
-/// (tens of metres) is a neighbourhood and not a pin. One tile is ~600 m across at the
-/// mid-latitudes, so a phone-sized window spans a few blocks.
-pub const zoom: u5 = 16;
+/// The zoom the map opens at: street level. z17 puts a block across a few hundred pixels and a
+/// cell is a real neighbourhood rather than a dot. The player can zoom from there.
+pub const default_zoom: u5 = 17;
+pub const min_zoom: u5 = 14;
+pub const max_zoom: u5 = 19;
 
 fn globalPx(lon: f64, lat: f64, z: u5) struct { x: f64, y: f64 } {
     const n: f64 = @floatFromInt(@as(u64, 1) << z);
@@ -89,16 +90,17 @@ fn globalPx(lon: f64, lat: f64, z: u5) struct { x: f64, y: f64 } {
     return .{ .x = x, .y = y };
 }
 
-/// Which tiles cover a `w` x `h` viewport centred on the cell, and where each lands on screen.
-/// Returns the count written into `out`. The viewport is centred on the CELL CENTRE -- the map
-/// does not know, and cannot be told, where in the cell the player stands.
-pub fn layout(id: spatial.CellId, w: i32, h: i32, out: []Placement) usize {
+/// Which tiles cover a `w` x `h` viewport, centred on the cell and dragged by `pan` screen
+/// pixels, and where each lands on screen. Returns the count written into `out`. The anchor is
+/// the CELL CENTRE -- the map does not know, and cannot be told, where in the cell the player
+/// stands; panning slides the window over the cell's ground, nothing more.
+pub fn layout(id: spatial.CellId, z: u5, w: i32, h: i32, pan_x: i32, pan_y: i32, out: []Placement) usize {
     const r = region(id);
     const c = r.center();
-    const centre = globalPx(c.lon, c.lat, zoom);
+    const centre = globalPx(c.lon, c.lat, z);
 
-    const vx = centre.x - @as(f64, @floatFromInt(w)) / 2.0;
-    const vy = centre.y - @as(f64, @floatFromInt(h)) / 2.0;
+    const vx = centre.x + @as(f64, @floatFromInt(pan_x)) - @as(f64, @floatFromInt(w)) / 2.0;
+    const vy = centre.y + @as(f64, @floatFromInt(pan_y)) - @as(f64, @floatFromInt(h)) / 2.0;
 
     const tx0: u32 = @intFromFloat(@floor(vx / 256.0));
     const tx1: u32 = @intFromFloat(@floor((vx + @as(f64, @floatFromInt(w))) / 256.0));
@@ -112,7 +114,7 @@ pub fn layout(id: spatial.CellId, w: i32, h: i32, out: []Placement) usize {
         while (tx <= tx1) : (tx += 1) {
             if (n >= out.len) return n;
             out[n] = .{
-                .tile = .{ .z = zoom, .x = tx, .y = ty },
+                .tile = .{ .z = z, .x = tx, .y = ty },
                 .x = @intFromFloat(@floor(@as(f64, @floatFromInt(tx)) * 256.0 - vx)),
                 .y = @intFromFloat(@floor(@as(f64, @floatFromInt(ty)) * 256.0 - vy)),
                 .w = 256,
@@ -122,6 +124,13 @@ pub fn layout(id: spatial.CellId, w: i32, h: i32, out: []Placement) usize {
         }
     }
     return n;
+}
+
+/// The cell centre's screen position: the viewport is anchored on the cell plus the drag, so
+/// the marker lands at the window's centre minus the drag. It moves with the map, the way a
+/// place on the ground does when you drag the sheet under it.
+pub fn markerOnScreen(w: i32, h: i32, pan_x: i32, pan_y: i32) struct { x: i32, y: i32 } {
+    return .{ .x = @divTrunc(w, 2) - pan_x, .y = @divTrunc(h, 2) - pan_y };
 }
 
 /// The cache path for one tile. `dir` is the cache root the shell owns.

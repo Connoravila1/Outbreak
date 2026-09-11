@@ -1367,19 +1367,24 @@ fn drawQuiet(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allocator
     try out.append(gpa, .{ .text = .{ .x = pad, .y = 40, .text = factionLabel(faction), .color = .smoke, .weight = .label } });
 
     if (state.map_marker) |mp| {
-        // THE MAP. Real streets, graded to ours; the pulse sits on the cell's centre and the
-        // reading lives under it. The map is backdrop -- nothing the war does ever lands on it.
+        // THE MAP. Real streets, graded to ours; the pin sits on the cell's centre and moves
+        // with the ground when the map is dragged. The map is backdrop -- nothing the war does
+        // ever lands on it (I2).
         try drawPulse(state, mp.x, mp.y, false, out, gpa);
-        try out.append(gpa, .{ .text = .{ .x = mp.x, .y = mp.y - 9, .text = "QUIET", .color = .bone, .weight = .label, .alignment = .center } });
+        try softRing(out, gpa, mp.x, mp.y, 14, dim(.bone, 160));
         try drawRipples(state, 220, factionBright(faction), out, gpa);
 
-        // The legend, floating on the map near the bottom chrome.
-        const legend_y = size.h - 190;
-        try out.append(gpa, .{ .text = .{ .x = pad, .y = legend_y, .text = "CONDITION", .color = .dust, .weight = .label } });
-        try out.append(gpa, .{ .text = .{ .x = size.w - pad, .y = legend_y, .text = conditionWord(state.hp), .color = .bone, .weight = .body, .alignment = .right } });
-
-        try out.append(gpa, .{ .text = .{ .x = mp.x, .y = size.h - 116, .text = "The room is quiet.", .color = .smoke, .weight = .body, .alignment = .center } });
-        try out.append(gpa, .{ .text = .{ .x = mp.x, .y = size.h - 92, .text = "It won't stay that way.", .color = .grave, .weight = .body, .alignment = .center } });
+        // THE SHEET. The reading floats over the map as a card -- a designed layer, not text
+        // left standing on the streets.
+        const sy = size.h - 214;
+        const sh = 134;
+        try out.append(gpa, .{ .rect = .{ .x = 10, .y = sy, .w = size.w - 20, .h = sh, .color = dim(.ash, 90) } });
+        try out.append(gpa, .{ .rect = .{ .x = 11, .y = sy + 1, .w = size.w - 22, .h = sh - 2, .color = dim(.char_deep, 242) } });
+        try out.append(gpa, .{ .text = .{ .x = 26, .y = sy + 18, .text = "QUIET", .color = factionBright(faction), .weight = .heading } });
+        try out.append(gpa, .{ .text = .{ .x = size.w - 26, .y = sy + 18, .text = conditionWord(state.hp), .color = .bone, .weight = .body, .alignment = .right } });
+        try out.append(gpa, .{ .text = .{ .x = size.w - 26, .y = sy + 44, .text = "CONDITION", .color = .grave, .weight = .label, .alignment = .right } });
+        try out.append(gpa, .{ .text = .{ .x = 26, .y = sy + 74, .text = "The room is quiet.", .color = .smoke, .weight = .body } });
+        try out.append(gpa, .{ .text = .{ .x = 26, .y = sy + 98, .text = "It won't stay that way.", .color = .grave, .weight = .body } });
 
         try drawDiagnostic(state, size, out, gpa);
         return;
@@ -1486,44 +1491,47 @@ fn drawDiagnostic(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allo
 fn drawLive(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allocator) Allocator.Error!void {
     try out.append(gpa, .{ .text = .{ .x = pad, .y = 40, .text = factionLabel(state.faction), .color = .serum, .weight = .label } });
 
-    try out.append(gpa, .{ .text = .{ .x = pad, .y = 76, .text = "THIS CELL IS LIVE", .color = .wound, .weight = .alarm } });
-
     if (state.map_marker) |mp| {
         // THE MAP, UNDER ATTACK. The same real streets, washed red; the marker races. The fight
         // is never drawn where it is -- the wash is everywhere, which is exactly what the rules
         // allow: a mood, not a position (I2).
         try out.append(gpa, .{ .rect = .{ .x = 0, .y = 0, .w = size.w, .h = size.h, .color = dim(.blood_deep, 60) } });
         try drawPulse(state, mp.x, mp.y, true, out, gpa);
-        try out.append(gpa, .{ .text = .{ .x = mp.x, .y = mp.y - 9, .text = conditionWord(state.hp), .color = .bone, .weight = .label, .alignment = .center } });
+        try softRing(out, gpa, mp.x, mp.y, 14, dim(.bone, 160));
+        try out.append(gpa, .{ .text = .{ .x = mp.x, .y = mp.y + 26, .text = conditionWord(state.hp), .color = .bone, .weight = .label, .alignment = .center } });
         try drawRipples(state, 260, .blood_glow, out, gpa);
 
-        // The scale of it, wrapped at its clause break; then the tide in words.
+        // The banner: the alarm and its scale, as a card.
+        try out.append(gpa, .{ .rect = .{ .x = 10, .y = 64, .w = size.w - 20, .h = 150, .color = dim(.ash, 90) } });
+        try out.append(gpa, .{ .rect = .{ .x = 11, .y = 65, .w = size.w - 22, .h = 148, .color = dim(.char_deep, 235) } });
+        try out.append(gpa, .{ .text = .{ .x = 26, .y = 82, .text = "THIS CELL IS LIVE", .color = .wound, .weight = .alarm } });
         var crowd = std.mem.splitSequence(u8, crowdSentence(state.crowd), ", ");
         const first = crowd.next().?;
-        var text_y: i32 = 116;
         if (crowd.next()) |rest| {
             const joined = try std.fmt.allocPrint(gpa, "{s},", .{first});
-            try out.append(gpa, .{ .text = .{ .x = pad, .y = text_y, .text = joined, .color = .bone, .weight = .body } });
-            try out.append(gpa, .{ .text = .{ .x = pad, .y = text_y + 24, .text = rest, .color = .bone, .weight = .body } });
-            text_y += 24;
+            try out.append(gpa, .{ .text = .{ .x = 26, .y = 122, .text = joined, .color = .bone, .weight = .body } });
+            try out.append(gpa, .{ .text = .{ .x = 26, .y = 146, .text = rest, .color = .bone, .weight = .body } });
         } else {
-            try out.append(gpa, .{ .text = .{ .x = pad, .y = text_y, .text = first, .color = .bone, .weight = .body } });
+            try out.append(gpa, .{ .text = .{ .x = 26, .y = 134, .text = first, .color = .bone, .weight = .body } });
         }
+        try out.append(gpa, .{ .text = .{ .x = size.w - 26, .y = 182, .text = momentumSentence(state.momentum, state.faction orelse .human), .color = .serum, .weight = .label, .alignment = .right } });
 
-        try out.append(gpa, .{ .text = .{ .x = mp.x, .y = size.h - 190, .text = momentumSentence(state.momentum, state.faction orelse .human), .color = .serum, .weight = .body, .alignment = .center } });
-
-        // The tells, seeping in along the bottom of the map.
-        try out.append(gpa, .{ .text = .{ .x = pad, .y = size.h - 160, .text = "WHAT YOU KNOW", .color = .grave, .weight = .label } });
+        // The sheet: what you know, as a card on the map's lower edge.
+        const sy = size.h - 214;
+        const sh = 134;
+        try out.append(gpa, .{ .rect = .{ .x = 10, .y = sy, .w = size.w - 20, .h = sh, .color = dim(.ash, 90) } });
+        try out.append(gpa, .{ .rect = .{ .x = 11, .y = sy + 1, .w = size.w - 22, .h = sh - 2, .color = dim(.char_deep, 242) } });
+        try out.append(gpa, .{ .text = .{ .x = 26, .y = sy + 14, .text = "WHAT YOU KNOW", .color = .grave, .weight = .label } });
         var i: u8 = 0;
-        var y: i32 = size.h - 134;
+        var y: i32 = sy + 40;
         while (i < state.tell_count) : (i += 1) {
-            if (y > size.h - 90) break;
+            if (y > sy + sh - 18) break;
             var parts = std.mem.splitSequence(u8, state.tells[i], ", ");
             const head = parts.next().?;
-            try out.append(gpa, .{ .text = .{ .x = pad, .y = y, .text = head, .color = .smoke, .weight = .label } });
+            try out.append(gpa, .{ .text = .{ .x = 26, .y = y, .text = head, .color = .smoke, .weight = .label } });
             y += 18;
             if (parts.next()) |rest| {
-                try out.append(gpa, .{ .text = .{ .x = pad, .y = y, .text = rest, .color = .smoke, .weight = .label } });
+                try out.append(gpa, .{ .text = .{ .x = 26, .y = y, .text = rest, .color = .smoke, .weight = .label } });
                 y += 18;
             }
         }
@@ -1531,6 +1539,7 @@ fn drawLive(state: State, size: Size, out: *std.ArrayList(Draw), gpa: Allocator)
     }
 
     // THE WELL, BLOOMED -- the fallback when no map is up (the phone until it learns tiles).
+    try out.append(gpa, .{ .text = .{ .x = pad, .y = 76, .text = "THIS CELL IS LIVE", .color = .wound, .weight = .alarm } });
 
     // The scale of it. A band, never a number -- wrapped at its clause break so the sentence never
     // runs off the glass.

@@ -9,7 +9,7 @@
 set -euo pipefail
 LAT=${1:?usage: fetch_tiles.sh LAT LON [ZOOM]}
 LON=${2:?usage: fetch_tiles.sh LAT LON [ZOOM]}
-Z=${3:-16}
+Z=${3:-17}
 
 # Slippy-map tile numbers for the coordinate.
 read -r XT YT <<<"$(python3 -c "
@@ -23,9 +23,9 @@ print(xt, yt)
 ")"
 
 DIR="$HOME/.cache/outbreak/tiles"
-# A phone-shaped window at z16 spans a few tiles; fetch a generous patch.
-for dx in -1 0 1; do
-    for dy in -2 -1 0 1 2; do
+# A phone-shaped window at z17 spans a few tiles and the map pans; fetch a neighbourhood.
+for dx in -3 -2 -1 0 1 2 3; do
+    for dy in -5 -4 -3 -2 -1 0 1 2 3 4 5; do
         x=$((XT + dx)); y=$((YT + dy))
         out="$DIR/$Z/$x/$y.png"
         [ -f "$out" ] && continue

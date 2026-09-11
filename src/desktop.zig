@@ -112,15 +112,24 @@ fn outbreakTheme() dvui.Theme {
 /// baked — recovered verbatim from git history (first-party code, no dependency).
 var sprites: [@typeInfo(ui.Sprite).@"enum".fields.len]dvui.Texture = undefined;
 
-/// THE MAP, cached. The quarantined module (map.zig) says which tiles cover the window; we hold
-/// their decoded, graded textures keyed by the cell that produced them. Rebuilt only when the
-/// cell changes -- the player stands in a room for minutes at a time, and the map does not move
-/// while they do.
+/// THE MAP, cached. The quarantined module (map.zig) says which tiles cover the window for a
+/// given pan and zoom; we hold their decoded, graded textures keyed by tile coordinate and load
+/// on miss. The cache is per-cell: a new cell or a new zoom throws it away.
 const map_max_tiles = 20;
+const map_cache_max = 64;
 var map_cell: u64 = 0;
-var map_texs: [map_max_tiles]?dvui.Texture = .{null} ** map_max_tiles;
+var map_zoom: u5 = map.default_zoom;
+var map_pan_x: i32 = 0;
+var map_pan_y: i32 = 0;
 var map_place: [map_max_tiles]map.Placement = undefined;
 var map_count: usize = 0;
+var map_loaded: [map_cache_max]struct { tile: map.Tile, tex: ?dvui.Texture } = undefined;
+var map_loaded_n: usize = 0;
+
+// A press on the map is a candidate drag until it moves far enough to be one; a press that never
+// moved is a tap, and a tap is a ripple.
+var map_drag: ?struct { x: f32, y: f32 } = null;
+var map_drag_moved = false;
 
 pub fn main(init: std.process.Init) !void {
     io = init.io;
@@ -235,15 +244,19 @@ fn driveCeremony(ms: u32, size: ui.Size, side: world.Faction) void {
         },
         // A player looks around once: gear, then record, then back to the instrument. Scripted so
         // the whole shell is exercised headless -- and so a screenshot can land on either surface.
-        .quiet => if (ms -| last_nav_tap > 2500 and nav_leg == 0) {
-            last_nav_tap = ms;
-            nav_leg = 1;
-            state = ui.act(state, .{ .nav = .gear }, size);
-        } else if (ms -| last_nav_tap > 2500 and nav_leg == 3) {
-            // One more look: the credits, then done touring.
-            last_nav_tap = ms;
-            nav_leg = 4;
-            state = ui.act(state, .credits_open, size);
+        // The instrument gets its own beat first: the tour leaves quiet only after a moment on it.
+        .quiet => {
+            if (quiet_since == 0) quiet_since = ms;
+            if (ms -| quiet_since > 2500 and nav_leg == 0) {
+                last_nav_tap = ms;
+                nav_leg = 1;
+                state = ui.act(state, .{ .nav = .gear }, size);
+            } else if (ms -| last_nav_tap > 2500 and nav_leg == 3) {
+                // One more look: the credits, then done touring.
+                last_nav_tap = ms;
+                nav_leg = 4;
+                state = ui.act(state, .credits_open, size);
+            }
         },
         .gear => {
             // Tap the first inventory row once -- the equip REQUEST travels the real intent path
@@ -277,6 +290,7 @@ fn driveCeremony(ms: u32, size: ui.Size, side: world.Faction) void {
 
 var last_brief_tap: u32 = 0;
 var last_nav_tap: u32 = 0;
+var quiet_since: u32 = 0;
 var nav_leg: u8 = 0;
 var inv_tapped = false;
 
@@ -320,40 +334,52 @@ fn feedFix(spec: []const u8) void {
 /// geography (which tiles, where on screen); this function only does I/O: read the cached PNGs,
 /// decode, grade to the palette, upload. A missing tile is a dark block, not an error -- the map
 /// degrades to void, which is what the streets look like at night anyway.
-fn rebuildMap(cell_bits: u64, size: ui.Size) void {
-    for (&map_texs) |*t| {
-        if (t.*) |tex| SDLBackend.c.SDL_DestroyTexture(@ptrCast(@alignCast(tex.ptr)));
-        t.* = null;
+/// A cell change or a zoom change retires every texture -- the tile set is different ground.
+fn clearMapCache() void {
+    for (map_loaded[0..map_loaded_n]) |e| {
+        if (e.tex) |tex| SDLBackend.c.SDL_DestroyTexture(@ptrCast(@alignCast(tex.ptr)));
     }
-    map_count = 0;
-    if (cell_bits == 0) return;
+    map_loaded_n = 0;
+}
 
-    map_count = map.layout(@enumFromInt(cell_bits), size.w, size.h, &map_place);
+/// The decoded, graded texture for one tile -- loaded on first sight, cached forever after
+/// (until the cell or zoom retires the set). A tile the cache does not have returns null and
+/// the shell paints the gap as void.
+fn ensureTile(tile: map.Tile) ?dvui.Texture {
+    for (map_loaded[0..map_loaded_n]) |e| {
+        if (e.tile.z == tile.z and e.tile.x == tile.x and e.tile.y == tile.y) return e.tex;
+    }
+    if (map_loaded_n >= map_cache_max) return null;
 
-    const home = environ_map.get("HOME") orelse return;
+    const home = environ_map.get("HOME") orelse return null;
     var dir_buf: [256]u8 = undefined;
-    const dir = std.fmt.bufPrint(&dir_buf, "{s}/.cache/outbreak/tiles", .{home}) catch return;
+    const dir = std.fmt.bufPrint(&dir_buf, "{s}/.cache/outbreak/tiles", .{home}) catch return null;
+    var path_buf: [320]u8 = undefined;
+    const path = map.tilePath(dir, tile, &path_buf);
 
-    for (map_place[0..map_count], 0..) |pl, i| {
-        var path_buf: [320]u8 = undefined;
-        const path = map.tilePath(dir, pl.tile, &path_buf);
-        const file = std.Io.Dir.cwd().openFile(io, path, .{}) catch continue;
+    var tex: ?dvui.Texture = null;
+    if (std.Io.Dir.cwd().openFile(io, path, .{})) |file| {
         defer file.close(io);
-        const stat = file.stat(io) catch continue;
-        const bytes = init_gpa.alloc(u8, @intCast(stat.size)) catch continue;
-        defer init_gpa.free(bytes);
-        _ = file.readPositionalAll(io, bytes, 0) catch continue;
+        if (file.stat(io)) |stat| {
+            if (init_gpa.alloc(u8, @intCast(stat.size))) |bytes| {
+                defer init_gpa.free(bytes);
+                if (file.readPositionalAll(io, bytes, 0)) |_| {
+                    var w: c_int = 0;
+                    var h: c_int = 0;
+                    var ch: c_int = 0;
+                    if (dvui.c.stbi_load_from_memory(bytes.ptr, @intCast(bytes.len), &w, &h, &ch, 4)) |decoded| {
+                        defer dvui.c.stbi_image_free(decoded);
+                        map.grade(decoded[0..@intCast(w * h * 4)]);
+                        tex = uploadTexture(decoded, @intCast(w), @intCast(h)) catch null;
+                    }
+                } else |_| {}
+            } else |_| {}
+        } else |_| {}
+    } else |_| {}
 
-        var w: c_int = 0;
-        var h: c_int = 0;
-        var ch: c_int = 0;
-        const decoded = dvui.c.stbi_load_from_memory(bytes.ptr, @intCast(bytes.len), &w, &h, &ch, 4) orelse continue;
-        defer dvui.c.stbi_image_free(decoded);
-
-        const px: usize = @intCast(w * h * 4);
-        map.grade(decoded[0..px]);
-        map_texs[i] = uploadTexture(decoded, @intCast(w), @intCast(h)) catch continue;
-    }
+    map_loaded[map_loaded_n] = .{ .tile = tile, .tex = tex };
+    map_loaded_n += 1;
+    return tex;
 }
 
 /// RGBA pixels -> GPU texture, the same direct-SDL path bake() uses (backend.textureCreate goes
@@ -369,17 +395,19 @@ fn uploadTexture(pixels: [*]const u8, w: u32, h: u32) !dvui.Texture {
     return .{ .ptr = tex, .width = w, .height = h, .format = .rgba_32 };
 }
 
-/// The graded tiles, drawn under the scene's marker and labels. A tile that failed to load is a
-/// gap in the world, painted as void -- a real hole reads better than a placeholder.
-fn drawMapLayer(s: f32) void {
-    for (map_place[0..map_count], 0..) |pl, i| {
+/// The graded tiles, drawn under the scene's marker and labels. Placements recompute every
+/// frame -- it is the same handful of divides whether the map sits still or is being dragged --
+/// and a tile the cache does not have is a gap in the world, painted as void.
+fn drawMapLayer(size: ui.Size, s: f32) void {
+    map_count = map.layout(@enumFromInt(map_cell), map_zoom, size.w, size.h, map_pan_x, map_pan_y, &map_place);
+    for (map_place[0..map_count]) |pl| {
         const r: dvui.Rect.Physical = .{
             .x = @as(f32, @floatFromInt(pl.x)) * s,
             .y = @as(f32, @floatFromInt(pl.y)) * s,
             .w = @as(f32, @floatFromInt(pl.w)) * s,
             .h = @as(f32, @floatFromInt(pl.h)) * s,
         };
-        if (map_texs[i]) |tex| {
+        if (ensureTile(pl.tile)) |tex| {
             dvui.renderTexture(tex, .{ .r = r, .s = s }, .{}) catch {};
         } else {
             var b = dvui.Path.Builder.init(dvui.currentWindow().arena());
@@ -487,26 +515,36 @@ fn frame(arena: std.mem.Allocator) bool {
     }
 
     // THE MAP. The cell the location layer holds is the one thing a map is allowed to be of;
-    // when it changes, the tiles for the new cell are the only ones that exist. Where a map is
-    // built, the core's scene ops get a marker point to pulse on instead of a well to draw.
+    // when it changes, the tile set for the old cell is retired. Where a map is built, the
+    // core's scene ops get a marker point to pulse on instead of a well to draw -- and the
+    // marker slides with the pan, pinned to its ground.
     const cell_bits = location.read().cell;
     if (cell_bits != map_cell) {
         map_cell = cell_bits;
-        rebuildMap(map_cell, size);
+        map_pan_x = 0;
+        map_pan_y = 0;
+        clearMapCache();
     }
-    state.map_marker = if (map_cell != 0) .{ .x = @divTrunc(size.w, 2), .y = @divTrunc(size.h, 2) } else null;
+    if (map_cell != 0) {
+        const mp = map.markerOnScreen(size.w, size.h, map_pan_x, map_pan_y);
+        state.map_marker = .{ .x = mp.x, .y = mp.y };
+    } else {
+        state.map_marker = null;
+    }
 
     // THE SCENE FIRST -- the bespoke painting (boot, the choosing, the map) underneath whatever
     // chrome the widgets draw. Then the widgets: structure, layout, and events the toolkit owns.
-    if (state.map_marker != null and (state.screen == .quiet or state.screen == .live)) drawMapLayer(s);
+    if (state.map_marker != null and (state.screen == .quiet or state.screen == .live)) drawMapLayer(size, s);
     var out: std.ArrayList(ui.Draw) = .empty;
     ui.draw(state, size, .{}, &out, arena) catch return true;
     for (out.items) |op| drawOp(op, s);
 
     chrome(s, size, arena);
 
-    // Scene-level input the widget layer does not own: the boot's tap-anywhere and the dial's
-    // ripple. Only events no widget claimed -- a tap on a button is not also a tap on the dial.
+    // Scene-level input the widget layer does not own: the boot's tap-anywhere, the map's drag
+    // and wheel-zoom, and a tap's ripple. Only events no widget claimed -- a drag that starts on
+    // a button is not a pan, and a press that never moved is a tap, not a drag.
+    const on_map = state.map_marker != null and (state.screen == .quiet or state.screen == .live);
     for (dvui.events()) |*e| {
         if (e.handled) continue;
         switch (e.evt) {
@@ -515,11 +553,49 @@ fn frame(arena: std.mem.Allocator) bool {
                     .x = @intFromFloat(@round(m.p.x / s)),
                     .y = @intFromFloat(@round(m.p.y / s)),
                 };
-                if (m.action == .press and m.button == .left) switch (state.screen) {
-                    .boot => state = ui.act(state, .enter, size),
-                    .quiet => state = ui.act(state, .{ .dial = at }, size),
+                switch (m.action) {
+                    .press => if (m.button == .left) switch (state.screen) {
+                        .boot => state = ui.act(state, .enter, size),
+                        .quiet, .live => if (on_map) {
+                            map_drag = .{ .x = m.p.x, .y = m.p.y };
+                            map_drag_moved = false;
+                        } else if (state.screen == .quiet) {
+                            state = ui.act(state, .{ .dial = at }, size);
+                        },
+                        else => {},
+                    },
+                    .motion => if (map_drag) |d| {
+                        const dx = m.p.x - d.x;
+                        const dy = m.p.y - d.y;
+                        map_drag = .{ .x = m.p.x, .y = m.p.y };
+                        // The map slides under the pointer -- drag right and the ground goes right.
+                        map_pan_x -|= @intFromFloat(@round(dx / s));
+                        map_pan_y -|= @intFromFloat(@round(dy / s));
+                        if (@abs(map_pan_x) + @abs(map_pan_y) > 6) map_drag_moved = true;
+                    },
+                    .release => if (map_drag != null) {
+                        if (!map_drag_moved and state.screen == .quiet) {
+                            state = ui.act(state, .{ .dial = at }, size);
+                        }
+                        map_drag = null;
+                    },
+                    .wheel_y => |wy| if (on_map) {
+                        // Scroll is zoom, like the map it imitates; pan scales to keep the same
+                        // ground under the pointer.
+                        if (wy > 0 and map_zoom < map.max_zoom) {
+                            map_zoom += 1;
+                            map_pan_x *= 2;
+                            map_pan_y *= 2;
+                            clearMapCache();
+                        } else if (wy < 0 and map_zoom > map.min_zoom) {
+                            map_zoom -= 1;
+                            map_pan_x = @divTrunc(map_pan_x, 2);
+                            map_pan_y = @divTrunc(map_pan_y, 2);
+                            clearMapCache();
+                        }
+                    },
                     else => {},
-                };
+                }
             },
             .window => |w| if (w.action == .close) return false,
             .app => |a| if (a.action == .quit) return false,
@@ -765,15 +841,24 @@ fn gearScreen(size: ui.Size, arena: std.mem.Allocator) void {
     };
     for (slots, 0..) |slot, i| {
         const def = loadout.definition(slot.id);
-        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i, .expand = .horizontal, .padding = .{ .y = 10 } });
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = i,
+            .expand = .horizontal,
+            .margin = .{ .y = 5 },
+            .padding = .{ .x = 14, .y = 12, .w = 14, .h = 12 },
+            .background = true,
+            .color_fill = toColor(.char_deep),
+            .border = .all(1),
+            .color_border = toColor(.ash),
+            .corner_radius = .all(0),
+        });
         labelW(@src(), slot.label, .label, .grave, .{ .min_size_content = .{ .w = 76 } });
-        var mid = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal });
+        var mid = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .background = false });
         labelW(@src(), def.name, .body, .bone, .{});
         const st = std.fmt.allocPrint(arena, "ATK {d}  DEF {d}  INI {d}", .{ def.attack, def.defense, def.initiative }) catch "";
         labelW(@src(), st, .label, ui.dim(acc, 200), .{});
         mid.deinit();
         row.deinit();
-        _ = dvui.separator(@src(), .{ .id_extra = i, .expand = .horizontal, .color_fill = toColor(.ash) });
     }
 
     var inv_head = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .y = 16 } });
@@ -798,10 +883,13 @@ fn gearScreen(size: ui.Size, arena: std.mem.Allocator) void {
         bw.init(@src(), .{}, .{
             .id_extra = i,
             .expand = .horizontal,
-            .padding = .{ .y = 10 },
-            .color_fill = toColor(.void_black),
+            .margin = .{ .y = 5 },
+            .padding = .{ .x = 14, .y = 12, .w = 14, .h = 12 },
+            .color_fill = toColor(.char_deep),
             .color_fill_hover = toColor(.ash),
             .color_fill_press = toColor(ui.factionDeep(faction)),
+            .border = .all(1),
+            .color_border = toColor(.ash),
             .corner_radius = .all(0),
         });
         defer bw.deinit();
@@ -843,37 +931,47 @@ fn recordScreen(size: ui.Size, arena: std.mem.Allocator) void {
 
     labelW(@src(), "THE WAR, AS WRITTEN.", .heading, .bone, .{ .margin = .{ .y = 22 } });
 
-    var stats = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .y = 8 } });
-    var left = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .background = false });
+    const card: dvui.Options = .{
+        .expand = .horizontal,
+        .padding = .{ .x = 14, .y = 12, .w = 14, .h = 12 },
+        .background = true,
+        .color_fill = toColor(.char_deep),
+        .border = .all(1),
+        .color_border = toColor(.ash),
+        .corner_radius = .all(0),
+    };
+
+    var stats = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .y = 8 }, .background = false });
+    var left = dvui.box(@src(), .{ .dir = .vertical }, card.override(.{ .margin = .{ .w = 4 } }));
     labelW(@src(), "STANDING", .label, acc, .{});
     const lvl = std.fmt.allocPrint(arena, "LVL {d} · {d} XP", .{ state.level, state.total_xp }) catch "";
     labelW(@src(), lvl, .body, .bone, .{});
     left.deinit();
-    var right = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .background = false });
+    var right = dvui.box(@src(), .{ .dir = .vertical }, card.override(.{ .margin = .{ .x = 4 } }));
     labelW(@src(), "CONDITION", .label, .grave, .{});
     labelW(@src(), ui.conditionWord(state.hp), .body, .bone, .{});
     right.deinit();
     stats.deinit();
 
-    _ = dvui.separator(@src(), .{ .expand = .horizontal, .color_fill = toColor(.grave), .margin = .{ .y = 14 } });
-    labelW(@src(), "LAST CONTACT", .label, .dust, .{});
+    labelW(@src(), "LAST CONTACT", .label, .dust, .{ .margin = .{ .y = 14 } });
+    var contact = dvui.box(@src(), .{ .dir = .vertical }, card);
     if (state.encounter_xp > 0 or state.last_reward != .none) {
         const src = if (state.encounter_source == .players) "the other side" else "the field";
         const line1 = std.fmt.allocPrint(arena, "Contact with {s}.", .{src}) catch "";
         const line2 = std.fmt.allocPrint(arena, "+{d} XP · {s}", .{ state.encounter_xp, ui.rewardLabel(state.last_reward) }) catch "";
-        labelW(@src(), line1, .body, .bone, .{ .margin = .{ .y = 8 } });
-        labelW(@src(), line2, .body, .serum, .{});
+        labelW(@src(), line1, .body, .bone, .{});
+        labelW(@src(), line2, .body, .serum, .{ .margin = .{ .y = 4 } });
     } else {
-        labelW(@src(), "Nothing has found you yet.", .body, .smoke, .{ .margin = .{ .y = 8 } });
-        labelW(@src(), "Stay where it can find you.", .body, .grave, .{});
+        labelW(@src(), "Nothing has found you yet.", .body, .smoke, .{});
+        labelW(@src(), "Stay where it can find you.", .body, .grave, .{ .margin = .{ .y = 4 } });
     }
+    contact.deinit();
 
-    _ = dvui.separator(@src(), .{ .expand = .horizontal, .color_fill = toColor(.grave), .margin = .{ .y = 14 } });
-    labelW(@src(), "RECOVERED", .label, .dust, .{});
+    labelW(@src(), "RECOVERED", .label, .dust, .{ .margin = .{ .y = 14 } });
     var shown: u8 = 0;
     for (loadout.catalogue, 0..) |def, i| {
         if (def.slot != .evidence or !loadout.owns(state.owned, def.id)) continue;
-        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i, .expand = .horizontal, .padding = .{ .y = 6 } });
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, card.override(.{ .id_extra = i, .margin = .{ .y = 4 } }));
         labelW(@src(), def.name, .body, ui.rarityColor(def.rarity), .{});
         _ = dvui.spacer(@src(), .{ .expand = .horizontal });
         if (state.last_item == @intFromEnum(def.id) and state.item_discovered) {
@@ -883,7 +981,9 @@ fn recordScreen(size: ui.Size, arena: std.mem.Allocator) void {
         shown += 1;
     }
     if (shown == 0) {
-        labelW(@src(), "Nothing recovered yet.", .body, .grave, .{ .margin = .{ .y = 8 } });
+        var empty = dvui.box(@src(), .{ .dir = .vertical }, card);
+        labelW(@src(), "Nothing recovered yet.", .body, .grave, .{});
+        empty.deinit();
     }
 }
 
