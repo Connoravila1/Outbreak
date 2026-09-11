@@ -190,6 +190,10 @@ const phone_file = "android.zig";
 /// lands.
 const render_dir = "@import(\"render/";
 
+/// The DVUI toolkit, quarantined like the renderer was: a core file never imports it.
+/// The shell file that does is `desktop.zig`, registered in `shell` below.
+const dvui_module = "@import(\"dvui";
+
 /// `root.zig` is the module manifest, not a unit of logic -- it re-exports everything so the test
 /// binary can reach it, and it imports the shell too. It is the one file permitted to name the
 /// renderer, and it is named here rather than left as an unexplained hole.
@@ -263,6 +267,9 @@ const shell = [_]Source{
     // it is shell -- but it holds no coordinate (it works in counters, not places), and the guard
     // pins the f64 out of it just the same.
     .{ .name = "governor.zig", .text = @embedFile("governor.zig") },
+    // SHELL. The desktop host: SDL3 window, DVUI frame loop, the draw-list interpreter for
+    // ui.zig. Holds no coordinate -- the f64 ban applies to it like every other shell file.
+    .{ .name = "desktop.zig", .text = @embedFile("desktop.zig") },
 };
 
 /// ============================================================================
@@ -443,18 +450,21 @@ comptime {
             }
         }
 
-        // THE RENDERER IS QUARANTINED (D7). Does a game-state file reach into it?
+        // THE RENDERER IS QUARANTINED (D7). Does a game-state file reach into it -- or into the
+        // toolkit that now renders?
         if (is_core and !std.mem.eql(u8, src.name, render_importer_exempt)) {
-            var j: usize = 0;
-            while (j < src.text.len) : (j += 1) {
-                if (src.text[j] != render_dir[0]) continue;
-                if (startsWith(src.text[j..], render_dir)) {
-                    @compileError("D7 VIOLATION: " ++ src.name ++ " imports the renderer. " ++
-                        "The rendering module is quarantined ABSOLUTELY: it may consume a CellId " ++
-                        "and produce pixels, and no game-state module may import it or be written " ++
-                        "to by it. If the renderer vanished tomorrow, only the renderer should " ++
-                        "fail to compile. It is also where the one sanctioned rendering dependency " ++
-                        "lives, and the quarantine is what makes that dependency removable at all.");
+            for ([_][]const u8{ render_dir, dvui_module }) |banned| {
+                var j: usize = 0;
+                while (j < src.text.len) : (j += 1) {
+                    if (src.text[j] != banned[0]) continue;
+                    if (startsWith(src.text[j..], banned)) {
+                        @compileError("D7 VIOLATION: " ++ src.name ++ " imports the renderer. " ++
+                            "The rendering module is quarantined ABSOLUTELY: it may consume a CellId " ++
+                            "and produce pixels, and no game-state module may import it or be written " ++
+                            "to by it. If the renderer vanished tomorrow, only the renderer should " ++
+                            "fail to compile. It is also where the one sanctioned rendering dependency " ++
+                            "lives, and the quarantine is what makes that dependency removable at all.");
+                    }
                 }
             }
         }

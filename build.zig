@@ -117,6 +117,38 @@ pub fn build(b: *std.Build) void {
     const run_server_step = b.step("run-server", "Build and run the server");
     run_server_step.dependOn(&run_server.step);
 
+    // THE DESKTOP HARNESS (CURRENT.md): the whole game on a laptop — DVUI over SDL3 driving the
+    // same ui.zig the phone will run. This is where interface iteration happens; the phone is
+    // for GPS-path validation. Not in the default step: SDL compiles from source on first use.
+    //
+    //     zig build run-desktop
+    const dvui_dep = b.dependency("dvui", .{
+        .target = target,
+        .optimize = optimize,
+        .backend = .sdl3,
+    });
+
+    const desktop_mod = b.createModule(.{
+        .root_source_file = b.path("src/desktop.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    desktop_mod.addImport("dvui", dvui_dep.module("dvui_sdl3"));
+    desktop_mod.addImport("sdl-backend", dvui_dep.module("sdl3"));
+    desktop_mod.addOptions("flags", flags);
+    addFonts(b, desktop_mod);
+    desktop_mod.addImport("icon_png", b.createModule(.{ .root_source_file = b.path("assets/logo.png") }));
+
+    const desktop = b.addExecutable(.{ .name = "outbreak", .root_module = desktop_mod });
+    const install_desktop = b.addInstallArtifact(desktop, .{});
+    const desktop_step = b.step("desktop", "Build the desktop harness (DVUI over SDL3)");
+    desktop_step.dependOn(&install_desktop.step);
+
+    const run_desktop = b.addRunArtifact(desktop);
+    const run_desktop_step = b.step("run-desktop", "Build and run the desktop harness");
+    run_desktop_step.dependOn(&run_desktop.step);
+
     // The pure core cross-compiled for the phone ABI — ReleaseSafe, since it parses bytes off a
     // network inside a JVM where a panic is a corrupted runtime, not a debuggable crash.
     const android_step = b.step("android", "Build the core as a static library for Android");
