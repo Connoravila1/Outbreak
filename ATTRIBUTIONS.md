@@ -46,16 +46,6 @@ linked from here.
 
 ## Audio
 
-**Owed, before any build that plays this ships:**
-
-- [ ] A credits screen, or a line in the app, carrying **Tim Beek**, a link to https://timbeek.com/,
-      and a link to the CC BY 4.0 licence.
-- [ ] If the track is trimmed, looped or re-encoded by then — and looping it almost certainly means
-      trimming it — the **Modified?** row above changes to yes, and the app must say so too.
-
-The attribution is the *price* of the music, not a nicety attached to it. If we cannot put a credit
-on a screen, we do not get to use the track.
-
 ---
 
 ## Client sound set (`client/public/audio/`)
