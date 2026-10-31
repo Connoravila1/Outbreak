@@ -77,9 +77,9 @@ export function Toasts() {
 }
 
 // ---- section header ----
-export function Section({ title, aside, children }: { title: string; aside?: ComponentChildren; children: ComponentChildren }) {
+export function Section({ title, aside, children, id }: { title: string; aside?: ComponentChildren; children: ComponentChildren; id?: string }) {
   return (
-    <section class="sect">
+    <section class="sect" id={id}>
       <h3 class="display sect-h"><span>{title}</span>{aside != null && <span class="dim num sect-aside">{aside}</span>}</h3>
       {children}
     </section>

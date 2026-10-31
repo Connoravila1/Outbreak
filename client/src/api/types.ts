@@ -268,7 +268,8 @@ export interface Catalog {
   levels: {
     xp_to_next: number[];
     titles: Record<Faction, string[]>;
-    unlocks: { level: number; text: string }[];
+    /** `key` names the unlock (e.g. "store", "raids"); the first-time explainers hang off it. */
+    unlocks: { level: number; key: string; text: string }[];
   };
   store: CatalogStoreEntry[];
 }

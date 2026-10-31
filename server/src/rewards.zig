@@ -96,7 +96,7 @@ pub fn apply(req: *Req, p: *Player, acc: *Acc, district: ?[]const u8) HandlerErr
     p.xp = lr.xp;
     p.level = lr.level;
     if (lr.levels_gained > 0) {
-        var texts: [16][]const u8 = undefined;
+        var texts: [24][]const u8 = undefined;
         const n = progression.unlockTexts(before, p.level, &texts);
         out.level_up = .{ .from = before, .to = p.level, .unlocks = try a.dupe([]const u8, texts[0..n]) };
         model.fillAbilities(p);

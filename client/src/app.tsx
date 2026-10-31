@@ -25,6 +25,7 @@ import { ServerAddress } from './onboarding/ServerAddress';
 import { isNative } from './native/platform';
 import { PatrolSheet } from './patrol/PatrolSheet';
 import { PatrolReport } from './patrol/PatrolReport';
+import { GuideHost } from './guide/Guide';
 import './shell/shell.css';
 
 const bootError = signal<string | null>(null);
@@ -65,6 +66,7 @@ function Shell() {
       <GuestNudge />
       <PatrolSheet />
       <PatrolReport />
+      <GuideHost />
     </div>
   );
 }

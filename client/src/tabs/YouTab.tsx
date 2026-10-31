@@ -3,6 +3,7 @@ import { Profile } from '../you/Profile';
 import { Feed } from '../you/Feed';
 import { Archive } from '../notes/Archive';
 import { Store } from '../you/Store';
+import { FieldManual } from '../guide/Guide';
 import { Settings } from '../you/Settings';
 import { GuestNote } from '../you/Account';
 import '../shell/shell.css';
@@ -17,6 +18,7 @@ export function YouTab() {
       <Archive />
       <Feed />
       <Store />
+      <FieldManual />
       <Settings />
     </div>
   );

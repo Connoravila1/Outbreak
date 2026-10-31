@@ -135,26 +135,32 @@ export class MarkerLayer {
 
   /**
    * Hand labels get crowded. Hidden below zoom 16; otherwise placed greedily, nearest to `me` first,
-   * and a label whose box overlaps one already placed is skipped (the icon stays).
+   * and a label whose box overlaps one already placed is skipped (the icon stays). Landmark labels
+   * go last, and they also give way to the body of any other marker, so a real place's name never
+   * hides something the player can act on.
    */
   declutter(me: { lat: number; lon: number } | null, selectedId: string | null) {
     const zoom = this.map.getZoom();
-    const notes: { el: HTMLElement; d: number }[] = [];
+    const notes: { el: HTMLElement; d: number; place: boolean }[] = [];
+    const bodies: DOMRect[] = [];
     const origin = me ? this.map.project([me.lon, me.lat]) : null;
     for (const [id, e] of this.live) {
+      const place = e.el.classList.contains('mk-landmark');
+      if (!place) bodies.push(e.el.getBoundingClientRect());
       const el = e.el.querySelector<HTMLElement>('.mk-note');
       if (!el) continue;
       el.classList.remove('mk-note-off');
       if (zoom < 16) { el.classList.add('mk-note-off'); continue; }
       const p = this.map.project(e.m.getLngLat());
       const d = id === selectedId ? -1 : origin ? Math.hypot(p.x - origin.x, p.y - origin.y) : 0;
-      notes.push({ el, d });
+      notes.push({ el, d, place: place && d >= 0 }); // a selected place keeps its label
     }
-    notes.sort((a, b) => a.d - b.d);
+    notes.sort((a, b) => Number(a.place) - Number(b.place) || a.d - b.d);
     const placed: DOMRect[] = [];
+    const clash = (r: DOMRect, q: DOMRect, padX: number, padY: number) => r.left < q.right + padX && r.right > q.left - padX && r.top < q.bottom + padY && r.bottom > q.top - padY;
     for (const n of notes) {
       const r = n.el.getBoundingClientRect();
-      const hit = placed.some((q) => r.left < q.right + 2 && r.right > q.left - 2 && r.top < q.bottom + 1 && r.bottom > q.top - 1);
+      const hit = placed.some((q) => clash(r, q, 2, 1)) || (n.place && bodies.some((q) => clash(r, q, 0, 0)));
       if (hit) n.el.classList.add('mk-note-off'); else placed.push(r);
     }
   }

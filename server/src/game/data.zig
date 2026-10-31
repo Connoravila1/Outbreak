@@ -457,25 +457,28 @@ pub const titles = struct {
     pub const zombie = [_][]const u8{ "Turned", "Lurcher", "Lurker", "Stalker", "Ravager", "Mauler", "Alpha", "Dread", "Blight", "Plaguebringer", "Patient Zero" };
 };
 
-pub const Unlock = struct { level: u8, text: []const u8 };
+/// `key` is the stable name of an unlock; the client keys its first-time explainers on it.
+pub const Unlock = struct { level: u8, key: []const u8, text: []const u8 };
 
 pub const unlocks = [_]Unlock{
-    .{ .level = 1, .text = "Starter kit, map, PvE, caches" },
-    .{ .level = 2, .text = "The Store" },
-    .{ .level = 3, .text = "Ability slot 1 and your first ability" },
-    .{ .level = 4, .text = "Item upgrading" },
-    .{ .level = 5, .text = "PvP protection ends: real-world fights begin. Weekly missions. Echoes" },
-    .{ .level = 7, .text = "New ability: Aimed Shot / Pounce" },
-    .{ .level = 8, .text = "Airdrops become visible" },
-    .{ .level = 10, .text = "Clans" },
-    .{ .level = 12, .text = "Ability slot 2, and Barricade / Calcify" },
-    .{ .level = 15, .text = "Territory: plant flags at Strongholds" },
-    .{ .level = 18, .text = "New ability: Adrenaline / Bloodlust" },
-    .{ .level = 20, .text = "Raids" },
-    .{ .level = 25, .text = "Ability slot 3, and Molotov / Infectious Bite" },
-    .{ .level = 30, .text = "Legendary drop rate +50%" },
-    .{ .level = 33, .text = "New ability: Overwatch / Swarm" },
-    .{ .level = 42, .text = "New ability: Last Stand / Undying" },
+    .{ .level = 1, .key = "start", .text = "Starter kit, map, PvE, caches" },
+    .{ .level = 2, .key = "store", .text = "The Store" },
+    .{ .level = 3, .key = "ability_slot_1", .text = "Ability slot 1 and your first ability" },
+    .{ .level = 4, .key = "upgrading", .text = "Item upgrading" },
+    .{ .level = 5, .key = "contact", .text = "PvP protection ends: real-world fights begin" },
+    .{ .level = 5, .key = "missions", .text = "Weekly missions" },
+    .{ .level = 5, .key = "echoes", .text = "Echoes" },
+    .{ .level = 7, .key = "ability_7", .text = "New ability: Aimed Shot / Pounce" },
+    .{ .level = 8, .key = "airdrops", .text = "Airdrops become visible" },
+    .{ .level = 10, .key = "clans", .text = "Clans" },
+    .{ .level = 12, .key = "ability_slot_2", .text = "Ability slot 2, and Barricade / Calcify" },
+    .{ .level = 15, .key = "territory", .text = "Territory: plant flags at Strongholds" },
+    .{ .level = 18, .key = "ability_18", .text = "New ability: Adrenaline / Bloodlust" },
+    .{ .level = 20, .key = "raids", .text = "Raids" },
+    .{ .level = 25, .key = "ability_slot_3", .text = "Ability slot 3, and Molotov / Infectious Bite" },
+    .{ .level = 30, .key = "legendary", .text = "Legendary drop rate +50%" },
+    .{ .level = 33, .key = "ability_33", .text = "New ability: Overwatch / Swarm" },
+    .{ .level = 42, .key = "ability_42", .text = "New ability: Last Stand / Undying" },
 };
 
 pub const Sku = struct {

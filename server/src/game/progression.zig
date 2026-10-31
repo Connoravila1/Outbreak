@@ -284,12 +284,20 @@ test "titles every five levels" {
     try std.testing.expectEqualStrings("Patient Zero", title(.zombie, 50));
 }
 
+test "unlock keys are unique and levels ascend" {
+    for (data.unlocks, 0..) |u, i| {
+        try std.testing.expect(u.key.len > 0);
+        if (i > 0) try std.testing.expect(u.level >= data.unlocks[i - 1].level);
+        for (data.unlocks[0..i]) |v| try std.testing.expect(!std.mem.eql(u8, u.key, v.key));
+    }
+}
+
 test "unlock tables" {
     var buf: [8][]const u8 = undefined;
     try std.testing.expectEqual(@as(usize, 1), unlockTexts(1, 2, &buf));
     try std.testing.expectEqualStrings("The Store", buf[0]);
     try std.testing.expectEqual(@as(usize, 0), unlockTexts(5, 6, &buf));
-    try std.testing.expectEqual(@as(usize, 3), unlockTexts(2, 5, &buf));
+    try std.testing.expectEqual(@as(usize, 5), unlockTexts(2, 5, &buf));
     try std.testing.expectEqual(@as(usize, 0), abilitySlots(2));
     try std.testing.expectEqual(@as(usize, 1), abilitySlots(3));
     try std.testing.expectEqual(@as(usize, 1), abilitySlots(11));

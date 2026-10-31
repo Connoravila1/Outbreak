@@ -6,7 +6,13 @@
   touch-action: manipulation;
 }
 .mk .mk-icon { position: relative; z-index: 2; }
-.mk.selected { scale: 1.18; z-index: 5; }
+/* Stacking, bottom to top: real places, caches, things that fight or hold ground, the tutorial target, the selection.
+   Each marker is its own stacking context, so a landmark's label can never climb over a creature. */
+.mk-landmark { z-index: 1; }
+.mk-cache, .mk-airdrop { z-index: 2; }
+.mk-enemy, .mk-echo, .mk-raid, .mk-stronghold { z-index: 3; }
+.mk.tutorial { z-index: 6; }
+.mk.selected { scale: 1.18; z-index: 7; }
 .mk:focus-visible { outline: 3px solid var(--accent); outline-offset: 0; }
 
 .mk-note {

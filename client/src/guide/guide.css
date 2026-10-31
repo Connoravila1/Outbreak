@@ -1,0 +1,18 @@
+/* First-time explainers (bottom sheet) and the Field manual list on the You tab. */
+.guide-card { display: grid; gap: 10px; }
+.guide-card .eyebrow { margin: 0; font-size: var(--fs-12); letter-spacing: .12em; text-transform: uppercase; color: var(--text-dim); }
+:root[data-lens='heat'] .guide-card .eyebrow { text-transform: lowercase; color: var(--hot); }
+.guide-h { margin: 0; font-size: var(--fs-28); line-height: 1.05; }
+:root[data-lens='survey'] .guide-h { border-bottom: 3px solid var(--hazard); padding-bottom: 4px; }
+:root[data-lens='heat'] .guide-h { text-transform: lowercase; text-shadow: 0 0 18px color-mix(in srgb, var(--hot) 55%, transparent); }
+.guide-body { margin: 0; font-size: var(--fs-16); line-height: 1.4; }
+.guide-actions { display: grid; gap: 8px; margin-top: 6px; }
+.guide-more { margin: 0; text-align: center; font-size: var(--fs-12); }
+
+.manual { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
+.manual-toggle { display: flex; gap: 8px; align-items: center; justify-content: center; }
+.manual-row { display: flex; gap: 10px; align-items: center; width: 100%; padding: 10px; text-align: left; font: inherit; color: inherit; background: var(--surface-2); cursor: pointer; min-height: var(--tap); }
+.manual-row.locked { cursor: default; opacity: .6; }
+.mr-main { flex: 1; min-width: 0; display: grid; }
+.mr-main small { font-size: var(--fs-12); }
+.mr-lvl { flex: none; font-size: var(--fs-12); color: var(--text-dim); }

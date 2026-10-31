@@ -29,7 +29,7 @@ export function Store() {
     } catch (e) { setErr(errorMessage(e)); } finally { setBusy(false); }
   };
   return (
-    <Section title={say('Store', 'trade')} aside={<span class="salv-line"><Icon name="recycle" size={14} /> {m.salvage} {say('salvage', 'salvage')}</span>}>
+    <Section id="store" title={say('Store', 'trade')} aside={<span class="salv-line"><Icon name="recycle" size={14} /> {m.salvage} {say('salvage', 'salvage')}</span>}>
       {items.length === 0 && <p class="empty">{say('Nothing for sale.', 'nothing to trade.')}</p>}
       <ul class="store">
         {items.map((raw) => {

@@ -245,7 +245,11 @@ Event = { id, at, type: "contact"|"echo_report"|"level_up"|"raid"|"war_result"|"
 uniques:[{id, base, names, lore, perks}], rarities, perks:[{id, name, text}],
 consumables:[{id, names, text, price}], abilities:[{id, level, names, text}],
 enemies:[{id, names, text}], levels:{xp_to_next:[...], titles:{human:[], zombie:[]},
-unlocks:[{level, text}]}, store:[{sku, name, price, text}]}`.
+unlocks:[{level, key, text}]}, store:[{sku, name, price, text}]}`.
+
+`levels.unlocks` is the one unlock table (`data.unlocks`): `key` is a stable name (`store`, `contact`, `raids`, ...), `text` is
+what the level-up screen lists. Several rows can share a level (level 5 has three). The client keys its first-time
+explainers on `key`; their wording is client copy, and which ones were shown is stored on the device only.
 
 ### Contact rank and the `contacts` board
 

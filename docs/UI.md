@@ -116,7 +116,8 @@ simulator panel beside it.
 - **War**: global faction bar, district bar, week countdown, top players this week, a leaderboard
   toggle (weekly / level), and Clan (L10+: create, join or your clan page with roster and chat).
 - **You**: big level and title, XP to next, stat block, record (wins, losses, contacts, echoes,
-  caches, distance), the feed (recent events), the Store, and Settings (server URL, sound,
+  caches, distance), the feed (recent events), the Store, the Field manual (Humans) / "what the blood knows" (Zombies)
+  and Settings (server URL, sound,
   haptics, reduced motion) and Account (linked sign-ins, Link Google/Apple, Sign out, Delete account;
   guests see a dismissible "link an account" reminder at the top of the tab).
 
@@ -157,6 +158,14 @@ simulator panel beside it.
    toast that opens the reader. The **Archive** in the You tab lists sets with progress, finds as
    rows, the rest as `???` silhouettes with their rarity, and a Claim button on a finished set (its
    title joins the profile). Unread notes carry a red dot, also on the You tab.
+8. **First-time explainers.** Reaching a level that unlocks something queues a bottom card (the unlock's
+   name, 2-3 short sentences, one button to go there, "Got it"), shown over the map or any tab, never over
+   a fight, a level-up or a note. After a button sends the player somewhere, the rest of the queue waits until
+   they change tab. The You tab keeps a Field manual (Survey) / "what the blood knows" (Heat): unlocked entries
+   re-open their card, locked ones read "Level N". Seen-state is local (`outbreak.guide`).
+
+**Marker layers.** Map markers stack bottom to top: landmarks, caches and airdrops, enemies/echoes/raids/strongholds,
+the First Blood target, the selected marker. Landmark labels also give way to any other marker's body.
 
 ## Rules
 

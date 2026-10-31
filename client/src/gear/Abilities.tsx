@@ -22,7 +22,7 @@ export function Abilities() {
   };
   const firstLocked = list.find((a) => !unlocked.includes(a.id));
   return (
-    <Section title={say('Abilities', 'instincts')} aside={`${equipped.length} / ${slots} ${say('slots', 'slots')}`}>
+    <Section id="abilities" title={say('Abilities', 'instincts')} aside={`${equipped.length} / ${slots} ${say('slots', 'slots')}`}>
       <div class="slot-strip" aria-label="Ability slots">
         {slots === 0
           ? <p class="dim">{say('Your first slot opens at level 3.', 'a first instinct wakes at level 3.')}</p>

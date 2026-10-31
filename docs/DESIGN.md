@@ -216,6 +216,12 @@ the level ring fills. Unlocks:
 | 33 | Ability: Overwatch / Swarm |
 | 42 | Ability: Last Stand / Undying |
 
+**First-time explainers.** The first time you reach a level that unlocks something, a short card says what it is, why
+it is worth doing, and offers one button that takes you there ("Open the Store"). One card per unlock, queued if a
+level-up crosses several, shown only after the fight and level-up screens are dismissed. They are written in each
+faction's voice and can be re-read in the Field manual on the You tab, where locked entries show their level. A
+player who is already well past an unlock sees only the newest one, once.
+
 Titles every 5 levels (shown under your callsign):
 
 - Human: Survivor (1), Forager (5), Defender (10), Ranger (15), Sentinel (20), Warden (25),

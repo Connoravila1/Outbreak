@@ -88,9 +88,15 @@ const CATALOG: Catalog = {
       zombie: ['Turned', 'Lurcher', 'Lurker', 'Stalker', 'Ravager', 'Mauler', 'Alpha', 'Dread', 'Blight', 'Plaguebringer', 'Patient Zero'],
     },
     unlocks: [
-      { level: 2, text: 'The Store' }, { level: 3, text: 'Ability slot 1 and your first ability' }, { level: 4, text: 'Item upgrading' },
-      { level: 5, text: 'Real-world fights begin, weekly missions, Echoes' }, { level: 7, text: 'A new ability' }, { level: 8, text: 'Airdrops become visible' },
-      { level: 10, text: 'Clans' }, { level: 12, text: 'Ability slot 2' }, { level: 15, text: 'Strongholds' },
+      { level: 1, key: 'start', text: 'Starter kit, map, PvE, caches' },
+      { level: 2, key: 'store', text: 'The Store' }, { level: 3, key: 'ability_slot_1', text: 'Ability slot 1 and your first ability' },
+      { level: 4, key: 'upgrading', text: 'Item upgrading' }, { level: 5, key: 'contact', text: 'PvP protection ends: real-world fights begin' },
+      { level: 5, key: 'missions', text: 'Weekly missions' }, { level: 5, key: 'echoes', text: 'Echoes' },
+      { level: 7, key: 'ability_7', text: 'New ability: Aimed Shot / Pounce' }, { level: 8, key: 'airdrops', text: 'Airdrops become visible' },
+      { level: 10, key: 'clans', text: 'Clans' }, { level: 12, key: 'ability_slot_2', text: 'Ability slot 2, and Barricade / Calcify' },
+      { level: 15, key: 'territory', text: 'Territory: plant flags at Strongholds' }, { level: 18, key: 'ability_18', text: 'New ability: Adrenaline / Bloodlust' },
+      { level: 20, key: 'raids', text: 'Raids' }, { level: 25, key: 'ability_slot_3', text: 'Ability slot 3, and Molotov / Infectious Bite' },
+      { level: 30, key: 'legendary', text: 'Legendary drop rate +50%' },
     ],
   },
   store: [

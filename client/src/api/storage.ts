@@ -76,6 +76,8 @@ export const storage = {
 };
 
 export const KEYS = {
+  /** First-time explainers: the level they were last synced at and the ones still to show. */
+  guide: 'outbreak.guide',
   server: 'outbreak.server',
   token: 'outbreak.token',
   simPos: 'outbreak.sim.pos',
