@@ -26,6 +26,8 @@ const NAMES = [
   'upgrade', 'chat-bubble', 'trash-can', 'check-mark', 'exit-door', 'magnifying-glass', 'shop',
   'scroll-unfurled', 'three-friends', 'cancel', 'info', 'flame-claws', 'sands-of-time',
   'broken-heart', 'id-card', 'cash', 'sword-wound', 'funnel', 'pill', 'heart-bottle',
+  // real places, time of day
+  'shopping-cart', 'hammer-nails', 'gas-pump', 'police-badge', 'knife-fork', 'shirt', 'sun', 'moon',
 ];
 
 const out = {};

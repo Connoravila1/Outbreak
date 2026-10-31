@@ -66,6 +66,21 @@ pub const ConsumableMap = struct {
     }
 };
 
+/// `Record<archetype, number>`: how often each enemy type has been fought (the raid boss is left out).
+pub const BestiaryMap = struct {
+    counts: [data.archetypes.len]u32 = [_]u32{0} ** data.archetypes.len,
+
+    pub fn jsonStringify(self: BestiaryMap, jw: anytype) !void {
+        try jw.beginObject();
+        for (data.archetypes, 0..) |a, i| {
+            if (a.weight == 0) continue;
+            try jw.objectField(@tagName(a.id));
+            try jw.write(self.counts[i]);
+        }
+        try jw.endObject();
+    }
+};
+
 pub const LevelUp = struct { from: u8, to: u8, unlocks: []const []const u8 };
 
 pub const RewardsView = struct {
@@ -154,6 +169,9 @@ pub const MeView = struct {
     war_points_week: u32,
     record: RecordView,
     account: AccountView,
+    /// The saved default stance (used in Contact); PvE asks per fight.
+    stance: data.Stance,
+    bestiary: BestiaryMap,
 };
 
 pub const MeLite = struct {
@@ -294,6 +312,8 @@ pub fn meView(req: *Req, p: *Player) HandlerError!MeView {
         .war_points_week = try warstate.weekPoints(req, p.id),
         .record = .{ .wins = p.wins, .losses = p.losses, .contacts = p.contacts, .echoes = p.echoes, .caches = p.caches, .distance_m = p.distance_m },
         .account = .{ .guest = providers.items.len == 0, .providers = providers.items, .email = email },
+        .stance = p.stance,
+        .bestiary = .{ .counts = p.bestiary },
     };
 }
 

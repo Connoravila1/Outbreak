@@ -410,7 +410,7 @@ test "location, engage an enemy, rewards and the defeated list" {
     try testing.expectEqualStrings("pve", try b.str("kind"));
     try testing.expectEqualStrings("Scout", try b.str("a.name"));
     try testing.expectEqualStrings("enemy", try b.str("b.kind"));
-    try testing.expect(try b.len("turns") > 2);
+    try testing.expect(try b.len("turns") >= 1); // a crit can end it in one or two blows
     try testing.expect(try b.int("rewards.xp") > 0);
     const won = std.mem.eql(u8, try b.str("winner"), "a");
     // The log ends where the result says.
@@ -1864,4 +1864,453 @@ test "deleting needs a token" {
     var r = try h.call("DELETE", "/api/account", null, "");
     defer r.deinit();
     try testing.expectEqual(@as(u16, 401), r.status);
+}
+
+// --- Real places, stances, day and night -------------------------------------------------------------------
+
+/// POST /api/location with a `places` array (raw JSON text).
+fn locationWith(h: *Harness, token: []const u8, lat: f64, lon: f64, places: []const u8) !Res {
+    return h.ok("/api/location", token, "{{\"lat\":{d},\"lon\":{d},\"acc\":5,\"sanctuary\":false,\"places\":{s}}}", .{ lat, lon, places });
+}
+
+/// `{key, kind, lat, lon, name}` for a place `north_m` metres north of the base point.
+fn placeJson(buf: []u8, key: []const u8, kind: []const u8, north_m: f64, name: []const u8) ![]const u8 {
+    return std.fmt.bufPrint(buf, "{{\"key\":\"{s}\",\"kind\":\"{s}\",\"lat\":{d},\"lon\":{d},\"name\":\"{s}\"}}", .{ key, kind, base_lat + north_m / 111_320.0, base_lon, name });
+}
+
+fn landmarkIn(w: *const Res, kind: []const u8) !?std.json.ObjectMap {
+    for ((try w.at("landmarks")).array.items) |l| {
+        if (std.mem.eql(u8, l.object.get("kind").?.string, kind)) return l.object;
+    }
+    return null;
+}
+
+test "landmarks: reported places become caches once per window, with rolls and the cache XP" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var tok: [64]u8 = undefined;
+    try h.player("Looter", "human", &tok);
+
+    var b1: [200]u8 = undefined;
+    var b2: [200]u8 = undefined;
+    var b3: [200]u8 = undefined;
+    const arr = try std.fmt.allocPrint(testing.allocator, "[{s},{s},{s}]", .{
+        try placeJson(&b1, "n1001", "pharmacy", 15, "Duane   Reade <b>"),
+        try placeJson(&b2, "n1002", "diner", 200, "Joe's"),
+        try placeJson(&b3, "n1003", "hospital", 10, "St. Mary's"),
+    });
+    defer testing.allocator.free(arr);
+
+    var w = try locationWith(&h, &tok, base_lat, base_lon, arr);
+    defer w.deinit();
+    // The hospital is not a kind at all (a sanctuary); the others are listed with sanitized names.
+    try testing.expectEqual(@as(usize, 2), try w.len("landmarks"));
+    const ph = (try landmarkIn(&w, "pharmacy")).?;
+    try testing.expectEqualStrings("Duane Reade b", ph.get("name").?.string);
+    try testing.expect(ph.get("available").?.bool);
+    try testing.expect(ph.get("available_at").? == .null);
+    const window = @divFloor(h.ctx.now(), game.landmarks.window_ms);
+    const want_id = try std.fmt.allocPrint(testing.allocator, "l.n1001.{d}", .{window});
+    defer testing.allocator.free(want_id);
+    try testing.expectEqualStrings(want_id, ph.get("id").?.string);
+    try testing.expectEqualStrings(want_id, (try landmarkIn(&w, "pharmacy")).?.get("id").?.string);
+
+    // 200 m away: listed, but not in reach.
+    const far = (try landmarkIn(&w, "diner")).?;
+    var too_far = try h.postf("/api/open", &tok, "{{\"id\":\"{s}\"}}", .{far.get("id").?.string});
+    defer too_far.deinit();
+    try testing.expectEqual(@as(u16, 409), too_far.status);
+    try testing.expectEqualStrings("too_far", try too_far.errorCode());
+
+    // Open the pharmacy: two rolls, +25% salvage per roll, plus the cache XP; it counts as a cache.
+    var o = try h.ok("/api/open", &tok, "{{\"id\":\"{s}\"}}", .{want_id});
+    defer o.deinit();
+    const rolls = try o.len("loot.items") + blk: {
+        var n: i64 = 0;
+        var it = (try o.at("loot.consumables")).object.iterator();
+        while (it.next()) |e| n += e.value_ptr.integer;
+        break :blk @as(usize, @intCast(n));
+    };
+    try testing.expectEqual(@as(usize, 2), rolls);
+    const salvage_each: i64 = @intFromFloat(@round(@as(f32, @floatFromInt(game.loot.pveSalvage(1))) * 1.25));
+    try testing.expectEqual(2 * salvage_each, try o.int("loot.salvage") - try o.int("loot.auto_scrapped"));
+    try testing.expectEqual(@as(i64, game.progression.cacheXp(1)), try o.int("loot.xp"));
+    try testing.expectEqual(@as(i64, 1), try o.int("me.record.caches"));
+
+    // Not twice in one window; the map shows when it restocks.
+    var again = try h.postf("/api/open", &tok, "{{\"id\":\"{s}\"}}", .{want_id});
+    defer again.deinit();
+    try testing.expectEqual(@as(u16, 409), again.status);
+    try testing.expectEqualStrings("already_opened", try again.errorCode());
+    h.advance(5000);
+    var w2 = try locationWith(&h, &tok, base_lat, base_lon, arr);
+    defer w2.deinit();
+    const used = (try landmarkIn(&w2, "pharmacy")).?;
+    try testing.expect(!used.get("available").?.bool);
+    try testing.expectEqual(game.landmarks.nextWindowAt(h.ctx.now()), used.get("available_at").?.integer);
+
+    // An id from an old window or for an unknown place does not validate.
+    const stale = try std.fmt.allocPrint(testing.allocator, "l.n1001.{d}", .{window - 1});
+    defer testing.allocator.free(stale);
+    var bad1 = try h.postf("/api/open", &tok, "{{\"id\":\"{s}\"}}", .{stale});
+    defer bad1.deinit();
+    try testing.expectEqual(@as(u16, 404), bad1.status);
+    var bad2 = try h.postf("/api/open", &tok, "{{\"id\":\"l.nope.{d}\"}}", .{window});
+    defer bad2.deinit();
+    try testing.expectEqual(@as(u16, 404), bad2.status);
+
+    // Four hours on it is stocked again (the new window's id).
+    h.advance(game.landmarks.window_ms);
+    var w3 = try locationWith(&h, &tok, base_lat, base_lon, arr);
+    defer w3.deinit();
+    const fresh = (try landmarkIn(&w3, "pharmacy")).?;
+    try testing.expect(fresh.get("available").?.bool);
+    try testing.expect(!std.mem.eql(u8, fresh.get("id").?.string, want_id));
+    var o2 = try h.ok("/api/open", &tok, "{{\"id\":\"{s}\"}}", .{fresh.get("id").?.string});
+    o2.deinit();
+}
+
+test "landmarks: validation is loose but bounded; places belong to who reported them" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var a: [64]u8 = undefined;
+    var z: [64]u8 = undefined;
+    try h.player("Mapper", "human", &a);
+    try h.player("Other", "zombie", &z);
+
+    var bufs: [6][200]u8 = undefined;
+    // 449 m is in, 500 m is out; unknown kinds, bad keys and bad coordinates are skipped.
+    const arr = try std.fmt.allocPrint(testing.allocator, "[{s},{s},{s},{s},{s}]", .{
+        try placeJson(&bufs[0], "ok1", "fuel", 380, "Shell"),
+        try placeJson(&bufs[1], "far1", "fuel", 500, "Too far"),
+        try placeJson(&bufs[2], "sch1", "school", 20, "School"),
+        try placeJson(&bufs[3], "bad.key", "fuel", 20, "Dotted"),
+        "{\"key\":\"nan1\",\"kind\":\"fuel\",\"lat\":999,\"lon\":0}",
+    });
+    defer testing.allocator.free(arr);
+    var w = try locationWith(&h, &a, base_lat, base_lon, arr);
+    defer w.deinit();
+    try testing.expectEqual(@as(usize, 1), try w.len("landmarks"));
+    try testing.expectEqualStrings("fuel", try w.str("landmarks.0.kind"));
+
+    // Another player does not see Mapper's places until their own map reports them too.
+    var wz = try h.location(&z, base_lat, base_lon);
+    defer wz.deinit();
+    try testing.expectEqual(@as(usize, 0), try wz.len("landmarks"));
+    var wz2 = try locationWith(&h, &z, base_lat, base_lon, arr);
+    defer wz2.deinit();
+    try testing.expectEqual(@as(usize, 1), try wz2.len("landmarks"));
+    // The zombie sees the same landmark under its own name for the kind (the id is shared).
+    try testing.expectEqualStrings(try w.str("landmarks.0.id"), try wz2.str("landmarks.0.id"));
+
+    // The same key reported somewhere else does not move the landmark.
+    var moved: [200]u8 = undefined;
+    const moved_arr = try std.fmt.allocPrint(testing.allocator, "[{s}]", .{try placeJson(&moved, "ok1", "fuel", 300, "Shell")});
+    defer testing.allocator.free(moved_arr);
+    h.advance(5000);
+    var wm = try locationWith(&h, &z, base_lat, base_lon, moved_arr);
+    defer wm.deinit();
+    try testing.expectEqual(@as(usize, 1), try wm.len("landmarks"));
+    const lat0 = try wm.at("landmarks.0");
+    try testing.expect(@abs(lat0.object.get("lat").?.float - (base_lat + 380.0 / 111_320.0)) < 1e-6);
+
+    // More than 40 places in one report: the first 40 are used, the request still works.
+    var big: std.ArrayList(u8) = .empty;
+    defer big.deinit(testing.allocator);
+    try big.append(testing.allocator, '[');
+    for (0..60) |i| {
+        if (i > 0) try big.append(testing.allocator, ',');
+        var item: [200]u8 = undefined;
+        var key: [16]u8 = undefined;
+        const k = try std.fmt.bufPrint(&key, "bulk{d}", .{i});
+        try big.appendSlice(testing.allocator, try placeJson(&item, k, "diner", 10 + @as(f64, @floatFromInt(i)), "Diner"));
+    }
+    try big.append(testing.allocator, ']');
+    h.advance(5000);
+    var wb = try locationWith(&h, &a, base_lat, base_lon, big.items);
+    defer wb.deinit();
+    // 40 reported now, plus Mapper's earlier fuel stop still fresh.
+    try testing.expectEqual(@as(usize, 40), try wb.len("landmarks"));
+
+    // No landmarks are served (or remembered) from a sanctuary.
+    var ws = try h.ok("/api/location", &a, "{{\"lat\":{d},\"lon\":{d},\"acc\":5,\"sanctuary\":true,\"places\":{s}}}", .{ base_lat, base_lon, arr });
+    defer ws.deinit();
+    try testing.expectEqual(@as(usize, 0), try ws.len("landmarks"));
+    var open_in = try h.postf("/api/open", &a, "{{\"id\":\"l.ok1.{d}\"}}", .{@divFloor(h.ctx.now(), game.landmarks.window_ms)});
+    defer open_in.deinit();
+    try testing.expectEqualStrings("sanctuary", try open_in.errorCode());
+}
+
+test "landmarks: at most six caches per half hour, with a clear reason" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var tok: [64]u8 = undefined;
+    try h.player("Greedy", "zombie", &tok);
+
+    var arr: std.ArrayList(u8) = .empty;
+    defer arr.deinit(testing.allocator);
+    try arr.append(testing.allocator, '[');
+    const kinds = [_][]const u8{ "pharmacy", "grocery", "hardware", "fuel", "police", "outfitter", "diner" };
+    for (kinds, 0..) |k, i| {
+        if (i > 0) try arr.append(testing.allocator, ',');
+        var item: [200]u8 = undefined;
+        var key: [16]u8 = undefined;
+        const key_s = try std.fmt.bufPrint(&key, "k{d}", .{i});
+        try arr.appendSlice(testing.allocator, try placeJson(&item, key_s, k, 5 + @as(f64, @floatFromInt(i)), ""));
+    }
+    try arr.append(testing.allocator, ']');
+
+    var w = try locationWith(&h, &tok, base_lat, base_lon, arr.items);
+    w.deinit();
+    const window = @divFloor(h.ctx.now(), game.landmarks.window_ms);
+    for (0..6) |i| {
+        var r = try h.ok("/api/open", &tok, "{{\"id\":\"l.k{d}.{d}\"}}", .{ i, window });
+        r.deinit();
+        h.advance(1000);
+    }
+    var seventh = try h.postf("/api/open", &tok, "{{\"id\":\"l.k6.{d}\"}}", .{window});
+    defer seventh.deinit();
+    try testing.expectEqual(@as(u16, 409), seventh.status);
+    try testing.expectEqualStrings("landmark_limit", try seventh.errorCode());
+    try testing.expect(std.mem.indexOf(u8, try seventh.str("message"), "Try again in") != null);
+    // A refused attempt did not use the place up.
+    h.advance(game.landmarks.limit_window_ms - 6000 + 1);
+    var w2 = try locationWith(&h, &tok, base_lat, base_lon, arr.items);
+    w2.deinit();
+    var ok7 = try h.ok("/api/open", &tok, "{{\"id\":\"l.k6.{d}\"}}", .{window});
+    ok7.deinit();
+    // And the window of six slides: the second-oldest opening frees the next one.
+    var eighth = try h.postf("/api/open", &tok, "{{\"id\":\"l.k0.{d}\"}}", .{window});
+    defer eighth.deinit();
+    try testing.expectEqual(@as(u16, 409), eighth.status);
+}
+
+test "stance: default careful, validated, shown in the battle, and the hint counts are tracked" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var tok: [64]u8 = undefined;
+    try h.player("Stancer", "human", &tok);
+
+    var me0 = try h.get("/api/me", &tok);
+    defer me0.deinit();
+    try testing.expectEqualStrings("careful", try me0.str("stance"));
+    try testing.expectEqual(@as(i64, 0), try me0.int("bestiary.runner"));
+    try testing.expect((try me0.at("bestiary")).object.get("abomination") == null);
+
+    var set = try h.ok("/api/stance", &tok, "{{\"stance\":\"evasive\"}}", .{});
+    defer set.deinit();
+    try testing.expectEqualStrings("evasive", try set.str("me.stance"));
+    var bad = try h.post("/api/stance", &tok, "{\"stance\":\"berserk\"}");
+    defer bad.deinit();
+    try testing.expectEqual(@as(u16, 400), bad.status);
+    var set2 = try h.ok("/api/stance", &tok, "{{\"stance\":\"careful\"}}", .{});
+    set2.deinit();
+
+    const en = findEnemy(h.ctx.seed, h.ctx.now());
+    const id = en.id();
+    var w = try h.location(&tok, en.lat, en.lon);
+    w.deinit();
+    var badreq = try h.postf("/api/engage", &tok, "{{\"id\":\"{s}\",\"stance\":\"nope\"}}", .{id.str()});
+    defer badreq.deinit();
+    try testing.expectEqual(@as(u16, 400), badreq.status);
+
+    // Evasive costs 10% of the HP pool for the fight; the battle says which stance it was.
+    var b = try h.ok("/api/engage", &tok, "{{\"id\":\"{s}\",\"stance\":\"evasive\"}}", .{id.str()});
+    defer b.deinit();
+    try testing.expectEqualStrings("evasive", try b.str("stance"));
+    const real_max = try b.int("me.max_hp");
+    try testing.expectEqual(@as(i64, @intFromFloat(@round(@as(f64, @floatFromInt(real_max)) * 0.9))), try b.int("a.max_hp"));
+    // HP afterwards is on the real scale, never above the real pool.
+    try testing.expect(try b.int("me.hp") <= real_max);
+    var path_buf: [48]u8 = undefined;
+    try testing.expectEqual(@as(i64, 1), try b.int(try std.fmt.bufPrint(&path_buf, "me.bestiary.{s}", .{@tagName(en.archetype)})));
+}
+
+test "stance: the default is careful when the request says nothing, and counters change the fight" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var tok: [64]u8 = undefined;
+    try h.player("Plain", "human", &tok);
+    const en = findEnemy(h.ctx.seed, h.ctx.now());
+    var w = try h.location(&tok, en.lat, en.lon);
+    w.deinit();
+    var b = try h.ok("/api/engage", &tok, "{{\"id\":\"{s}\"}}", .{en.id().str()});
+    defer b.deinit();
+    try testing.expectEqualStrings("careful", try b.str("stance"));
+    // Careful: +25% DEF (and +10% by day for a Human), -8% ATK on the shown totals.
+    var me = try h.get("/api/me", &tok);
+    defer me.deinit();
+    const base_atk: f64 = @floatFromInt(try me.int("stats.atk"));
+    const base_def: f64 = @floatFromInt(try me.int("stats.def"));
+    try testing.expectEqual(@as(i64, @intFromFloat(@round(base_atk * 0.92))), try b.int("a.stats.atk"));
+    try testing.expectEqual(@as(i64, @intFromFloat(@round(base_def * 1.35))), try b.int("a.stats.def"));
+}
+
+test "stance: Contact fights use each player's saved default" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var a: [64]u8 = undefined;
+    var z: [64]u8 = undefined;
+    try h.player("Hank", "human", &a);
+    try h.player("Zed", "zombie", &z);
+    try h.reachLevel(&a, 6);
+    try h.reachLevel(&z, 7);
+    var s = try h.ok("/api/stance", &a, "{{\"stance\":\"aggressive\"}}", .{});
+    s.deinit();
+    try placePair(&h, &a, &z, 30);
+    tick.runLocked(&h.ctx, h.ctx.now());
+    var wa = try h.location(&a, base_lat, base_lon);
+    defer wa.deinit();
+    var wz = try h.location(&z, base_lat + 30.0 / 111_320.0, base_lon);
+    defer wz.deinit();
+    const ea = (try eventOfType(&wa, "contact")) orelse return error.NoContactEvent;
+    const ez = (try eventOfType(&wz, "contact")) orelse return error.NoContactEvent;
+    try testing.expectEqualStrings("aggressive", ea.object.get("battle").?.object.get("stance").?.string);
+    try testing.expectEqualStrings("careful", ez.object.get("battle").?.object.get("stance").?.string);
+}
+
+test "day and night: WorldView carries the phase and the next change, by the player's longitude" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var tok: [64]u8 = undefined;
+    try h.player("Clock", "human", &tok);
+    // Wednesday noon UTC: noon at Greenwich, midnight on the antimeridian.
+    var w0 = try h.location(&tok, 51.5, 0.0);
+    defer w0.deinit();
+    try testing.expectEqualStrings("day", try w0.str("time.phase"));
+    try testing.expectEqual(wednesday + 8 * 3600_000, try w0.int("time.changes_at"));
+    h.advance(10_000);
+    var w1 = try h.location(&tok, 51.5, 179.9);
+    defer w1.deinit();
+    // Not a walkable jump, so the position stays at the old fix and the phase with it.
+    try testing.expectEqualStrings("day", try w1.str("time.phase"));
+    // A second player teleports freely on a fresh fix.
+    var t2: [64]u8 = undefined;
+    try h.player("Antipode", "zombie", &t2);
+    var w2 = try h.location(&t2, 51.5, 179.9);
+    defer w2.deinit();
+    try testing.expectEqualStrings("night", try w2.str("time.phase"));
+    // 179.9 E is 11.99 h ahead: 23:59 local, dawn in about 6 h.
+    const to_dawn = try w2.int("time.changes_at") - h.ctx.now();
+    try testing.expect(to_dawn > 6 * 3600_000 and to_dawn < 6 * 3600_000 + 10 * 60_000);
+
+    // Exactly 20:00 at Greenwich is night, the millisecond before is day.
+    var t3: [64]u8 = undefined;
+    try h.player("Dusk", "human", &t3);
+    h.ctx.clock_ms = wednesday + 8 * 3600_000 - 1;
+    var d1 = try h.location(&t3, 51.5, 0.0);
+    defer d1.deinit();
+    try testing.expectEqualStrings("day", try d1.str("time.phase"));
+    h.advance(1);
+    var d2 = try h.location(&t3, 51.5, 0.0);
+    defer d2.deinit();
+    try testing.expectEqualStrings("night", try d2.str("time.phase"));
+    // 06:00 is day again.
+    h.ctx.clock_ms = wednesday + 18 * 3600_000 - 1; // 05:59:59.999
+    var d3 = try h.location(&t3, 51.5, 0.0);
+    defer d3.deinit();
+    try testing.expectEqualStrings("night", try d3.str("time.phase"));
+    h.advance(1);
+    var d4 = try h.location(&t3, 51.5, 0.0);
+    defer d4.deinit();
+    try testing.expectEqualStrings("day", try d4.str("time.phase"));
+}
+
+/// An enemy cell near (lat, lon) whose night extra exists.
+fn findNightExtra(seed: u64, now: i64, lat: f64, lon: f64) spawns.Enemy {
+    var cell = geo.encode(lat, lon, 7);
+    const window = spawns.windowIndex(now, spawns.enemy_window_ms);
+    while (true) {
+        if (spawns.enemy(seed, cell, window, spawns.night_extra_idx)) |e| {
+            if (e.visibleTo(1)) return e;
+        }
+        cell = geo.neighbors(cell)[2].?;
+    }
+}
+
+fn enemyIdsIn(w: *const Res, id: []const u8) !bool {
+    for ((try w.at("enemies")).array.items) |e| {
+        if (std.mem.eql(u8, e.object.get("id").?.string, id)) return true;
+    }
+    return false;
+}
+
+test "night: Humans meet an extra spawn and tougher enemies, Zombies and daytime Humans do not" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var hu: [64]u8 = undefined;
+    var zo: [64]u8 = undefined;
+    try h.player("Hum", "human", &hu);
+    try h.player("Zom", "zombie", &zo);
+    // 170 E at 12:00 UTC is 23:20 local: night.
+    const lat0 = 40.0;
+    const lon0 = 170.0;
+    const extra = findNightExtra(h.ctx.seed, h.ctx.now(), lat0, lon0);
+    const id = extra.id();
+    var wh = try h.location(&hu, extra.lat, extra.lon);
+    defer wh.deinit();
+    try testing.expectEqualStrings("night", try wh.str("time.phase"));
+    try testing.expect(try enemyIdsIn(&wh, id.str()));
+    var wz = try h.location(&zo, extra.lat, extra.lon);
+    defer wz.deinit();
+    try testing.expect(!try enemyIdsIn(&wz, id.str()));
+    var zeng = try h.postf("/api/engage", &zo, "{{\"id\":\"{s}\"}}", .{id.str()});
+    defer zeng.deinit();
+    try testing.expectEqual(@as(u16, 404), zeng.status);
+
+    // The Human fights it at +10% HP/ATK/DEF (level 1 grace factor on top) and earns +15% XP.
+    var b = try h.ok("/api/engage", &hu, "{{\"id\":\"{s}\"}}", .{id.str()});
+    defer b.deinit();
+    const lvl: u32 = @intCast(try b.int("b.level"));
+    const want = game.stats.enemyStatsScaled(extra.archetype, lvl, game.stats.graceFactor(1) * 1.10);
+    try testing.expectEqual(@as(i64, want.hp), try b.int("b.max_hp"));
+    try testing.expectEqual(@as(i64, want.atk), try b.int("b.stats.atk"));
+    const row = game.data.archetype(extra.archetype);
+    const base_xp = game.progression.pveWinXp(lvl, .normal, row.reward_mult);
+    const win_xp: u32 = @intFromFloat(@round(@as(f32, @floatFromInt(base_xp)) * 1.15));
+    const expect_xp = if (std.mem.eql(u8, try b.str("winner"), "a")) win_xp else game.progression.pveLossXp(win_xp);
+    // A first win also lands a level or two of walking-free XP: only XP from the fight is in rewards.
+    try testing.expectEqual(@as(i64, expect_xp), try b.int("rewards.xp"));
+
+    // By day (twelve hours on: 11:20 local) the extra is gone for Humans too.
+    h.advance(12 * 3600_000);
+    var wd = try h.location(&hu, extra.lat, extra.lon);
+    defer wd.deinit();
+    try testing.expectEqualStrings("day", try wd.str("time.phase"));
+    try testing.expect(!try enemyIdsIn(&wd, id.str()));
+}
+
+test "day: Zombies earn +15% PvE XP, and the same enemy is softer for a Human than at night" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var zo: [64]u8 = undefined;
+    try h.player("Zom", "zombie", &zo);
+    // New York at noon UTC is 07:00 local: day.
+    const en = findEnemy(h.ctx.seed, h.ctx.now());
+    var w = try h.location(&zo, en.lat, en.lon);
+    defer w.deinit();
+    try testing.expectEqualStrings("day", try w.str("time.phase"));
+    var b = try h.ok("/api/engage", &zo, "{{\"id\":\"{s}\"}}", .{en.id().str()});
+    defer b.deinit();
+    const lvl: u32 = @intCast(try b.int("b.level"));
+    const want = game.stats.enemyStatsScaled(en.archetype, lvl, game.stats.graceFactor(1));
+    // Zombies are never hit by the night bonus, and the day does not soften enemies.
+    try testing.expectEqual(@as(i64, want.hp), try b.int("b.max_hp"));
+    const row = game.data.archetype(en.archetype);
+    const base_xp = game.progression.pveWinXp(lvl, .normal, row.reward_mult);
+    const win_xp: f32 = @as(f32, @floatFromInt(base_xp)) * 1.15;
+    const won = std.mem.eql(u8, try b.str("winner"), "a");
+    const expect_xp: u32 = if (won) @intFromFloat(@round(win_xp)) else game.progression.pveLossXp(@intFromFloat(@round(win_xp)));
+    // The underdog bonus can add to a Zombie's XP when Humans outnumber Zombies; allow for it.
+    const got: u32 = @intCast(try b.int("rewards.xp"));
+    try testing.expect(got >= expect_xp and got <= expect_xp * 5 / 4 + 1);
 }

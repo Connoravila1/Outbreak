@@ -8,6 +8,8 @@ const model = @import("model.zig");
 const views = @import("views.zig");
 const snapshot = @import("snapshot.zig");
 
+const stance_rules = game.stance;
+const daynight = game.daynight;
 const data = game.data;
 const stats = game.stats;
 const combat = game.combat;
@@ -37,6 +39,8 @@ pub const CombatantView = struct {
 pub const BattleView = struct {
     id: []const u8,
     kind: BattleKind,
+    /// The stance you fought in (null for Echo/Rogue playback of other people's fights).
+    stance: ?data.Stance,
     a: CombatantView,
     b: CombatantView,
     turns: []const combat.Turn,
@@ -49,7 +53,19 @@ pub const BattleView = struct {
 pub const Side = struct {
     combatant: combat.Combatant,
     view: CombatantView,
+    /// The stance this side fought in (players only).
+    stance: ?data.Stance = null,
+    /// A stance can scale the HP pool for the fight (Evasive); the real pool and the factor let
+    /// the HP left be converted back.
+    hp_scale: f32 = 1.0,
+    real_max_hp: i32 = 0,
 };
+
+/// A player's real HP after the fight `o` (where this side was "a").
+pub fn hpAfter(side: Side, o: Outcome) i32 {
+    if (side.real_max_hp == 0) return o.result.hp_a;
+    return stance_rules.realHp(o.result.hp_a, side.hp_scale, side.real_max_hp);
+}
 
 pub const Outcome = struct {
     seed: u64,
@@ -77,13 +93,25 @@ fn gearNames(arena: Allocator, b: *const snapshot.Build) Allocator.Error![]const
     return list.items;
 }
 
-/// You, as side "a".
+/// You, as side "a", in your saved stance (Contact and anything else that does not ask).
 pub fn selfSide(req: *Req, p: *const Player) Allocator.Error!Side {
+    return selfSideWith(req, p, p.stance, null);
+}
+
+/// You, as side "a": `stance` and the phase of the day (from your position) applied to your totals;
+/// `foe` is the PvE archetype, if any, whose counter relationship counts.
+pub fn selfSideWith(req: *Req, p: *const Player, stance: data.Stance, foe: ?data.Archetype) Allocator.Error!Side {
     const now = req.now;
     const comp = p.computed(now);
     const b = p.build();
+    const night: ?bool = if (req.ctx.live.position(p.id, now)) |pos| daynight.isNight(now, pos.lon) else null;
+    const base = combat.Combatant{ .faction = p.fac(), .stats = comp.stats, .hp = p.hp, .abilities = p.abilities, .mods = comp.mods };
+    const adj = stance_rules.adjust(base, stance, foe, night);
     return .{
-        .combatant = .{ .faction = p.fac(), .stats = comp.stats, .hp = p.hp, .abilities = p.abilities, .mods = comp.mods },
+        .combatant = adj.c,
+        .stance = stance,
+        .hp_scale = adj.hp_scale,
+        .real_max_hp = comp.stats.hp,
         .view = .{
             .name = p.callsign,
             .faction = p.fac(),
@@ -91,9 +119,9 @@ pub fn selfSide(req: *Req, p: *const Player) Allocator.Error!Side {
             .title = p.title(),
             .kind = .player,
             .archetype = null,
-            .max_hp = comp.stats.hp,
-            .hp_start = p.hp,
-            .stats = comp.stats,
+            .max_hp = adj.c.stats.hp,
+            .hp_start = adj.c.hp,
+            .stats = adj.c.stats,
             .abilities = try names(req.arena, p.abilities),
             .gear = try gearNames(req.arena, &b),
         },
@@ -184,6 +212,7 @@ pub fn battleView(req: *Req, kind: BattleKind, a: Side, b: Side, o: Outcome, rew
     return .{
         .id = try std.fmt.allocPrint(req.arena, "{x:0>16}", .{o.seed}),
         .kind = kind,
+        .stance = a.stance,
         .a = a.view,
         .b = b.view,
         .turns = o.turns,

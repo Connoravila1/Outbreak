@@ -3,6 +3,7 @@ import { api, errorMessage } from '../api';
 import { position } from '../location';
 import { gameMap } from '../map/instance';
 import { isInSanctuary } from '../map/sanctuary';
+import { collectPlaces } from '../map/places';
 import { eventLog, me, world, applyMe } from './store';
 import { pushToast } from '../ui/kit';
 import { battleActive, enqueueBattle, enqueueLevelUp } from '../battle/session';
@@ -23,7 +24,9 @@ async function tick() {
     const m = gameMap.peek();
     const sanctuary = m ? isInSanctuary(m, { lng: fix.lon, lat: fix.lat }) : false;
     inSanctuary.value = sanctuary;
-    const w = await api.location(fix.lat, fix.lon, fix.acc, sanctuary);
+    // Real places near you from the tiles already on screen (the server never reads the map itself).
+    const places = m && !sanctuary ? collectPlaces(m, fix) : [];
+    const w = await api.location(fix.lat, fix.lon, fix.acc, sanctuary, places);
     world.value = w;
     pollError.value = null;
     // A contact interrupts everything; take it before the HP numbers move so the fight is not spoiled.

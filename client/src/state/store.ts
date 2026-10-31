@@ -17,6 +17,8 @@ export const faction = computed<Faction | null>(() => me.value?.faction ?? null)
 export const lens = computed<Lens>(() => lensOverride.value ?? (faction.value === 'human' ? 'survey' : faction.value === 'zombie' ? 'heat' : 'neutral'));
 
 effect(() => { document.documentElement.dataset.lens = lens.value; });
+/** day / night from the server's solar time; the map and top bar lean on it. */
+effect(() => { document.documentElement.dataset.phase = world.value?.time?.phase ?? 'day'; });
 
 // ---- settings ----
 const flag = (k: string, d: boolean) => { const v = storage.get(k); return v == null ? d : v === '1'; };

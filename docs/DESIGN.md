@@ -93,6 +93,29 @@ For each attack, attacker A vs defender D:
 damage in the fight. Unlike the per-hit spread it does not average out, so a fight is never a
 foregone conclusion: it is what makes a gear edge a strong tilt rather than a guarantee.
 
+### Stance (chosen before a PvE, Echo, raid or garrison fight)
+
+Three stances, applied once to the player's totals for that fight (percentages add with the
+time-of-day ones below): **Aggressive** +20% ATK, -20% DEF; **Careful** (default) +25% DEF, +3%
+dodge, -8% ATK; **Evasive** +20% SPD, +5% dodge, -10% HP for the fight (HP lost is converted back, so
+a survivor is never left at 0). Each enemy archetype has a stance that counters it and one it
+punishes: the countering stance deals +10% damage and takes -10%; the punished one the reverse.
+
+| Enemy | Counter | Punished |
+|---|---|---|
+| Shambler | none | none |
+| Runner | Careful | Evasive |
+| Bloater | Aggressive | Careful |
+| Brute | Evasive | Aggressive |
+| Horde | Careful | Aggressive |
+| Screamer | Aggressive | Evasive |
+
+Contact PvP has no pre-fight sheet, so it uses the saved default (`POST /api/stance`). The client
+names them Aggressive / Careful / Evasive for Humans and frenzy / stalk / slink for Zombies, and shows
+a one-line hint about an archetype after three fights against it. The simulator (`--stance`)
+measures all three within a few points of each other on the standard mix; picking the countering
+stance per enemy is worth about +2 to +4 win points and 3-5 points less HP lost.
+
 A combatant at 0 HP loses. After 30 turns, higher HP fraction wins (a tie goes to the defender,
 side B). Expected: an even fight ends in 5–8 turns (the simulator measures 5–7 for equal kits). Same level, standard kits: Uncommon beats Common ≈ 63–73% of the time, Rare beats Common ≈ 83–85%. The client plays the turn log back as an animation (≈4–8 s), skippable.
 
@@ -142,8 +165,8 @@ automatically in combat. Pairs are mirrored in power, different in flavour.
 
 Levels 1–50. XP to go from level L to L+1:
 
-    xpToNext(L) = round_to_10(5.1 * L^2.65 + 440)      for L ≥ 5
-    xpToNext(1..4) = 100, 430, 700, 780                  (a first level-up within ~3 fights)
+    xpToNext(L) = round_to_10(5.6 * L^2.65 + 485)      for L ≥ 5
+    xpToNext(1..4) = 100, 470, 770, 860                  (a first level-up within ~3 fights)
 
 Pacing targets (active play time, verified by the balance simulator): **L5 ≈ 1 h, L10 ≈ 5 h,
 L20 ≈ 25 h, L30 ≈ 70 h, L50 ≈ 300 h.** Tune `xpToNext` and the XP sources against these.
@@ -151,8 +174,8 @@ L20 ≈ 25 h, L30 ≈ 70 h, L50 ≈ 300 h.** Tune `xpToNext` and the XP sources 
 The simulator (`zig build sim`) assumes a player who is active ~2 h a day (HP is full at the start
 of each day), walks constantly, fights whenever HP ≥ 60% (healing from stock under 50%, otherwise
 waiting for regeneration), and does the dailies and weekly. Median results (100 players): see
-`server/src/sim.zig`; the curve above lands within about ±10% of every target (last run, 100 players: L5 1.05 h, L10
-4.9 h, L20 23.3 h, L30 66 h, L50 304 h). The 440 offset keeps the first levels from flying by now
+`server/src/sim.zig`; the curve above lands within about ±10% of every target (last run, 100 players: L5 1.00 h, L10
+4.6 h, L20 23.0 h, L30 66 h, L50 312 h; the curve was raised when the day/night PvE XP bonuses landed). The 485 offset keeps the first levels from flying by now
 that missions pay in wins. Total XP from L1 to L50 is about 2.1 million.
 
 ### XP sources
@@ -377,6 +400,26 @@ never flags. Lucky perks and the loot buff multiply the item and consumable chan
 Hospitals, schools, and places of worship are **Sanctuaries**, read from the map's own data on the
 device. Inside a sanctuary: no spawns are shown, no fights start, and you cannot be matched for PvP.
 The map shades them softly. This keeps the game out of places where it shouldn't be played.
+
+### Landmarks (real places)
+
+The client reads the map's `poi` features within 400 m and reports up to 40 (key, kind, position,
+optional name) with each location update; the server checks them (within 450 m of the accepted
+position, known kind, name 48 characters, sanitized), keeps them in memory per area (never stored)
+and shows them only to players who reported them. Kinds: pharmacy (Pharmacy / Sick Ward), grocery
+(Grocery / Larder), hardware (Hardware Store / Scrap Heap), fuel (Gas Station / Fume Pit), police
+(Police Station / Barracks), outfitter (Outfitter / Shed Skins), diner (Diner / Feeding Ground).
+Sanctuaries stay excluded. A landmark cache (`l.<key>.<window>`, 4-hour windows, once per player per
+window) gives 2 rolls biased by kind (pharmacy: consumables, hardware: gear and salvage, and so on),
++25% salvage, and counts for cache missions. At most 6 per 30 minutes per player (409
+`landmark_limit`).
+
+### Day and night
+
+Solar hour = (UTC hour + longitude / 15) mod 24; night is 20:00 to 06:00. At night Zombies get +10%
+ATK, enemies Humans meet have +10% HP/ATK/DEF and 25% more spawns (an extra slot per cell), and
+Humans earn +15% PvE XP. By day Humans get +10% DEF and Zombies earn +15% PvE XP. The simulator
+averages over the day.
 
 ### Anti-cheat (light)
 

@@ -8,14 +8,14 @@ pub const max_level = data.max_level;
 
 // --- The XP curve (tuned with the simulator; DESIGN.md section 5) -----------------------------
 
-pub const curve_scale = 5.1;
+pub const curve_scale = 5.6;
 pub const curve_power = 2.65;
-pub const curve_offset = 440.0;
+pub const curve_offset = 485.0;
 
 /// XP needed to go from level `level` to `level + 1`.
 /// The first four levels come quickly so a new player levels within a few fights; their sum
 /// matches what the curve alone would ask, so later pacing is unchanged.
-const early_xp = [_]u32{ 100, 430, 700, 780 };
+const early_xp = [_]u32{ 100, 470, 770, 860 };
 
 pub fn xpToNext(level: u32) u32 {
     if (level >= 1 and level <= early_xp.len) return early_xp[level - 1];

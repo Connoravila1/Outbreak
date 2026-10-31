@@ -86,6 +86,8 @@ export const KEYS = {
   briefed: 'outbreak.briefed',
   /** Highest level at which the guest reminder has been shown (3, then 10). */
   guestNudge: 'outbreak.guestNudge',
+  /** The stance chosen last, offered again next fight. */
+  stance: 'outbreak.stance',
 } as const;
 
 /** Device settings that outlive a sign-out: they are about the phone, not the player. */

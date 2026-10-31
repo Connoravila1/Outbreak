@@ -88,9 +88,11 @@ export const api = {
   setAvatar: (avatar: Record<string, unknown>) => post<{ me: T.Me }>('/api/avatar', { avatar }),
 
   // world
-  location: (lat: number, lon: number, acc: number, sanctuary: boolean) =>
-    post<T.WorldView>('/api/location', { lat, lon, acc, sanctuary }),
-  engage: (id: string) => post<T.Battle>('/api/engage', { id }),
+  location: (lat: number, lon: number, acc: number, sanctuary: boolean, places: T.PlaceReport[] = []) =>
+    post<T.WorldView>('/api/location', { lat, lon, acc, sanctuary, places }),
+  engage: (id: string, stance?: T.Stance) => post<T.Battle>('/api/engage', { id, ...(stance ? { stance } : {}) }),
+  /** The default stance Contact fights use. */
+  setStance: (stance: T.Stance) => post<{ me: T.Me }>('/api/stance', { stance }),
   open: (id: string) => post<{ loot: T.Rewards; me: T.Me }>('/api/open', { id }),
 
   // gear and character
@@ -117,9 +119,9 @@ export const api = {
   clan: () => get<{ clan: T.ClanDetail }>('/api/clan'),
   clanChat: () => get<{ messages: T.ClanMessage[] }>('/api/clan/chat'),
   sendClanChat: (text: string) => post<{ messages: T.ClanMessage[] }>('/api/clan/chat', { text }),
-  claimStronghold: (id: string) =>
-    post<{ battles: T.Battle[]; claimed: boolean; me: T.Me }>('/api/stronghold/claim', { id }),
-  raidAttack: (id: string) => post<T.Battle>('/api/raid/attack', { id }),
+  claimStronghold: (id: string, stance?: T.Stance) =>
+    post<{ battles: T.Battle[]; claimed: boolean; me: T.Me }>('/api/stronghold/claim', { id, ...(stance ? { stance } : {}) }),
+  raidAttack: (id: string, stance?: T.Stance) => post<T.Battle>('/api/raid/attack', { id, ...(stance ? { stance } : {}) }),
 
   // dev only (--dev)
   dev: {

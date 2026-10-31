@@ -81,6 +81,10 @@ pub const Player = struct {
     distance_m: u64,
     clan_id: ?i64,
     clan_role: ?[]const u8,
+    /// The saved default stance (Contact uses it; PvE asks per fight).
+    stance: data.Stance = .careful,
+    /// Fights per enemy archetype, in `data.Archetype` order.
+    bestiary: [data.archetypes.len]u32 = [_]u32{0} ** data.archetypes.len,
 
     items: []Owned = &.{},
     consumables: [consumable_count]u32 = [_]u32{0} ** consumable_count,
@@ -163,7 +167,8 @@ pub const Player = struct {
 pub const select_player =
     \\SELECT id, callsign, faction, level, xp, hp, hp_at, downed_until, salvage, expansions, avatar,
     \\  abilities, last_seen, last_pvp_at, streak, last_claim_day, mday, mlevel, mweek, wlevel,
-    \\  walk_day, walk_xp_today, wins, losses, contacts, echoes, caches, distance_m, clan_id, clan_role
+    \\  walk_day, walk_xp_today, wins, losses, contacts, echoes, caches, distance_m, clan_id, clan_role,
+    \\  stance, bestiary
     \\FROM players
 ;
 
@@ -206,6 +211,8 @@ pub fn load(req: *Req, id: i64) HandlerError!?Player {
         .distance_m = @intCast(st.int(27)),
         .clan_id = st.optInt(28),
         .clan_role = if (st.optText(29)) |t| try a.dupe(u8, t) else null,
+        .stance = std.enums.fromInt(data.Stance, st.int(30)) orelse .careful,
+        .bestiary = parseBestiary(st.text(31)),
     };
     try loadCollections(req, &p);
     const now = req.now;
@@ -225,6 +232,29 @@ pub fn load(req: *Req, id: i64) HandlerError!?Player {
     }
     if (p.hp_dirty) try save(req, &p);
     return p;
+}
+
+const bestiary_text_max = data.archetypes.len * 11;
+
+/// "3,0,12,..." in archetype order.
+pub fn bestiaryText(counts: *const [data.archetypes.len]u32, buf: *[bestiary_text_max]u8) []const u8 {
+    var w = std.Io.Writer.fixed(buf);
+    for (counts, 0..) |n, i| {
+        if (i > 0) w.writeByte(',') catch unreachable;
+        w.print("{d}", .{n}) catch unreachable;
+    }
+    return w.buffered();
+}
+
+pub fn parseBestiary(text: []const u8) [data.archetypes.len]u32 {
+    var out = [_]u32{0} ** data.archetypes.len;
+    var it = std.mem.splitScalar(u8, text, ',');
+    var i: usize = 0;
+    while (it.next()) |part| : (i += 1) {
+        if (i >= out.len) break;
+        out[i] = std.fmt.parseInt(u32, part, 10) catch 0;
+    }
+    return out;
 }
 
 pub fn parseAbilities(text: []const u8) std.EnumSet(data.Ability) {
@@ -282,6 +312,7 @@ fn loadCollections(req: *Req, p: *Player) HandlerError!void {
 pub fn save(req: *Req, p: *Player) HandlerError!void {
     const db = &req.ctx.db;
     var ab_buf: [256]u8 = undefined;
+    var bestiary_buf: [bestiary_text_max]u8 = undefined;
     var w = std.Io.Writer.fixed(&ab_buf);
     const b = snapshot.Build{ .faction = p.fac(), .level = p.level, .abilities = p.abilities };
     try b.encodeAbilities(&w);
@@ -289,14 +320,14 @@ pub fn save(req: *Req, p: *Player) HandlerError!void {
         \\UPDATE players SET level = ?, xp = ?, salvage = ?, expansions = ?, avatar = ?, abilities = ?,
         \\  last_pvp_at = ?, streak = ?, last_claim_day = ?, mday = ?, mlevel = ?, mweek = ?, wlevel = ?,
         \\  walk_day = ?, walk_xp_today = ?, wins = ?, losses = ?, contacts = ?, echoes = ?, caches = ?,
-        \\  distance_m = ?, clan_id = ?, clan_role = ?, downed_until = ?
+        \\  distance_m = ?, clan_id = ?, clan_role = ?, downed_until = ?, stance = ?, bestiary = ?
         \\WHERE id = ?
     , .{
-        p.level,       p.xp,       p.salvage,        p.expansions, p.avatar,    w.buffered(),
-        p.last_pvp_at, p.streak,   p.last_claim_day, p.mday,       p.mlevel,    p.mweek,
-        p.wlevel,      p.walk_day, p.walk_xp_today,  p.wins,       p.losses,    p.contacts,
-        p.echoes,      p.caches,   p.distance_m,     p.clan_id,    p.clan_role, p.downed_until,
-        p.id,
+        p.level,                p.xp,                                     p.salvage,        p.expansions, p.avatar,    w.buffered(),
+        p.last_pvp_at,          p.streak,                                 p.last_claim_day, p.mday,       p.mlevel,    p.mweek,
+        p.wlevel,               p.walk_day,                               p.walk_xp_today,  p.wins,       p.losses,    p.contacts,
+        p.echoes,               p.caches,                                 p.distance_m,     p.clan_id,    p.clan_role, p.downed_until,
+        @intFromEnum(p.stance), bestiaryText(&p.bestiary, &bestiary_buf), p.id,
     });
     if (p.hp_dirty) {
         try db.run("UPDATE players SET hp = ?, hp_at = ? WHERE id = ?", .{ p.hp, p.hp_at, p.id });

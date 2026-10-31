@@ -454,6 +454,10 @@ const migrations = [_][:0]const u8{
     \\ALTER TABLE clan_chat_new RENAME TO clan_chat;
     \\CREATE INDEX clan_chat_clan ON clan_chat(clan_id, id);
     ,
+    // Fight stance (the saved default, used in Contact) and how often each enemy type was fought.
+    \\ALTER TABLE players ADD COLUMN stance INTEGER NOT NULL DEFAULT 1;
+    \\ALTER TABLE players ADD COLUMN bestiary TEXT NOT NULL DEFAULT '';
+    ,
 };
 
 // --- Tests -------------------------------------------------------------------------------------------

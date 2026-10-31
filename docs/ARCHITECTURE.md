@@ -26,9 +26,9 @@ The server is authoritative over every outcome. The client renders state and sen
   - `src/db.zig` — thin SQLite wrapper (prepare/bind/step), schema + migrations by `user_version`.
   - `src/game/` — **pure** game logic, no I/O, fully unit-tested: `data.zig` (catalogue from
     DESIGN.md), `stats.zig`, `combat.zig`, `loot.zig`, `progression.zig`, `geo.zig` (geohash,
-    haversine), `spawns.zig` (deterministic world content), `missions.zig`, `war.zig`, `rng.zig`.
+    haversine), `spawns.zig` (deterministic world content), `missions.zig`, `war.zig`, `rng.zig`, `stance.zig` (stance, counters), `daynight.zig` (solar phase), `landmarks.zig` (place validation, windows, rate limit).
   - `src/live.zig` — in-memory state: latest position per player (never persisted, expires in
-    2 min), active echoes, rate limits.
+    2 min), active echoes, rate limits, and reported landmarks per geohash-6 area (12 h TTL, capped, never persisted).
   - `src/tick.zig` — every 5 s: PvP contact matching, raid/war housekeeping.
   - `src/sim.zig` — balance simulator (`zig build sim`): simulates players and prints pacing.
 - **Concurrency**: one global mutex around game state and the single SQLite connection. Correct
@@ -109,9 +109,10 @@ accounts that have a recovery code but is no longer used by the client.
 ### World
 | Method | Path | Body | Returns |
 |---|---|---|---|
-| POST | `/api/location` | `{lat, lon, acc, sanctuary}` | `WorldView` — call every ~5 s in foreground |
-| POST | `/api/engage` | `{id}` (enemy spawn or echo id) | `Battle` |
-| POST | `/api/open` | `{id}` (cache or airdrop id) | `{loot: Rewards, me}` |
+| POST | `/api/location` | `{lat, lon, acc, sanctuary, places?:[{key, kind, lat, lon, name?}]}` (<= 40) | `WorldView` — call every ~5 s in foreground |
+| POST | `/api/engage` | `{id, stance?}` (enemy spawn or echo id; stance `aggressive`/`careful`/`evasive`, default careful) | `Battle` |
+| POST | `/api/stance` | `{stance}` (default for Contact PvP) | `{me}` |
+| POST | `/api/open` | `{id}` (cache, airdrop or landmark id; 409 `landmark_limit`) | `{loot: Rewards, me}` |
 
 ### Gear and character
 | Method | Path | Body | Returns |
@@ -137,8 +138,8 @@ accounts that have a recovery code but is no longer used by the client.
 | POST | `/api/clans/leave` | | `{me}` |
 | GET | `/api/clan` | | `{clan:{id, name, tag, code, members:[{callsign, level, title, role, weekly_points}], strongholds, perks}}` |
 | GET/POST | `/api/clan/chat` | `{text}` | `{messages:[{id, callsign, text, at}]}` |
-| POST | `/api/stronghold/claim` | `{id}` | `{battles:[Battle], claimed, me}` |
-| POST | `/api/raid/attack` | `{id}` | `Battle` |
+| POST | `/api/stronghold/claim` | `{id, stance?}` | `{battles:[Battle], claimed, me}` |
+| POST | `/api/raid/attack` | `{id, stance?}` | `Battle` |
 
 ### Dev only (`--dev`)
 `POST /api/dev/grant {xp?, salvage?, item?:{base, rarity}, consumable?:{id, n}}`,
@@ -164,6 +165,7 @@ Me = { id, callsign: string|null, faction: Faction|null, level, xp, xp_next, tit
        missions: { daily: Mission[], weekly: Mission|null, streak: number, resets_at: number },
        clan: {id, name, tag, role}|null, avatar: object|null,
        pvp_protected: boolean, underdog_bonus: number, war_points_week: number,
+       stance: Stance, bestiary: Record<string, number> /* fights per archetype */,
        record: { wins, losses, contacts, echoes, caches, distance_m },
        account: { guest: boolean, providers: ("google"|"apple"|"dev")[], email: string|null } }
 
@@ -174,6 +176,8 @@ WorldView = { now, me: MeLite /* hp, max_hp, downed_until, level, xp, xp_next, s
   enemies: {id, archetype, level, elite, tutorial: boolean, lat, lon, expires_at}[], // undefeated only
   caches: {id, kind:"cache"|"airdrop", lat, lon, expires_at}[],        // unopened only
   echoes: {id, level, faction, title, rogue: boolean, lat, lon, expires_at}[],
+  landmarks: {id, kind: PlaceKind, name: string|null, lat, lon, available: boolean, available_at: number|null}[],
+  time: {phase: "day"|"night", changes_at: number},
   strongholds: {id, lat, lon, clan: {tag, name, faction}|null}[],
   raids: {id, boss, lat, lon, hp, max_hp, ends_at, fighters, can_attack_at}[],
   events: Event[] /* undelivered; delivered once */ }
@@ -185,7 +189,10 @@ Combatant = { name, faction, level, title, kind: "player"|"enemy"|"echo"|"rogue"
 Turn = { actor: "a"|"b", ev: "hit"|"crit"|"dodge"|"ability"|"dot"|"heal"|"revive",
          ability: string|null, dmg: number, heal: number, hp_a: number, hp_b: number }
 
-Battle = { id, kind: "pve"|"pvp"|"echo"|"raid"|"garrison", a: Combatant /* always you */,
+Stance = "aggressive"|"careful"|"evasive"
+PlaceKind = "pharmacy"|"grocery"|"hardware"|"fuel"|"police"|"outfitter"|"diner"
+
+Battle = { id, stance: Stance, kind: "pve"|"pvp"|"echo"|"raid"|"garrison", a: Combatant /* always you */,
            b: Combatant, turns: Turn[], winner: "a"|"b", rewards: Rewards, me: Me }
 
 Rewards = { xp, salvage, items: Item[], consumables: Record<string,number>, war_points,
@@ -195,7 +202,7 @@ Event = { id, at, type: "contact"|"echo_report"|"level_up"|"raid"|"war_result"|"
           text: string, battle?: Battle, rewards?: Rewards }
 ```
 
-`/api/catalog` returns `{version, items:[{id, slot, req, names:{human, zombie}, stats}],
+`/api/catalog` (version 2) also carries `stances`, `places` and per-enemy `counter`, `punished`, `hint`, `hint_zombie`. It returns `{version, items:[{id, slot, req, names:{human, zombie}, stats}],
 uniques:[{id, base, names, lore, perks}], rarities, perks:[{id, name, text}],
 consumables:[{id, names, text, price}], abilities:[{id, level, names, text}],
 enemies:[{id, names, text}], levels:{xp_to_next:[...], titles:{human:[], zombie:[]},

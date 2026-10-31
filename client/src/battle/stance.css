@@ -1,0 +1,19 @@
+.stance { margin: 12px 0 4px; }
+.stance-label { margin: 0 0 6px; font-size: var(--fs-12); font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--text-dim); }
+:root[data-lens='heat'] .stance-label { text-transform: lowercase; letter-spacing: .18em; }
+.stance-seg { display: grid; grid-template-columns: repeat(3, 1fr); border: 2px solid var(--text); border-radius: 4px; overflow: hidden; }
+:root[data-lens='heat'] .stance-seg { border-color: var(--vein); border-radius: 999px; }
+.stance-btn {
+  min-height: 52px; padding: 4px 6px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  background: transparent; border: 0; color: var(--text-dim); font-weight: 700; font-size: var(--fs-14);
+}
+.stance-btn + .stance-btn { border-left: 2px solid var(--line); }
+.stance-btn[aria-checked='true'] { background: var(--accent); color: var(--accent-ink); }
+:root[data-lens='heat'] .stance-btn { text-transform: lowercase; letter-spacing: var(--track); }
+.stance-btn:focus-visible { outline: 3px solid var(--accent); outline-offset: -3px; }
+.stance-text { margin: 6px 0 0; font-size: var(--fs-12); }
+.stance-hint { margin: 6px 0 0; padding: 6px 10px; font-size: var(--fs-14); border-left: 4px solid var(--hazard, var(--hot)); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+:root[data-lens='survey'] .stance-hint { font-family: var(--f-hand); font-size: var(--fs-14); }
+:root[data-lens='heat'] .stance-hint { border-left-color: var(--hot); font-style: italic; }
+.fight-stance { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-12); font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+:root[data-lens='heat'] .fight-stance { text-transform: lowercase; letter-spacing: .16em; }

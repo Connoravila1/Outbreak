@@ -55,7 +55,7 @@ pub fn settleSide(req: *Req, p: *Player, a: fight.Side, foe: fight.Side, o: figh
     acc.deliver_level_up = false;
     p.contacts += 1;
     p.last_pvp_at = req.now;
-    rewards.settleHp(p, o.result.hp_a, req.now);
+    rewards.settleHp(p, fight.hpAfter(a, o), req.now);
     const rw = try rewards.apply(req, p, &acc, district);
     if (won) try missions.event(req, p, .{ .kind = .contact_win });
 

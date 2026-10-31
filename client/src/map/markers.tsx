@@ -2,6 +2,7 @@ import { render } from 'preact';
 import { maplibregl } from './factory';
 import type { Map as MlMap, Marker } from 'maplibre-gl';
 import { Icon } from '../ui/Icon';
+import type { WorldLandmark } from '../api';
 import type { GameObject } from '../state/objects';
 import { threatOf, type Threat } from './threat';
 import type { Lens } from '../state/store';
@@ -22,6 +23,12 @@ function note(o: GameObject, lens: Lens): string {
     case 'echo': s = `${n.split(' ')[0]} · ${o.level}`; break;
     case 'cache': s = n.replace('supply ', ''); break;
     case 'raid': s = `${n} !!`; break;
+    case 'landmark': {
+      // Survey stamps the real name and the kind ("WALGREENS — PHARMACY"); Heat only senses the kind ("sick ward").
+      const kind = o.detail ?? o.name;
+      if (lens === 'heat') return kind.toLowerCase();
+      return (o.name === kind ? kind : `${o.name} — ${kind}`).toUpperCase();
+    }
     default: s = n;
   }
   // legibility first: both lenses name the archetype and level (heat keeps its lowercase styling)
@@ -48,7 +55,32 @@ function Bloom({ threat, elite }: { threat: Threat; elite: boolean }) {
   );
 }
 
+/** A rubber-stamped municipal-map symbol: double rule, tilted a little, as if pressed by hand. */
+function Stamp() {
+  return (
+    <svg class="mk-stamp" viewBox="0 0 56 56" aria-hidden="true">
+      <rect class="stamp-o" x="8" y="8" width="40" height="40" rx="5" />
+      <rect class="stamp-i" x="12.5" y="12.5" width="31" height="31" rx="3" />
+    </svg>
+  );
+}
+
+/** A warm smear: something that was fed from, a long time ago. */
+function Smear() {
+  return <span class="mk-smear" />;
+}
+
 function View({ o, c }: { o: GameObject; c: MarkerCtx }) {
+  if (o.kind === 'landmark') {
+    const heat = c.lens === 'heat';
+    return (
+      <>
+        {heat ? <Smear /> : <Stamp />}
+        <Icon name={o.icon} size={heat ? 22 : 20} class="mk-icon" />
+        <span class={'mk-note ' + (heat ? 'voice' : 'hand')}>{note(o, c.lens)}</span>
+      </>
+    );
+  }
   const threat: Threat | null = o.level != null && (o.kind === 'enemy' || o.kind === 'echo') ? threatOf(o.level, c.myLevel) : null;
   const heat = c.lens === 'heat';
   return (
@@ -90,7 +122,8 @@ export class MarkerLayer {
       }
       e.el.dataset.id = o.id;
       const threat = o.level != null ? threatOf(o.level, c.myLevel) : 'even';
-      setClasses(e.el, `mk mk-${o.kind} mk-${c.lens} threat-${threat}${o.elite ? ' elite' : ''}${o.tutorial ? ' tutorial' : ''}${c.selectedId === o.id ? ' selected' : ''}`);
+      const spent = o.kind === 'landmark' && !(o.raw as WorldLandmark).available;
+      setClasses(e.el, `mk mk-${o.kind} mk-${c.lens} threat-${threat}${o.elite ? ' elite' : ''}${o.tutorial ? ' tutorial' : ''}${spent ? ' spent' : ''}${c.selectedId === o.id ? ' selected' : ''}`);
       e.el.setAttribute('aria-label', `${o.name}${o.level != null ? ', level ' + o.level : ''}`);
       e.m.setLngLat([o.lon, o.lat]);
       render(<View o={o} c={c} />, e.el);

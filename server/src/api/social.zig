@@ -265,7 +265,8 @@ pub fn chat(req: *Req, jw: *Stringify) HandlerError!void {
 // --- Strongholds ---------------------------------------------------------------------------------------------
 
 pub fn claimStronghold(req: *Req, jw: *Stringify) HandlerError!void {
-    const body = try req.json(struct { id: []const u8 });
+    const body = try req.json(struct { id: []const u8, stance: ?[]const u8 = null });
+    const stance = try world.requestStance(req, body.stance);
     var p = try loadP(req);
     if (p.level < stronghold_min_level) return req.fail(409, "locked", "Territory unlocks at level 15.");
     const clan_id = p.clan_id orelse return req.fail(409, "no_clan", "Join a clan to claim territory.");
@@ -292,10 +293,10 @@ pub fn claimStronghold(req: *Req, jw: *Stringify) HandlerError!void {
         defer st.finalize();
         while (try st.step()) {
             const foe = snapshot.Build.decode(@enumFromInt(st.int(3)), @intCast(st.int(0)), st.text(1), st.text(2));
-            const a = try fight.selfSide(req, &p);
+            const a = try fight.selfSideWith(req, &p, stance, null);
             const b = try fight.buildSide(req.arena, &foe, .echo, null);
             const o = try fight.run(req, a, b, fight.seedFor(req, p.id, game.rng.hashBytes(3, body.id)));
-            rewards.settleHp(&p, o.result.hp_a, req.now);
+            rewards.settleHp(&p, fight.hpAfter(a, o), req.now);
             try model.save(req, &p);
             try battles.append(req.arena, try fight.battleView(req, .garrison, a, b, o, .{}, try views.meFresh(req, p.id)));
             if (!o.won()) {
@@ -316,7 +317,8 @@ pub fn claimStronghold(req: *Req, jw: *Stringify) HandlerError!void {
 // --- Raids -----------------------------------------------------------------------------------------------------
 
 pub fn raidAttack(req: *Req, jw: *Stringify) HandlerError!void {
-    const body = try req.json(struct { id: []const u8 });
+    const body = try req.json(struct { id: []const u8, stance: ?[]const u8 = null });
+    const stance = try world.requestStance(req, body.stance);
     var p = try loadP(req);
     if (p.level < raid_min_level) return req.fail(409, "locked", "Raids unlock at level 20.");
     if (p.downed(req.now)) return req.fail(409, "downed", "You are down. Heal, or wait to get back up.");
@@ -330,7 +332,7 @@ pub fn raidAttack(req: *Req, jw: *Stringify) HandlerError!void {
     if (last != 0 and req.now - last < world.raid_attack_gap_ms) return req.fail(409, "cooldown", "You can attack again in an hour.");
 
     const boss_level: u32 = @min(p.level + 2, data.max_level + 2);
-    const a = try fight.selfSide(req, &p);
+    const a = try fight.selfSideWith(req, &p, stance, null);
     const b = try fight.enemySide(req.arena, p.fac(), .abomination, boss_level, false, true, 1.0);
     const o = try fight.run(req, a, b, fight.seedFor(req, p.id, game.rng.hashBytes(4, body.id)));
 
@@ -340,7 +342,7 @@ pub fn raidAttack(req: *Req, jw: *Stringify) HandlerError!void {
     var acc = rewards.Acc{ .xp = @max(1, @as(u32, @intFromFloat(@round(@as(f32, @floatFromInt(full_xp)) * share)))) };
     acc.war_points = game.war.raidPoints(@as(f32, @floatFromInt(dealt)) / @as(f32, @floatFromInt(@max(1, raid.max_hp))));
     if (o.won()) p.wins += 1 else p.losses += 1;
-    rewards.settleHp(&p, o.result.hp_a, req.now);
+    rewards.settleHp(&p, fight.hpAfter(a, o), req.now);
     const rw = try rewards.apply(req, &p, &acc, raid.district);
     try raids.recordDamage(req, raid.id, p.id, dealt);
     if (try raids.hpLeft(req, raid.id) <= 0) try raids.settle(req, raid.id, true);

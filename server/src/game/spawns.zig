@@ -24,13 +24,18 @@ pub const airdrop_precision = 5;
 pub const stronghold_precision = 6;
 
 const stats_grace_levels = @import("stats.zig").grace_levels;
+const daynight = @import("daynight.zig");
 
 pub const cache_chance = 0.30;
 pub const elite_chance = 0.08;
 
 /// Chance of 0, 1 and 2 enemies in a cell for one window: mean 0.55.
 const enemy_count_weights = [_]f64{ 55, 35, 10 };
-pub const max_enemies_per_cell = 2;
+pub const max_enemies_per_cell = 3;
+/// Mean of `enemy_count_weights`: the basis for the night extra.
+const enemy_mean_per_cell = 0.55;
+/// Slot of the extra enemy Humans meet at night (slots 0 and 1 are the ordinary ones).
+pub const night_extra_idx: u8 = 2;
 
 pub const Kind = enum {
     enemy,
@@ -134,6 +139,16 @@ pub const Enemy = struct {
         return formatId(.enemy, self.cell, self.window, self.idx);
     }
 
+    /// The night extra exists only after dark, and only for Humans: 25% more spawns.
+    pub fn isNightExtra(self: *const Enemy) bool {
+        return self.idx == night_extra_idx;
+    }
+
+    /// Whether `viewer` can meet this enemy at `now_ms` (night extras aside, always).
+    pub fn presentFor(self: *const Enemy, viewer: data.Faction, now_ms: i64) bool {
+        return !self.isNightExtra() or (viewer == .human and daynight.isNight(now_ms, self.lon));
+    }
+
     /// The enemy's level as seen by a player of `player_level`. New players (below level 5)
     /// never meet anything above their own level: offsets fold into -2..0.
     pub fn levelFor(self: *const Enemy, player_level: u32) u32 {
@@ -151,7 +166,10 @@ pub const Enemy = struct {
 
 /// Enemy `idx` of `cell` in `window`, or null if the cell has fewer enemies than that.
 pub fn enemy(seed: u64, cell: Geohash, window: i64, idx: u8) ?Enemy {
-    if (idx >= enemyCount(seed, cell, window)) return null;
+    if (idx == night_extra_idx) {
+        var gate = rng_mod.derive(seed, .{ "en", cell.str(), window });
+        if (!gate.chance(daynight.extraSpawnChance(enemy_mean_per_cell))) return null;
+    } else if (idx >= enemyCount(seed, cell, window)) return null;
     var rng = rng_mod.derive(seed, .{ "e", cell.str(), window, idx });
     const arch: data.Archetype = @enumFromInt(rng.weighted(&data.archetype_weights));
     const elite = rng.chance(elite_chance);
@@ -170,7 +188,7 @@ pub fn enemy(seed: u64, cell: Geohash, window: i64, idx: u8) ?Enemy {
     };
 }
 
-/// All enemies of a cell in a window; `out` must have room for `max_enemies_per_cell`.
+/// The ordinary enemies of a cell in a window (at most two); the night extra is `enemy(.., night_extra_idx)`.
 pub fn enemiesInCell(seed: u64, cell: Geohash, window: i64, out: *[max_enemies_per_cell]Enemy) []const Enemy {
     const n = enemyCount(seed, cell, window);
     for (0..n) |i| out[i] = enemy(seed, cell, window, @intCast(i)).?;

@@ -54,6 +54,11 @@ pub const Combatant = struct {
     hp: i32,
     abilities: std.EnumSet(Ability) = .initEmpty(),
     mods: stats_mod.Mods = .{},
+    /// Situational factors (stance, counters): added to the dodge chance when defending, and
+    /// multipliers on the damage this side deals and takes.
+    dodge: f32 = 0,
+    dmg_out: f32 = 1.0,
+    dmg_in: f32 = 1.0,
 };
 
 pub const Result = struct {
@@ -253,7 +258,7 @@ const Fight = struct {
         const s_me = me.spd();
         const s_foe = foe.spd();
         const diff = 0.5 * (s_foe - s_me) / (s_foe + s_me);
-        const dodge_p = std.math.clamp(base_chance + diff, 0.02, 0.30);
+        const dodge_p = std.math.clamp(base_chance + diff, 0.02, 0.30) + foe.c.dodge;
         const crit_p = std.math.clamp(base_chance - diff, 0.02, 0.35) + me.c.mods.crit;
 
         const dodged = self.rng.float() < dodge_p;
@@ -271,6 +276,7 @@ const Fight = struct {
         var raw = damage_coefficient * a_atk * a_atk / (a_atk + d_def) * spread * me.form;
         if (is_crit) raw *= crit_multiplier;
         if (foe.hasGuard() != null and self.round <= guard_rounds) raw *= 1.0 - guard_reduction;
+        raw *= @as(f64, me.c.dmg_out) * @as(f64, foe.c.dmg_in);
         const dmg = @max(1, roundInt(raw));
         if (forced != null) me.crit_spent = true;
 
@@ -762,4 +768,51 @@ test "form factor makes a modest gear edge lose now and then, and is determinist
         if (flat(strong, weak, s, &log).winner == .a) flat_wins += 1;
     }
     try testing.expect(flat_wins / 500 > strong_wins / 2000 + 0.03);
+}
+
+test "damage multipliers scale what a side deals and takes" {
+    var l1: [max_log]Turn = undefined;
+    var l2: [max_log]Turn = undefined;
+    const a = mk(20, 10, 10, 400);
+    const b = mk(20, 10, 10, 400);
+    var strong = a;
+    strong.dmg_out = 1.5;
+    var sturdy = a;
+    sturdy.dmg_in = 0.5;
+    // Same seed, no dodges possible to differ (equal speed): the first hit by `a` is bigger.
+    const r0 = flat(a, b, 3, &l1);
+    const r1 = flat(strong, b, 3, &l2);
+    var first0: i32 = 0;
+    var first1: i32 = 0;
+    for (l1[0..r0.len]) |t| {
+        if (t.actor == .a and t.dmg > 0) {
+            first0 = t.dmg;
+            break;
+        }
+    }
+    for (l2[0..r1.len]) |t| {
+        if (t.actor == .a and t.dmg > 0) {
+            first1 = t.dmg;
+            break;
+        }
+    }
+    try testing.expect(first1 > first0);
+    try testing.expectApproxEqRel(@as(f64, @floatFromInt(first0)) * 1.5, @as(f64, @floatFromInt(first1)), 0.1);
+    // Taking half damage: b's first hit on `sturdy` is about half of its hit on `a`.
+    const r2 = flat(sturdy, b, 3, &l2);
+    var hit_b0: i32 = 0;
+    var hit_b2: i32 = 0;
+    for (l1[0..r0.len]) |t| {
+        if (t.actor == .b and t.dmg > 0) {
+            hit_b0 = t.dmg;
+            break;
+        }
+    }
+    for (l2[0..r2.len]) |t| {
+        if (t.actor == .b and t.dmg > 0) {
+            hit_b2 = t.dmg;
+            break;
+        }
+    }
+    try testing.expect(hit_b2 < hit_b0);
 }

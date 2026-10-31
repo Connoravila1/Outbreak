@@ -7,7 +7,7 @@ import { gameMap } from './instance';
 import { metresToPx } from './styles/common';
 import { position, sim, simActive, simTick } from '../location';
 import { faction, lens, me, world } from '../state/store';
-import { objectsFrom } from '../state/objects';
+import { capLandmarks, objectsFrom } from '../state/objects';
 
 export const follow = signal(true);
 export const selectedId = signal<string | null>(null);
@@ -107,7 +107,7 @@ export function GameMap() {
     const sel = selectedId.value;
     const lvl = me.value?.level ?? 1;
     if (!layer.current) return;
-    layer.current.sync(w && f ? objectsFrom(w, f) : [], { lens: l, myLevel: lvl, selectedId: sel, onSelect: select });
+    layer.current.sync(w && f ? capLandmarks(objectsFrom(w, f), position.peek(), sel) : [], { lens: l, myLevel: lvl, selectedId: sel, onSelect: select });
     layer.current.declutter(position.peek(), sel);
   });
 

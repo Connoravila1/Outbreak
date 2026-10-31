@@ -6,6 +6,11 @@ export type Rarity = 'common' | 'uncommon' | 'rare' | 'legendary';
 
 export interface Stats { hp: number; atk: number; def: number; spd: number }
 
+/** How a fight is approached; chosen before engaging. */
+export type Stance = 'aggressive' | 'careful' | 'evasive';
+/** Kinds of real place that hold a landmark cache. */
+export type PlaceKind = 'pharmacy' | 'grocery' | 'hardware' | 'fuel' | 'police' | 'outfitter' | 'diner';
+
 export interface Item {
   uid: string;
   base: string;
@@ -82,6 +87,10 @@ export interface Me {
   war_points_week: number;
   record: PlayerRecord;
   account: AccountInfo;
+  /** Saved default stance, used in Contact. */
+  stance: Stance;
+  /** Fights per enemy archetype; hints unlock at 3. */
+  bestiary: Record<string, number>;
 }
 
 export interface MeLite {
@@ -114,6 +123,14 @@ export interface WorldRaid {
   ends_at: number; fighters: number; can_attack_at: number;
 }
 
+/** A real place from the map's own data, reported by this client (key: stable OSM id or a coordinate hash). */
+export interface PlaceReport { key: string; kind: PlaceKind; lat: number; lon: number; name?: string }
+export interface WorldLandmark {
+  id: string; kind: PlaceKind; name: string | null; lat: number; lon: number;
+  available: boolean; available_at: number | null;
+}
+export interface WorldTime { phase: 'day' | 'night'; changes_at: number }
+
 export type EventType = 'contact' | 'echo_report' | 'level_up' | 'raid' | 'war_result' | 'clan';
 export interface GameEvent {
   id: string;
@@ -131,6 +148,8 @@ export interface WorldView {
   enemies: WorldEnemy[];
   caches: WorldCache[];
   echoes: WorldEcho[];
+  landmarks: WorldLandmark[];
+  time: WorldTime;
   strongholds: WorldStronghold[];
   raids: WorldRaid[];
   events: GameEvent[];
@@ -163,6 +182,8 @@ export interface Turn {
 export interface Battle {
   id: string;
   kind: 'pve' | 'pvp' | 'echo' | 'raid' | 'garrison';
+  /** The stance you fought in. */
+  stance?: Stance | null;
   a: Combatant;
   b: Combatant;
   turns: Turn[];
@@ -186,7 +207,13 @@ export interface CatalogConsumable {
 export interface CatalogAbility {
   id: string; level: number; faction?: Faction; names: Record<Faction, string>; text: string;
 }
-export interface CatalogEnemy { id: string; names: Record<Faction, string>; text: string; text_zombie?: string; note?: string }
+export interface CatalogEnemy {
+  id: string; names: Record<Faction, string>; text: string; text_zombie?: string; note?: string;
+  /** The stance that beats it / that it punishes, and the line learned after 3 fights. */
+  counter?: Stance | null; punished?: Stance | null; hint?: string; hint_zombie?: string;
+}
+export interface CatalogStance { id: Stance; names: Record<Faction, string>; text: string }
+export interface CatalogPlace { id: PlaceKind; names: Record<Faction, string>; text: string; text_zombie: string }
 export interface CatalogStoreEntry { sku: string; name: string; price: number; text: string }
 export interface Catalog {
   version: number | string;
@@ -197,6 +224,8 @@ export interface Catalog {
   consumables: CatalogConsumable[];
   abilities: CatalogAbility[];
   enemies: CatalogEnemy[];
+  stances?: CatalogStance[];
+  places?: CatalogPlace[];
   levels: {
     xp_to_next: number[];
     titles: Record<Faction, string[]>;

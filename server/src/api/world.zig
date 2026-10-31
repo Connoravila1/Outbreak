@@ -16,6 +16,9 @@ const live = @import("../live.zig");
 const data = game.data;
 const geo = game.geo;
 const spawns = game.spawns;
+const daynight = game.daynight;
+const landmarks = game.landmarks;
+const stance_rules = game.stance;
 const progression = game.progression;
 const stats = game.stats;
 const loot = game.loot;
@@ -47,7 +50,10 @@ const ClanTag = struct { tag: []const u8, name: []const u8, faction: data.Factio
 const StrongholdView = struct { id: []const u8, lat: f64, lon: f64, clan: ?ClanTag };
 const RaidView = struct { id: []const u8, boss: []const u8, lat: f64, lon: f64, hp: i64, max_hp: i64, ends_at: i64, fighters: u32, can_attack_at: i64 };
 
-const Fix = struct { lat: f64, lon: f64, acc: f64 = 0, sanctuary: bool = false };
+const LandmarkView = struct { id: []const u8, kind: []const u8, name: ?[]const u8, lat: f64, lon: f64, available: bool, available_at: ?i64 };
+const TimeView = struct { phase: []const u8, changes_at: i64 };
+
+const Fix = struct { lat: f64, lon: f64, acc: f64 = 0, sanctuary: bool = false, places: []const landmarks.Report = &.{} };
 
 pub fn location(req: *Req, jw: *Stringify) HandlerError!void {
     const fix = try req.json(Fix);
@@ -98,6 +104,16 @@ pub fn location(req: *Req, jw: *Stringify) HandlerError!void {
         }
     }
 
+    // Real places from the client's own map tiles; remembered in memory, never stored.
+    var places: std.ArrayList(LandmarkView) = .empty;
+    if (!pos.sanctuary) {
+        for (fix.places[0..@min(fix.places.len, landmarks.max_per_report)]) |r| {
+            const pl = landmarks.validate(r, pos.lat, pos.lon) orelse continue;
+            _ = try ctx.live.rememberPlace(pl, p.id, now);
+        }
+        try worldLandmarks(req, &p, pos, &places);
+    }
+
     var strongholds: std.ArrayList(StrongholdView) = .empty;
     try worldStrongholds(req, pos, &strongholds);
     var raids: std.ArrayList(RaidView) = .empty;
@@ -110,10 +126,37 @@ pub fn location(req: *Req, jw: *Stringify) HandlerError!void {
         .enemies = enemies.items,
         .caches = caches.items,
         .echoes = echoes.items,
+        .landmarks = places.items,
+        .time = timeView(now, pos.lon),
         .strongholds = strongholds.items,
         .raids = raids.items,
         .events = try events.takeUndelivered(req, p.id),
     });
+}
+
+fn timeView(now: i64, lon: f64) TimeView {
+    return .{ .phase = @tagName(daynight.phaseAt(now, lon)), .changes_at = daynight.changesAt(now, lon) };
+}
+
+fn worldLandmarks(req: *Req, p: *const Player, pos: live.Pos, out: *std.ArrayList(LandmarkView)) HandlerError!void {
+    var found: std.ArrayList(live.Remembered) = .empty;
+    try req.ctx.live.placesFor(p.id, pos.lat, pos.lon, view_radius_m, req.now, &found, req.arena);
+    const window = landmarks.windowIndex(req.now);
+    for (found.items) |r| {
+        if (out.items.len >= landmarks.max_per_report) break;
+        const id = landmarks.formatId(r.place.keyStr(), window);
+        const id_str = try req.arena.dupe(u8, id.str());
+        const done = try isDone(req, p.id, id_str);
+        try out.append(req.arena, .{
+            .id = id_str,
+            .kind = @tagName(r.place.kind),
+            .name = if (r.place.name.len > 0) try req.arena.dupe(u8, r.place.name.str()) else null,
+            .lat = r.place.lat,
+            .lon = r.place.lon,
+            .available = !done,
+            .available_at = if (done) landmarks.nextWindowAt(req.now) else null,
+        });
+    }
 }
 
 /// Pay walking XP for the distance carried in the live position.
@@ -148,6 +191,24 @@ fn worldEnemies(req: *Req, p: *const Player, pos: live.Pos, out: *std.ArrayList(
     var buf: [spawns.max_enemies_per_cell]spawns.Enemy = undefined;
     for (cells[0..n]) |cell| {
         for (spawns.enemiesInCell(req.ctx.seed, cell, window, &buf)) |e| {
+            if (geo.haversineM(pos.lat, pos.lon, e.lat, e.lon) > view_radius_m) continue;
+            if (!e.visibleTo(p.level)) continue;
+            const id = e.id();
+            if (try isDone(req, p.id, id.str())) continue;
+            try out.append(req.arena, .{
+                .id = try req.arena.dupe(u8, id.str()),
+                .archetype = @tagName(e.archetype),
+                .level = e.levelFor(p.level),
+                .elite = e.elite,
+                .tutorial = false,
+                .lat = e.lat,
+                .lon = e.lon,
+                .expires_at = e.expires_at,
+            });
+        }
+        // After dark Humans meet one more in a quarter of the cells' worth of spawns.
+        if (spawns.enemy(req.ctx.seed, cell, window, spawns.night_extra_idx)) |e| {
+            if (!e.presentFor(p.fac(), req.now)) continue;
             if (geo.haversineM(pos.lat, pos.lon, e.lat, e.lon) > view_radius_m) continue;
             if (!e.visibleTo(p.level)) continue;
             const id = e.id();
@@ -300,12 +361,29 @@ fn districtOf(arena: std.mem.Allocator, lat: f64, lon: f64) ![]const u8 {
     return arena.dupe(u8, game.war.districtId(lat, lon).str());
 }
 
+/// The stance a request asked for; careful when it does not say.
+pub fn requestStance(req: *Req, text: ?[]const u8) HandlerError!data.Stance {
+    const t = text orelse return stance_rules.default;
+    return stance_rules.parse(t) orelse req.fail(400, "bad_request", "Stance must be \"aggressive\", \"careful\" or \"evasive\".");
+}
+
 pub fn engage(req: *Req, jw: *Stringify) HandlerError!void {
-    const body = try req.json(struct { id: []const u8 });
+    const body = try req.json(struct { id: []const u8, stance: ?[]const u8 = null });
+    const stance = try requestStance(req, body.stance);
     var p = (try model.load(req, req.pid)).?;
     const pos = try requireReady(req, &p);
-    if (std.mem.startsWith(u8, body.id, "x.")) return engageEcho(req, jw, &p, pos, body.id);
-    return engageEnemy(req, jw, &p, pos, body.id);
+    if (std.mem.startsWith(u8, body.id, "x.")) return engageEcho(req, jw, &p, pos, body.id, stance);
+    return engageEnemy(req, jw, &p, pos, body.id, stance);
+}
+
+/// POST /api/stance: the default stance Contact fights use.
+pub fn setStance(req: *Req, jw: *Stringify) HandlerError!void {
+    const body = try req.json(struct { stance: []const u8 });
+    const stance = try requestStance(req, body.stance);
+    var p = (try model.load(req, req.pid)).?;
+    p.stance = stance;
+    try model.save(req, &p);
+    try jw.write(.{ .me = try views.meView(req, &p) });
 }
 
 fn markDone(req: *Req, pid: i64, sid: []const u8, expires_at: i64) HandlerError!void {
@@ -325,7 +403,7 @@ const Target = struct {
     mult: f32,
 };
 
-fn resolveTarget(req: *Req, p: *const Player, id: []const u8) HandlerError!Target {
+fn resolveTarget(req: *Req, p: *const Player, id: []const u8, night: bool) HandlerError!Target {
     if (std.mem.startsWith(u8, id, "t.")) {
         var buf: [24]u8 = undefined;
         const t = req.ctx.live.tutorials.get(p.id);
@@ -335,23 +413,29 @@ fn resolveTarget(req: *Req, p: *const Player, id: []const u8) HandlerError!Targe
         return .{ .archetype = tutorial_archetype, .level = p.level, .elite = false, .tutorial = true, .lat = t.?.lat, .lon = t.?.lon, .expires_at = t.?.expires_at, .mult = stats.tutorial_factor };
     }
     const en = spawns.resolveEnemy(req.ctx.seed, id, req.now) orelse return req.fail(404, "not_found", "That enemy is gone.");
-    if (!en.visibleTo(p.level)) return req.fail(404, "not_found", "That enemy is gone.");
-    return .{ .archetype = en.archetype, .level = en.levelFor(p.level), .elite = en.elite, .tutorial = false, .lat = en.lat, .lon = en.lon, .expires_at = en.expires_at, .mult = stats.graceFactor(p.level) };
+    if (!en.visibleTo(p.level) or !en.presentFor(p.fac(), req.now)) return req.fail(404, "not_found", "That enemy is gone.");
+    // After dark the enemies Humans face are 10% tougher.
+    const mult = stats.graceFactor(p.level) * daynight.enemyMult(p.fac(), night);
+    return .{ .archetype = en.archetype, .level = en.levelFor(p.level), .elite = en.elite, .tutorial = false, .lat = en.lat, .lon = en.lon, .expires_at = en.expires_at, .mult = mult };
 }
 
-fn engageEnemy(req: *Req, jw: *Stringify, p: *Player, pos: live.Pos, id: []const u8) HandlerError!void {
-    const en = try resolveTarget(req, p, id);
+fn engageEnemy(req: *Req, jw: *Stringify, p: *Player, pos: live.Pos, id: []const u8, stance: data.Stance) HandlerError!void {
+    const night = daynight.isNight(req.now, pos.lon);
+    const en = try resolveTarget(req, p, id, night);
     if (!withinReach(pos, en.lat, en.lon)) return req.fail(409, "too_far", "Get closer to engage.");
     if (!en.tutorial and try isDone(req, p.id, id)) return req.fail(409, "already_defeated", "You already defeated that one.");
 
     const level = en.level;
-    const a = try fight.selfSide(req, p);
+    const a = try fight.selfSideWith(req, p, stance, en.archetype);
     const b = try fight.enemySide(req.arena, p.fac(), en.archetype, level, en.elite, false, en.mult);
     const o = try fight.run(req, a, b, fight.seedFor(req, p.id, game.rng.hashBytes(1, id)));
     const row = data.archetype(en.archetype);
 
     var acc = rewards.Acc{};
-    const win_xp = progression.pveWinXp(level, if (en.elite) .elite else .normal, row.reward_mult);
+    // Risk and reward: Humans earn more PvE XP by night, Zombies by day.
+    const base_xp = progression.pveWinXp(level, if (en.elite) .elite else .normal, row.reward_mult);
+    const win_xp: u32 = @intFromFloat(@round(@as(f32, @floatFromInt(base_xp)) * daynight.pveXpMult(p.fac(), night)));
+    p.bestiary[@intFromEnum(en.archetype)] +|= 1;
     const district = try districtOf(req.arena, en.lat, en.lon);
     if (o.won()) {
         acc.xp = win_xp;
@@ -368,7 +452,7 @@ fn engageEnemy(req: *Req, jw: *Stringify, p: *Player, pos: live.Pos, id: []const
         acc.xp = progression.pveLossXp(win_xp);
         p.losses += 1;
     }
-    rewards.settleHp(p, o.result.hp_a, req.now);
+    rewards.settleHp(p, fight.hpAfter(a, o), req.now);
     const rw = try rewards.apply(req, p, &acc, district);
     if (o.won()) try missions.event(req, p, .{ .kind = .pve_win, .archetype = en.archetype, .elite = en.elite });
 
@@ -376,7 +460,7 @@ fn engageEnemy(req: *Req, jw: *Stringify, p: *Player, pos: live.Pos, id: []const
     try jw.write(try fight.battleView(req, .pve, a, b, o, rw, me));
 }
 
-fn engageEcho(req: *Req, jw: *Stringify, p: *Player, pos: live.Pos, id: []const u8) HandlerError!void {
+fn engageEcho(req: *Req, jw: *Stringify, p: *Player, pos: live.Pos, id: []const u8, stance: data.Stance) HandlerError!void {
     const ctx = req.ctx;
     const window = echo_mod.windowOf(req.now);
     const e = ctx.live.echoFor(p.id, window) orelse return req.fail(404, "not_found", "That echo has faded.");
@@ -387,7 +471,7 @@ fn engageEcho(req: *Req, jw: *Stringify, p: *Player, pos: live.Pos, id: []const 
     if (!withinReach(pos, e.lat, e.lon)) return req.fail(409, "too_far", "Get closer to engage.");
     if (try isDone(req, p.id, id)) return req.fail(409, "already_defeated", "You already faced that echo.");
 
-    const a = try fight.selfSide(req, p);
+    const a = try fight.selfSideWith(req, p, stance, null);
     const b = try fight.buildSide(req.arena, &e.build, if (e.rogue) .rogue else .echo, null);
     const o = try fight.run(req, a, b, fight.seedFor(req, p.id, game.rng.hashBytes(2, id)));
 
@@ -407,7 +491,7 @@ fn engageEcho(req: *Req, jw: *Stringify, p: *Player, pos: live.Pos, id: []const 
     p.echoes += 1;
     try markDone(req, p.id, id, e.expires_at);
     ctx.live.dropEcho(p.id);
-    rewards.settleHp(p, o.result.hp_a, req.now);
+    rewards.settleHp(p, fight.hpAfter(a, o), req.now);
     const rw = try rewards.apply(req, p, &acc, district);
     if (o.won()) try missions.event(req, p, .{ .kind = .contact_win });
     if (e.source) |owner| try reportToOwner(req, owner, o.won(), p.fac());
@@ -445,6 +529,8 @@ pub fn open(req: *Req, jw: *Stringify) HandlerError!void {
         return req.fail(409, "no_position", "Your position is unknown. Wait for a location update.");
     if (pos.sanctuary) return req.fail(409, "sanctuary", "Nothing can be opened in a sanctuary.");
 
+    if (std.mem.startsWith(u8, id, "l.")) return openLandmark(req, jw, &p, pos, id);
+
     var lat: f64 = undefined;
     var lon: f64 = undefined;
     var expires: i64 = undefined;
@@ -472,5 +558,34 @@ pub fn open(req: *Req, jw: *Stringify) HandlerError!void {
     p.caches += 1;
     const rw = try rewards.apply(req, &p, &acc, try districtOf(req.arena, lat, lon));
     try missions.event(req, &p, .{ .kind = .cache_open });
+    try jw.write(.{ .loot = rw, .me = try views.meFresh(req, p.id) });
+}
+
+/// A landmark cache: a real place a player's map reported, once per player per 4-hour window,
+/// at most six per half hour.
+fn openLandmark(req: *Req, jw: *Stringify, p: *Player, pos: live.Pos, id: []const u8) HandlerError!void {
+    const ctx = req.ctx;
+    const parsed = landmarks.resolveId(id, req.now) orelse return req.fail(404, "not_found", "That is gone.");
+    const place = ctx.live.findPlace(parsed.key, pos.lat, pos.lon, req.now) orelse return req.fail(404, "not_found", "That is gone.");
+    if (!withinReach(pos, place.place.lat, place.place.lon)) return req.fail(409, "too_far", "Get closer to open it.");
+    if (try isDone(req, p.id, id)) return req.fail(409, "already_opened", "You already searched here. It restocks later.");
+    const opens = ctx.live.landmark_opens.get(p.id) orelse landmarks.Opens{};
+    if (opens.blockedUntil(req.now)) |until| {
+        const minutes = @divFloor(until - req.now + 59_999, 60_000);
+        const msg = try std.fmt.allocPrint(req.arena, "You have searched a lot of places lately. Try again in {d} min.", .{minutes});
+        return req.fail(409, "landmark_limit", msg);
+    }
+
+    try markDone(req, p.id, id, landmarks.nextWindowAt(req.now));
+    var lrng = game.rng.Rng.init(game.rng.hash(ctx.seed, .{ "landmark", p.id, id, req.now }));
+    var acc = rewards.Acc{ .xp = progression.cacheXp(p.level), .war_points = game.war.points(.cache) };
+    try acc.addDrop(req, loot.rollLandmark(&lrng, p.level, rewards.lootMult(p, req.now), data.placeKind(place.place.kind)));
+    p.caches += 1;
+    const rw = try rewards.apply(req, p, &acc, try districtOf(req.arena, place.place.lat, place.place.lon));
+    try missions.event(req, p, .{ .kind = .cache_open });
+    // Only a landmark that paid out counts against the limit.
+    var o = opens;
+    o.record(req.now);
+    try ctx.live.landmark_opens.put(ctx.live.gpa, p.id, o);
     try jw.write(.{ .loot = rw, .me = try views.meFresh(req, p.id) });
 }

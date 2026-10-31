@@ -6,7 +6,7 @@
  */
 import { setFetcher } from '../api/client';
 import type {
-  Battle, Catalog, ClanMessage, Combatant, Faction, GameEvent, Item, LeaderboardEntry, Me, Mission, PlayerRecord, Rarity, Rewards, Slot, Stats, Turn, WorldView,
+  Battle, Catalog, ClanMessage, Combatant, Faction, GameEvent, Item, LeaderboardEntry, Me, Mission, PlaceReport, PlayerRecord, Rarity, Rewards, Slot, Stance, Stats, Turn, WorldView,
 } from '../api/types';
 
 const KEY = 'outbreak.mock.db';
@@ -113,6 +113,7 @@ interface DB {
   clan: { id: string; role: string } | null; chat: ClanMessage[]; warPoints: number; feed: GameEvent[]; contactPending: boolean;
   userClans: Clan[];
   rec: PlayerRecord;
+  stance?: Stance; bestiary?: Record<string, number>;
 }
 function fresh(): DB {
   return {
@@ -212,6 +213,7 @@ function buildMe(): Me {
     avatar: db.avatar ?? null, pvp_protected: db.level < 5, underdog_bonus: 0.15, war_points_week: db.warPoints,
     record: db.rec,
     account: { guest: db.ids.length === 0, providers: db.ids.map((i) => i.provider), email: db.ids.find((i) => i.email)?.email ?? null },
+    stance: db.stance ?? 'careful', bestiary: db.bestiary ?? {},
   };
 }
 
@@ -237,12 +239,29 @@ function cacheIn(i: number, j: number, win: number, lat0: number) {
   return { id: `c:${i}:${j}:${win}`, lat: (i + 0.1 + r() * 0.8) * dlat, lon: (j + 0.1 + r() * 0.8) * dlon };
 }
 
-function world(lat: number, lon: number): WorldView {
+const PLACE_KINDS = ['pharmacy', 'grocery', 'hardware', 'fuel', 'police', 'outfitter', 'diner'];
+/** Solar time: night is 20:00 to 06:00 at the player's longitude. */
+function mockTime(now: number, lon: number): WorldView['time'] {
+  const day = 86400e3, hour = 3600e3;
+  const m = (((now + Math.round((lon / 15) * hour)) % day) + day) % day;
+  const night = m >= 20 * hour || m < 6 * hour;
+  const target = m < 6 * hour ? 6 * hour : m < 20 * hour ? 20 * hour : 30 * hour;
+  return { phase: night ? 'night' : 'day', changes_at: now + (target - m) };
+}
+
+function world(lat: number, lon: number, places: PlaceReport[] = []): WorldView {
   const now = Date.now();
   const { dlat, dlon } = dims(lat);
   const ci = Math.floor(lat / dlat), cj = Math.floor(lon / dlon);
   const w10 = Math.floor(now / 600e3), w30 = Math.floor(now / 1800e3);
-  const v: WorldView = { now, me: { hp: db.hp, max_hp: buildMe().max_hp, downed_until: null, level: db.level, xp: db.xp, xp_next: CATALOG.levels.xp_to_next[db.level - 1], salvage: db.salvage }, hostiles_near: false, enemies: [], caches: [], echoes: [], strongholds: [], raids: [], events: [] };
+  const v: WorldView = { now, me: { hp: db.hp, max_hp: buildMe().max_hp, downed_until: null, level: db.level, xp: db.xp, xp_next: CATALOG.levels.xp_to_next[db.level - 1], salvage: db.salvage }, hostiles_near: false, enemies: [], caches: [], echoes: [], landmarks: [], time: mockTime(now, lon), strongholds: [], raids: [], events: [] };
+  const win4h = Math.floor(now / (4 * 3600e3));
+  for (const p of places.slice(0, 40)) {
+    if (!PLACE_KINDS.includes(p.kind)) continue;
+    const id = `l.${p.key}.${win4h}`;
+    const used = db.defeated.includes(id);
+    v.landmarks.push({ id, kind: p.kind, name: p.name ?? null, lat: p.lat, lon: p.lon, available: !used, available_at: used ? (win4h + 1) * 4 * 3600e3 : null });
+  }
   const R = 3; // 450 m / 150 m
   for (let i = ci - R; i <= ci + R; i++) for (let j = cj - R; j <= cj + R; j++) {
     for (const e of enemiesIn(i, j, w10, lat)) {
@@ -487,11 +506,11 @@ function route(method: string, path: string, body: any, authed: boolean): unknow
     case 'POST /api/avatar': guard(); db.avatar = body.avatar as Record<string, unknown>; save(); return mine();
     case 'POST /api/location': {
       guard();
-      const v = world(need(body, 'lat'), need(body, 'lon'));
+      const v = world(need(body, 'lat'), need(body, 'lon'), (body.places as PlaceReport[] | undefined) ?? []);
       v.me.hp = buildMe().hp;
       db.mprog[2] += 18;
       db.rec.distance_m += 18;
-      if (body.sanctuary) { v.enemies = []; v.caches = []; v.echoes = []; v.hostiles_near = false; }
+      if (body.sanctuary) { v.enemies = []; v.caches = []; v.echoes = []; v.landmarks = []; v.hostiles_near = false; }
       else if (db.contactPending && db.level >= 5) {
         db.contactPending = false;
         const b = contactBattle();
@@ -522,9 +541,16 @@ function route(method: string, path: string, body: any, authed: boolean): unknow
       foe.stats = { hp: foe.max_hp, atk: Math.round(foe.stats.atk), def: Math.round(foe.stats.def), spd: Math.round(foe.stats.spd) };
       const base = isEcho ? 40 + 7 * foe.level : 20 + 6 * foe.level;
       const b = resolve(foe, isEcho ? 'echo' : 'pve', base, isEcho ? 3 : 1, m ? 0 : 0.06);
+      b.stance = (body.stance as Stance | undefined) ?? 'careful';
+      if (foe.archetype) { db.bestiary = { ...(db.bestiary ?? {}), [foe.archetype]: (db.bestiary?.[foe.archetype] ?? 0) + 1 }; b.me = buildMe(); }
       if (b.winner === 'a' && m) db.defeated.push(id);
       save();
       return b;
+    }
+    case 'POST /api/stance': {
+      guard();
+      db.stance = need(body, 'stance') as Stance; save();
+      return mine();
     }
     case 'POST /api/open': {
       guard();

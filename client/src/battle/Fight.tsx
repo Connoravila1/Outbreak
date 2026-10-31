@@ -6,6 +6,8 @@ import { Icon } from '../ui/Icon';
 import { abilityName } from '../gear/util';
 import * as fx from '../audio/fx';
 import { foeLabel, myLabel } from './names';
+import { stanceName } from '../state/stance';
+import './stance.css';
 import { Emblem, type Impact, type Side } from './Emblem';
 
 const TURN_MS = 600;
@@ -201,6 +203,7 @@ export function Fight({ battle, onDone }: { battle: Battle; onDone: () => void }
         )}
         <div class="arena-bar">
           <span class="dim num round" aria-live="off">{say('Round', 'round')} {Math.max(1, shown)}</span>
+          {battle.stance && <span class="label-tape fight-stance" title={say('Your stance', 'how you hunt')}>{stanceName(battle.stance, battle.a.faction)}</span>}
           <button class="btn" onClick={onDone}><Icon name="sprint" size={20} />{say('Skip', 'skip')}</button>
         </div>
       </div>

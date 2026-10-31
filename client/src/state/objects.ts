@@ -1,8 +1,9 @@
-import type { Faction, WorldView } from '../api';
+import type { Faction, PlaceKind, WorldView } from '../api';
 import type { IconName } from '../ui/Icon';
 import { catalog } from './store';
+import { haversine, type LatLon } from '../location/geo';
 
-export type ObjectKind = 'enemy' | 'cache' | 'airdrop' | 'echo' | 'stronghold' | 'raid';
+export type ObjectKind = 'enemy' | 'cache' | 'airdrop' | 'echo' | 'stronghold' | 'raid' | 'landmark';
 
 export interface GameObject {
   id: string;
@@ -31,6 +32,28 @@ export const ARCH_ICON: Record<string, IconName> = {
   raider_gang: 'swords-emblem', raider: 'swords-emblem', medic: 'heart-plus', warlord: 'skull-crack',
 };
 
+export const PLACE_ICON: Record<PlaceKind, IconName> = {
+  pharmacy: 'medical-pack', grocery: 'shopping-cart', hardware: 'hammer-nails', fuel: 'gas-pump',
+  police: 'police-badge', outfitter: 'shirt', diner: 'knife-fork',
+};
+
+const PLACE_FALLBACK: Record<PlaceKind, [string, string]> = {
+  pharmacy: ['Pharmacy', 'Sick Ward'], grocery: ['Grocery', 'Larder'], hardware: ['Hardware Store', 'Scrap Heap'],
+  fuel: ['Gas Station', 'Fume Pit'], police: ['Police Station', 'Barracks'], outfitter: ['Outfitter', 'Shed Skins'],
+  diner: ['Diner', 'Feeding Ground'],
+};
+
+/** "Pharmacy" for Humans, "Sick Ward" for Zombies. */
+export function placeKindName(kind: PlaceKind, f: Faction): string {
+  return catalog.value?.places?.find((x) => x.id === kind)?.names[f] ?? PLACE_FALLBACK[kind][f === 'zombie' ? 1 : 0];
+}
+
+/** What a kind of place tends to hold, in the viewer's voice. */
+export function placeTendsTo(kind: PlaceKind, f: Faction): string | null {
+  const p = catalog.value?.places?.find((x) => x.id === kind);
+  return p ? (f === 'zombie' ? p.text_zombie : p.text) : null;
+}
+
 export function archetypeName(id: string, f: Faction): string {
   const e = catalog.value?.enemies.find((x) => x.id === id);
   if (e) return e.names[f];
@@ -52,6 +75,10 @@ export function objectsFrom(w: WorldView, f: Faction): GameObject[] {
   for (const e of w.echoes) {
     out.push({ ...base, id: e.id, kind: 'echo', lat: e.lat, lon: e.lon, level: e.level, rogue: e.rogue, name: `${e.rogue ? 'Rogue' : 'Echo'} ${e.faction === 'human' ? 'Human' : 'Zombie'}`, icon: 'ghost', detail: e.title, expiresAt: e.expires_at, raw: e });
   }
+  for (const l of w.landmarks ?? []) {
+    const kind = placeKindName(l.kind, f);
+    out.push({ ...base, id: l.id, kind: 'landmark', lat: l.lat, lon: l.lon, name: l.name ?? kind, icon: PLACE_ICON[l.kind], detail: kind, raw: l });
+  }
   for (const s of w.strongholds) {
     out.push({ ...base, id: s.id, kind: 'stronghold', lat: s.lat, lon: s.lon, name: s.clan ? `Stronghold [${s.clan.tag}]` : 'Stronghold', icon: 'castle', detail: s.clan ? s.clan.name : null, raw: s });
   }
@@ -59,6 +86,22 @@ export function objectsFrom(w: WorldView, f: Faction): GameObject[] {
     out.push({ ...base, id: r.id, kind: 'raid', lat: r.lat, lon: r.lon, name: r.boss, icon: 'skull-crack', elite: true, expiresAt: r.ends_at, detail: `${r.hp.toLocaleString()} / ${r.max_hp.toLocaleString()} HP, ${r.fighters} fighting`, raw: r });
   }
   return out;
+}
+
+/** Downtown can report dozens of places at once; show only the closest few so enemies stay readable. */
+export const MAX_LANDMARKS_SHOWN = 8;
+
+export function capLandmarks(objs: GameObject[], at: LatLon | null, keepId: string | null): GameObject[] {
+  if (!at) return objs;
+  const marks = objs.filter((o) => o.kind === 'landmark');
+  if (marks.length <= MAX_LANDMARKS_SHOWN) return objs;
+  const keep = new Set(marks
+    .map((o) => ({ id: o.id, d: haversine(at, o) }))
+    .sort((a, b) => a.d - b.d)
+    .slice(0, MAX_LANDMARKS_SHOWN)
+    .map((x) => x.id));
+  if (keepId) keep.add(keepId);
+  return objs.filter((o) => o.kind !== 'landmark' || keep.has(o.id));
 }
 
 export const INTERACT_RANGE_M = 50;

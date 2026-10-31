@@ -69,6 +69,7 @@ const routes = [_]Route{
     .{ .method = .post, .path = "/api/location", .access = .faction, .handler = world.location },
     .{ .method = .post, .path = "/api/engage", .access = .faction, .handler = world.engage },
     .{ .method = .post, .path = "/api/open", .access = .faction, .handler = world.open },
+    .{ .method = .post, .path = "/api/stance", .access = .faction, .handler = world.setStance },
 
     .{ .method = .post, .path = "/api/equip", .access = .faction, .handler = gear.equip },
     .{ .method = .post, .path = "/api/unequip", .access = .faction, .handler = gear.unequip },

@@ -36,6 +36,8 @@ pub const ItemRoll = struct {
     min_rarity: Rarity = .common,
     /// Extra multiplier on the Legendary weight (airdrops: 3).
     legendary_mult: f32 = 1.0,
+    /// Relative weight of a weapon / armor / utility base (landmarks lean towards some slots).
+    slot_weights: [3]f32 = .{ 1, 1, 1 },
 };
 
 pub fn rollRarity(rng: *Rng, level: u32, legendary_mult: f32, min_rarity: Rarity) Rarity {
@@ -56,8 +58,12 @@ pub fn baseWeight(req: u8, level: u32) f64 {
 }
 
 pub fn rollBase(rng: *Rng, level: u32) u8 {
+    return rollBaseSlots(rng, level, .{ 1, 1, 1 });
+}
+
+pub fn rollBaseSlots(rng: *Rng, level: u32, slot_weights: [3]f32) u8 {
     var w: [data.bases.len]f64 = undefined;
-    for (data.bases, 0..) |b, i| w[i] = baseWeight(b.req, level);
+    for (data.bases, 0..) |b, i| w[i] = baseWeight(b.req, level) * slot_weights[@intFromEnum(b.slot)];
     return @intCast(rng.weighted(&w));
 }
 
@@ -75,7 +81,7 @@ fn rollPerks(rng: *Rng, count: u8, out: *[2]Perk) void {
 }
 
 pub fn rollItem(rng: *Rng, roll: ItemRoll) Item {
-    var item = Item{ .base = rollBase(rng, roll.level) };
+    var item = Item{ .base = rollBaseSlots(rng, roll.level, roll.slot_weights) };
     item.rarity = rollRarity(rng, roll.level, roll.legendary_mult, roll.min_rarity);
     item.perk_count = data.rarity(item.rarity).perks;
     rollPerks(rng, item.perk_count, &item.perk_ids);
@@ -99,6 +105,10 @@ const consumable_weights = [_]f64{ 38, 20, 4, 6, 6, 6, 6, 6, 0 };
 
 pub fn rollConsumable(rng: *Rng) Consumable {
     return @enumFromInt(rng.weighted(&consumable_weights));
+}
+
+fn rollConsumableWeighted(rng: *Rng, weights: *const [9]f64) Consumable {
+    return @enumFromInt(rng.weighted(weights));
 }
 
 // --- Drops -------------------------------------------------------------------------------------
@@ -193,6 +203,26 @@ pub fn rollAirdrop(rng: *Rng, level: u32, loot_mult: f32) Drop {
             d.addItem(rollItem(rng, .{ .level = level, .min_rarity = .uncommon, .legendary_mult = airdrop_legendary_mult }));
         } else {
             d.addConsumable(rollConsumable(rng));
+        }
+    }
+    return d;
+}
+
+/// Rolls in a landmark cache and its base salvage bonus.
+pub const landmark_rolls = 2;
+pub const landmark_salvage_mult = 1.25;
+
+/// A landmark cache at a real place: two rolls leaning the way the place's kind does, +25%
+/// salvage per roll (more at places that are about scrap).
+pub fn rollLandmark(rng: *Rng, level: u32, loot_mult: f32, row: data.PlaceRow) Drop {
+    var d = Drop{};
+    const salvage_each: f32 = @as(f32, @floatFromInt(pveSalvage(level))) * (landmark_salvage_mult + row.salvage_extra);
+    for (0..landmark_rolls) |_| {
+        d.salvage += @intFromFloat(@round(salvage_each));
+        if (rng.chance(row.item_chance * loot_mult)) {
+            d.addItem(rollItem(rng, .{ .level = level, .min_rarity = row.min_rarity, .legendary_mult = row.legendary_mult, .slot_weights = row.slot_weights }));
+        } else {
+            d.addConsumable(rollConsumableWeighted(rng, &row.consumable_weights));
         }
     }
     return d;
@@ -373,6 +403,48 @@ test "caches and airdrops" {
         try testing.expect(rolls >= 3 and rolls <= 4);
         for (d.itemSlice()) |it| try testing.expect(it.rarity != .common);
     }
+}
+
+test "landmark caches: two rolls, +25% salvage, biased by kind" {
+    var rng = Rng.init(11);
+    const n = 20_000;
+    var pharm_heals: f64 = 0;
+    var pharm_rolls: f64 = 0;
+    var hw_weapons: f64 = 0;
+    var hw_items: f64 = 0;
+    var police_items: f64 = 0;
+    for (0..n) |_| {
+        const d = rollLandmark(&rng, 10, 1.0, data.placeKind(.pharmacy));
+        try testing.expectEqual(@as(u32, 2), d.item_count + d.consumable_count);
+        try testing.expectEqual(@as(u32, 20), d.salvage); // 2 x round(8 x 1.25)
+        for (d.consumableSlice()) |c| {
+            pharm_rolls += 1;
+            if (c == .heal_s or c == .heal_m or c == .revive) pharm_heals += 1;
+        }
+        const h = rollLandmark(&rng, 10, 1.0, data.placeKind(.hardware));
+        try testing.expectEqual(@as(u32, 24), h.salvage); // 2 x round(8 x 1.5)
+        for (h.itemSlice()) |it| {
+            hw_items += 1;
+            if (it.slot() == .weapon) hw_weapons += 1;
+        }
+        const pd = rollLandmark(&rng, 10, 1.0, data.placeKind(.police));
+        for (pd.itemSlice()) |it| {
+            police_items += 1;
+            try testing.expect(it.rarity != .common);
+        }
+    }
+    // Pharmacies mostly hand out heals; hardware stores lean to weapons (4 : 1 : 1 vs 1 : 1 : 1).
+    try testing.expect(pharm_heals / pharm_rolls > 0.85);
+    try testing.expect(hw_weapons / hw_items > 0.5);
+    try testing.expect(police_items / (2.0 * n) > 0.6);
+    // Plain caches are 55% items; a pharmacy is far below that.
+    var items: f64 = 0;
+    for (0..n) |_| items += @floatFromInt(rollLandmark(&rng, 10, 1.0, data.placeKind(.pharmacy)).item_count);
+    try testing.expectApproxEqAbs(0.15, items / (2.0 * n), 0.01);
+    // Lucky perks and the loot buff scale the item chance, as for any cache.
+    items = 0;
+    for (0..n) |_| items += @floatFromInt(rollLandmark(&rng, 10, 2.0, data.placeKind(.pharmacy)).item_count);
+    try testing.expectApproxEqAbs(0.30, items / (2.0 * n), 0.015);
 }
 
 test "consumable drops never include flags and favour small heals" {

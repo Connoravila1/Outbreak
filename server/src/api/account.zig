@@ -239,8 +239,8 @@ pub fn chooseFaction(req: *Req, jw: *Stringify) HandlerError!void {
 
 /// Avatar fields (all small integers) and their exclusive upper bounds; keep in step with client/src/avatar/spec.ts.
 const avatar_limits = [_]struct { key: []const u8, count: i64 }{
-    .{ .key = "body", .count = 3 },  .{ .key = "skin", .count = 8 },   .{ .key = "face", .count = 6 },
-    .{ .key = "hair", .count = 10 }, .{ .key = "hcol", .count = 8 },   .{ .key = "facial", .count = 4 },
+    .{ .key = "body", .count = 3 },  .{ .key = "skin", .count = 8 }, .{ .key = "face", .count = 6 },
+    .{ .key = "hair", .count = 10 }, .{ .key = "hcol", .count = 8 }, .{ .key = "facial", .count = 4 },
     .{ .key = "scar", .count = 4 },
 };
 
@@ -288,7 +288,14 @@ fn pairView(p: data.Pair) PairView {
     return .{ .human = p.human, .zombie = p.zombie };
 }
 
-pub const catalog_version = 1;
+pub const catalog_version = 2;
+
+const StanceRow = struct { id: data.Stance, names: PairView, text: []const u8 };
+const stance_rows = [_]StanceRow{
+    .{ .id = .aggressive, .names = .{ .human = "Aggressive", .zombie = "frenzy" }, .text = "+20% Attack, -20% Defense." },
+    .{ .id = .careful, .names = .{ .human = "Careful", .zombie = "stalk" }, .text = "+25% Defense, +3% dodge, -8% Attack." },
+    .{ .id = .evasive, .names = .{ .human = "Evasive", .zombie = "slink" }, .text = "+20% Speed, +5% dodge, -10% HP for the fight." },
+};
 
 pub fn catalog(req: *Req, jw: *Stringify) HandlerError!void {
     _ = req;
@@ -351,8 +358,31 @@ pub fn catalog(req: *Req, jw: *Stringify) HandlerError!void {
     try jw.objectField("enemies");
     try jw.beginArray();
     for (data.archetypes) |a| {
-        try jw.write(.{ .id = a.id, .names = pairView(a.name), .text = a.flavour.human, .text_zombie = a.flavour.zombie, .note = a.note });
+        try jw.write(.{
+            .id = a.id,
+            .names = pairView(a.name),
+            .text = a.flavour.human,
+            .text_zombie = a.flavour.zombie,
+            .note = a.note,
+            .counter = a.counter,
+            .punished = a.punished,
+            .hint = a.hint.human,
+            .hint_zombie = a.hint.zombie,
+        });
     }
+    try jw.endArray();
+
+    try jw.objectField("stances");
+    try jw.beginArray();
+    for (stance_rows) |r| {
+        const e = game.stance.effect(r.id);
+        try jw.write(.{ .id = r.id, .names = r.names, .text = r.text, .atk = e.atk, .def = e.def, .spd = e.spd, .hp = e.hp, .dodge = e.dodge });
+    }
+    try jw.endArray();
+
+    try jw.objectField("places");
+    try jw.beginArray();
+    for (data.place_kinds) |k| try jw.write(.{ .id = k.id, .names = pairView(k.name), .text = k.text.human, .text_zombie = k.text.zombie });
     try jw.endArray();
 
     try jw.objectField("levels");

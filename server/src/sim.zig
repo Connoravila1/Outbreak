@@ -21,6 +21,8 @@ const combat = game.combat;
 const loot = game.loot;
 const missions = game.missions;
 const war = game.war;
+const stance_rules = game.stance;
+const daynight = game.daynight;
 const Rng = game.rng.Rng;
 const Item = stats.Item;
 
@@ -42,11 +44,21 @@ const max_lvl = data.max_level;
 const probe_levels = [_]u8{ 5, 10, 15, 20, 25, 30, 35, 40, 45, 50 };
 const probe_archetypes = 6; // everything except the raid boss
 const probe_fights = 60;
+const stance_count = 3;
+/// Share of the 24 hours that is night (20:00 to 06:00): fights are dealt a random hour, so the
+/// results average over the day.
+const night_share = 10.0 / 24.0;
+
+/// How the simulated player picks a stance for PvE: `none` is the old model (no stances, no
+/// time of day), `random` a player who does not know the counters, `optimal` one who always
+/// stands in the counter (Careful against enemies with no counter).
+const Policy = enum { none, random, optimal, aggressive, careful, evasive };
 
 const Config = struct {
     players: u32 = 100,
     seed: u64 = 1,
     hours_per_day: f64 = 2.0,
+    stance: Policy = .random,
 };
 
 const ProbeCell = struct { fights: u32 = 0, wins: u32 = 0, turns: u64 = 0, lost: f64 = 0 };
@@ -93,7 +105,8 @@ const Player = struct {
     wins: [max_lvl + 1]u32 = [_]u32{0} ** (max_lvl + 1),
     lost: [max_lvl + 1]f64 = [_]f64{0} ** (max_lvl + 1),
     turns: [max_lvl + 1]u64 = [_]u64{0} ** (max_lvl + 1),
-    probes: [probe_levels.len][probe_archetypes]ProbeCell = [_][probe_archetypes]ProbeCell{[_]ProbeCell{.{}} ** probe_archetypes} ** probe_levels.len,
+    probes: [probe_levels.len][probe_archetypes][stance_count]ProbeCell = [_][probe_archetypes][stance_count]ProbeCell{[_][stance_count]ProbeCell{[_]ProbeCell{.{}} ** stance_count} ** probe_archetypes} ** probe_levels.len,
+    policy: Policy = .random,
 
     fn init(id: u64, seed: u64, cfg: Config) Player {
         var p = Player{
@@ -101,6 +114,7 @@ const Player = struct {
             .faction = if (id % 2 == 0) .human else .zombie,
             .rng = game.rng.derive(seed, .{ "player", id }),
             .day_budget_s = cfg.hours_per_day * 3600.0,
+            .policy = cfg.stance,
         };
         p.day = 20000 + @as(i64, @intCast(p.rng.below(7)));
         p.week = war.weekIndex(p.day * war.day_ms);
@@ -246,7 +260,7 @@ const Player = struct {
 
     fn probe(p: *Player, slot: usize, level: u8) void {
         var rng = game.rng.derive(p.id, .{ "probe", level });
-        const me = blk: {
+        const full = blk: {
             var c = p.combatant();
             c.hp = c.stats.hp;
             break :blk c;
@@ -254,14 +268,19 @@ const Player = struct {
         var log: [combat.max_log]combat.Turn = undefined;
         for (0..probe_archetypes) |a| {
             const arch: data.Archetype = @enumFromInt(a);
-            const foe = enemyCombatant(arch, level, 1.0);
-            var cell = &p.probes[slot][a];
-            for (0..probe_fights) |_| {
-                const r = combat.fight(me, foe, rng.next(), &log);
-                cell.fights += 1;
-                if (r.winner == .a) cell.wins += 1;
-                cell.turns += r.rounds;
-                cell.lost += @as(f64, @floatFromInt(me.hp - r.hp_a)) / @as(f64, @floatFromInt(me.stats.hp));
+            for (0..stance_count) |si| {
+                var cell = &p.probes[slot][a][si];
+                for (0..probe_fights) |_| {
+                    const night = p.policy != .none and rng.chance(night_share);
+                    const adj = if (p.policy == .none) stance_rules.Adjusted{ .c = full } else stance_rules.adjust(full, @enumFromInt(si), arch, night);
+                    const foe = enemyCombatant(arch, level, if (p.policy == .none) 1.0 else daynight.enemyMult(p.faction, night));
+                    const r = combat.fight(adj.c, foe, rng.next(), &log);
+                    cell.fights += 1;
+                    if (r.winner == .a) cell.wins += 1;
+                    cell.turns += r.rounds;
+                    const left = stance_rules.realHp(r.hp_a, adj.hp_scale, full.stats.hp);
+                    cell.lost += @as(f64, @floatFromInt(full.stats.hp - left)) / @as(f64, @floatFromInt(full.stats.hp));
+                }
             }
         }
     }
@@ -430,21 +449,28 @@ const Player = struct {
             elite = false;
             offset = 0;
         }
-        const mult: f32 = if (first_blood) stats.tutorial_factor else stats.graceFactor(p.level);
+        const night = p.policy != .none and p.rng.chance(night_share);
+        const stance = p.pickStance(arch);
+        const night_mult: f32 = if (p.policy == .none) 1.0 else daynight.enemyMult(p.faction, night);
+        const mult: f32 = (if (first_blood) stats.tutorial_factor else stats.graceFactor(p.level)) * night_mult;
         const e_level: u8 = @intCast(std.math.clamp(@as(i32, p.level) + offset, 1, max_lvl + 5));
         p.advance(approach_seconds, true);
         var log: [combat.max_log]combat.Turn = undefined;
         const me = p.combatant();
-        const r = combat.fight(me, enemyCombatant(arch, e_level, mult), p.rng.next(), &log);
+        const adj = if (p.policy == .none) stance_rules.Adjusted{ .c = me } else stance_rules.adjust(me, stance, arch, night);
+        const r = combat.fight(adj.c, enemyCombatant(arch, e_level, mult), p.rng.next(), &log);
         p.advance(fight_seconds, false);
         const lvl = p.level;
+        const hp_left = stance_rules.realHp(r.hp_a, adj.hp_scale, p.comp.stats.hp);
         p.fights[lvl] += 1;
         p.turns[lvl] += r.rounds;
-        p.lost[lvl] += @as(f64, @floatFromInt(me.hp - r.hp_a)) / p.maxHp();
-        p.hp = @floatFromInt(r.hp_a);
+        p.lost[lvl] += @as(f64, @floatFromInt(me.hp - hp_left)) / p.maxHp();
+        p.hp = @floatFromInt(hp_left);
         const row = data.archetype(arch);
         const class: progression.EnemyClass = if (elite) .elite else .normal;
-        const win_xp = progression.pveWinXp(e_level, class, row.reward_mult);
+        const base_xp = progression.pveWinXp(e_level, class, row.reward_mult);
+        const xp_mult: f32 = if (p.policy == .none) 1.0 else daynight.pveXpMult(p.faction, night);
+        const win_xp: u32 = @intFromFloat(@round(@as(f32, @floatFromInt(base_xp)) * xp_mult));
         if (r.winner == .a) {
             p.wins[lvl] += 1;
             p.total_wins += 1;
@@ -457,6 +483,16 @@ const Player = struct {
             p.gainXp(.fight, progression.pveLossXp(win_xp));
         }
         p.spend();
+    }
+
+    fn pickStance(p: *Player, arch: data.Archetype) stance_rules.Stance {
+        return switch (p.policy) {
+            .none, .careful => .careful,
+            .aggressive => .aggressive,
+            .evasive => .evasive,
+            .random => @enumFromInt(p.rng.below(stance_count)),
+            .optimal => data.archetype(arch).counter orelse .careful,
+        };
     }
 
     fn echoFight(p: *Player) void {
@@ -569,6 +605,8 @@ pub fn main(init: std.process.Init) !void {
             cfg.seed = try std.fmt.parseInt(u64, it.next() orelse return error.MissingValue, 10);
         } else if (std.mem.eql(u8, arg, "--hours-per-day")) {
             cfg.hours_per_day = try std.fmt.parseFloat(f64, it.next() orelse return error.MissingValue);
+        } else if (std.mem.eql(u8, arg, "--stance")) {
+            cfg.stance = std.meta.stringToEnum(Policy, it.next() orelse return error.MissingValue) orelse return error.UnknownStance;
         } else return error.UnknownArgument;
     }
 
@@ -584,8 +622,11 @@ pub fn main(init: std.process.Init) !void {
         p.run();
     }
 
-    try w.print("Outbreak balance simulation: {d} players, {d:.1} active h/day, seed {d}\n\n", .{ cfg.players, cfg.hours_per_day, cfg.seed });
-    if (cfg.players > 0) try reportPlayers(w, gpa, players, cfg);
+    try w.print("Outbreak balance simulation: {d} players, {d:.1} active h/day, seed {d}, stance policy {s}\n\n", .{ cfg.players, cfg.hours_per_day, cfg.seed, @tagName(cfg.stance) });
+    if (cfg.players > 0) {
+        try reportPlayers(w, gpa, players, cfg);
+        try reportStances(w, players);
+    }
     try reportPvp(w, cfg);
     try w.flush();
 }
@@ -683,11 +724,13 @@ fn reportPlayers(w: *std.Io.Writer, gpa: std.mem.Allocator, players: []const Pla
         for (0..probe_archetypes) |a| {
             var c = ProbeCell{};
             for (players) |p| {
-                const pc = p.probes[si][a];
-                c.fights += pc.fights;
-                c.wins += pc.wins;
-                c.turns += pc.turns;
-                c.lost += pc.lost;
+                // A random stance: all three, equally weighted.
+                for (p.probes[si][a]) |pc| {
+                    c.fights += pc.fights;
+                    c.wins += pc.wins;
+                    c.turns += pc.turns;
+                    c.lost += pc.lost;
+                }
             }
             try printCell(w, c);
             if (c.fights > 0) {
@@ -702,6 +745,101 @@ fn reportPlayers(w: *std.Io.Writer, gpa: std.mem.Allocator, players: []const Pla
         var cell: [32]u8 = undefined;
         const mix = try std.fmt.bufPrint(&cell, "{d:.0}/{d:.1}/{d:.0}", .{ 100.0 * win_w / tot_w, turns_w / tot_w, 100.0 * lost_w / tot_w });
         try w.print(" {s:>17}", .{mix});
+        try w.print("\n", .{});
+    }
+}
+
+/// Win% and HP lost% of one probe cell summed over all players.
+fn stanceCell(players: []const Player, si: usize, a: usize, st: usize) ProbeCell {
+    var c = ProbeCell{};
+    for (players) |p| {
+        const pc = p.probes[si][a][st];
+        c.fights += pc.fights;
+        c.wins += pc.wins;
+        c.turns += pc.turns;
+        c.lost += pc.lost;
+    }
+    return c;
+}
+
+fn winFrac(c: ProbeCell) f64 {
+    return if (c.fights == 0) 0 else @as(f64, @floatFromInt(c.wins)) / @as(f64, @floatFromInt(c.fights));
+}
+
+fn lostFrac(c: ProbeCell) f64 {
+    return if (c.fights == 0) 0 else c.lost / @as(f64, @floatFromInt(c.fights));
+}
+
+/// The best stance against one archetype at one level, by win rate then HP kept.
+fn bestStance(players: []const Player, si: usize, a: usize) usize {
+    var best: usize = 0;
+    for (1..stance_count) |st| {
+        const c = stanceCell(players, si, a, st);
+        const b = stanceCell(players, si, a, best);
+        if (winFrac(c) > winFrac(b) + 1e-9 or (@abs(winFrac(c) - winFrac(b)) <= 1e-9 and lostFrac(c) < lostFrac(b))) best = st;
+    }
+    return best;
+}
+
+fn reportStances(w: *std.Io.Writer, players: []const Player) !void {
+    try w.print("\nSTANCES at full HP, same level, spawn-weighted over the six enemy types, hours drawn across the day (win% / HP lost%)\n", .{});
+    try w.print("{s:>3}", .{"Lvl"});
+    for (0..stance_count) |st| try w.print(" {s:>12}", .{@tagName(@as(stance_rules.Stance, @enumFromInt(st)))});
+    try w.print(" {s:>12} {s:>12} {s:>12} {s:>8}\n", .{ "random", "counter", "best", "gain" });
+    for (probe_levels, 0..) |pl, si| {
+        var per = [_][2]f64{.{ 0, 0 }} ** stance_count;
+        var counter = [2]f64{ 0, 0 };
+        var best = [2]f64{ 0, 0 };
+        var tot_w: f64 = 0;
+        for (0..probe_archetypes) |a| {
+            const wt: f64 = data.archetypes[a].weight;
+            tot_w += wt;
+            for (0..stance_count) |st| {
+                const c = stanceCell(players, si, a, st);
+                per[st][0] += wt * winFrac(c);
+                per[st][1] += wt * lostFrac(c);
+            }
+            const cs: usize = if (data.archetypes[a].counter) |c| @intFromEnum(c) else @intFromEnum(stance_rules.default);
+            const cc = stanceCell(players, si, a, cs);
+            counter[0] += wt * winFrac(cc);
+            counter[1] += wt * lostFrac(cc);
+            const bc = stanceCell(players, si, a, bestStance(players, si, a));
+            best[0] += wt * winFrac(bc);
+            best[1] += wt * lostFrac(bc);
+        }
+        try w.print("{d:>3}", .{pl});
+        var rnd = [2]f64{ 0, 0 };
+        for (per) |v| {
+            try w.print(" {d:>5.1}/{d:<6.1}", .{ 100 * v[0] / tot_w, 100 * v[1] / tot_w });
+            rnd[0] += v[0] / stance_count;
+            rnd[1] += v[1] / stance_count;
+        }
+        try w.print(" {d:>5.1}/{d:<6.1} {d:>5.1}/{d:<6.1} {d:>5.1}/{d:<6.1} {d:>8.1}\n", .{
+            100 * rnd[0] / tot_w,             100 * rnd[1] / tot_w,
+            100 * counter[0] / tot_w,         100 * counter[1] / tot_w,
+            100 * best[0] / tot_w,            100 * best[1] / tot_w,
+            100 * (best[0] - rnd[0]) / tot_w,
+        });
+    }
+
+    try w.print("\nBEST STANCE per enemy type, win% by stance, all probe levels pooled (counter marked *, punished marked !)\n", .{});
+    try w.print("{s:>12}", .{"enemy"});
+    for (0..stance_count) |st| try w.print(" {s:>11}", .{@tagName(@as(stance_rules.Stance, @enumFromInt(st)))});
+    try w.print("\n", .{});
+    for (0..probe_archetypes) |a| {
+        const row = data.archetypes[a];
+        try w.print("{s:>12}", .{row.name.human});
+        for (0..stance_count) |st| {
+            var c = ProbeCell{};
+            for (0..probe_levels.len) |si| {
+                const x = stanceCell(players, si, a, st);
+                c.fights += x.fights;
+                c.wins += x.wins;
+                c.lost += x.lost;
+            }
+            const mark: u8 = if (row.counter != null and @intFromEnum(row.counter.?) == st) '*' else if (row.punished != null and @intFromEnum(row.punished.?) == st) '!' else ' ';
+            try w.print(" {d:>9.1}{c} ", .{ 100 * winFrac(c), mark });
+        }
         try w.print("\n", .{});
     }
 }

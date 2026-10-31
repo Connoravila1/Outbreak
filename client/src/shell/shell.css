@@ -43,6 +43,19 @@
 .hostiles.hazard-tape { padding: 0 8px; }
 :root[data-lens='neutral'] .hostiles { display: none; }
 
+/* ----- time of day: a small stamp under the plate; the map shifts a touch ----- */
+.timestamp {
+  position: absolute; margin: 0; left: calc(var(--sa-left) + 14px); top: calc(var(--sa-top) + 66px); pointer-events: none;
+  display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px 2px 6px; font-size: var(--fs-12); font-weight: 700; line-height: 1.3;
+  background: color-mix(in srgb, var(--surface) 88%, transparent); color: var(--text); border: 1.5px solid var(--text); border-radius: 3px; rotate: -1.5deg;
+}
+:root[data-lens='survey'] .timestamp { font-family: var(--f-hand); font-weight: 400; letter-spacing: .02em; border-color: var(--survey-blue); color: var(--survey-blue); }
+:root[data-lens='heat'] .timestamp { border-color: var(--vein); border-radius: 999px; text-transform: lowercase; letter-spacing: .12em; rotate: 0deg; color: var(--flesh); }
+:root[data-lens='heat'] .timestamp.night { box-shadow: 0 0 12px color-mix(in srgb, var(--warm) 40%, transparent); }
+/* Night: Heat gets a touch more contrast, Survey a touch darker paper. */
+:root[data-lens='heat'][data-phase='night'] .gamemap .maplibregl-canvas { filter: contrast(1.14) saturate(1.1); }
+:root[data-lens='survey'][data-phase='night'] .gamemap .maplibregl-canvas { filter: brightness(.86) saturate(.92); }
+
 /* ----- vitals ----- */
 .vitals { flex: none; background: var(--surface); color: var(--text); border-top: 1.5px solid var(--text); padding: 8px calc(var(--sa-right) + 14px) 8px calc(var(--sa-left) + 14px); }
 :root[data-lens='heat'] .vitals { border-top-color: var(--vein); }

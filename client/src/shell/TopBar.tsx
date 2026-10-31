@@ -25,6 +25,23 @@ export function LevelRing({ level, xp, next, avatar }: { level: number; xp: numb
   );
 }
 
+/** A small sun or moon stamp: what the hour does to you. */
+function TimeStamp() {
+  const t = world.value?.time;
+  if (!t) return null;
+  const night = t.phase === 'night';
+  const zombie = faction.value === 'zombie';
+  const text = zombie
+    ? (night ? "night. we're hungrier." : 'day. we learn.')
+    : (night ? "Night: they're stronger" : "Day: you're sturdier");
+  return (
+    <p class={'timestamp ' + t.phase} role="status" aria-label={text}>
+      <Icon name={night ? 'moon' : 'sun'} size={16} />
+      <span>{text}</span>
+    </p>
+  );
+}
+
 export function TopBar() {
   const m = me.value;
   if (!m) return null;
@@ -38,6 +55,7 @@ export function TopBar() {
           <span class="title">{m.title}</span>
         </div>
       </div>
+      <TimeStamp />
       {hostile && (
         <div class="hostiles hazard-tape" role="status">
           <Icon name="radar-sweep" size={18} />

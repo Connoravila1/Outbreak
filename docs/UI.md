@@ -99,6 +99,14 @@ simulator panel beside it.
 - **Map**: tap a marker to open a bottom sheet: what it is, level, a threat read vs you
   (easy / even / dangerous / deadly, coloured), distance state ("in range" / "move closer"), and a
   primary action (Engage / Open). Out of range, the action is disabled with the reason.
+- **Landmarks**: real places the phone reported. Survey draws a stamped municipal symbol with the
+  real name in marker script ("WALGREENS - PHARMACY"); Heat a warm smear with the lowercase kind
+  ("sick ward"). The sheet shows name, kind, what it tends to hold and Open, or "Restocks in 2 h 10 min".
+- **Stance**: enemy, echo and raid sheets get a three-way control above Engage (Aggressive /
+  Careful / Evasive; frenzy / stalk / slink for Zombies) with its numbers, the last choice remembered
+  and a one-line hint after three fights against that archetype. The fight header shows the stance.
+- **Time**: a small sun/moon stamp under the top bar ("Night: they're stronger" / "night. we're
+  hungrier."); at night Heat gains contrast and Survey a darker paper.
 - **Gear**: three slot cards at top (tap to see the item; long text in a sheet). Below them the
   inventory grid, filterable by slot and sortable by power or rarity. Item sheet: stats with a
   delta against equipped (▲▼), perks, Equip, Upgrade (cost), Scrap (value). Multi-select scrap

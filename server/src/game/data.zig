@@ -39,6 +39,9 @@ pub const Consumable = enum { heal_s, heal_m, revive, buff_atk, buff_def, buff_s
 
 pub const Archetype = enum { shambler, runner, bloater, brute, horde, screamer, abomination };
 
+/// How a fight is approached; chosen before engaging (DESIGN.md section 4, Stance).
+pub const Stance = enum { aggressive, careful, evasive };
+
 pub const max_level: u8 = 50;
 
 /// A pair of strings, one per faction.
@@ -284,6 +287,63 @@ pub fn consumable(c: Consumable) ConsumableRow {
     return consumables[@intFromEnum(c)];
 }
 
+// --- Landmarks (real places) ---------------------------------------------------------------
+
+/// The kinds of real place that hold a supply cache. Wire names are the tag names.
+pub const PlaceKind = enum { pharmacy, grocery, hardware, fuel, police, outfitter, diner };
+
+pub const PlaceRow = struct {
+    id: PlaceKind,
+    name: Pair,
+    /// What it tends to hold, in each faction's voice.
+    text: Pair,
+    /// Chance that a roll is an item (otherwise a consumable).
+    item_chance: f32,
+    /// Relative weight of a weapon / armor / utility base when an item drops.
+    slot_weights: [3]f32 = .{ 1, 1, 1 },
+    /// Relative weights of consumables, in `Consumable` order (flags never drop).
+    consumable_weights: [9]f64,
+    min_rarity: Rarity = .common,
+    legendary_mult: f32 = 1.0,
+    /// Extra salvage on top of the +25% every landmark cache pays.
+    salvage_extra: f32 = 0,
+};
+
+pub const place_kinds = [_]PlaceRow{
+    .{ .id = .pharmacy, .name = pair("Pharmacy", "Sick Ward"), .item_chance = 0.15, .consumable_weights = .{ 28, 30, 14, 2, 4, 2, 2, 2, 0 }, .text = pair(
+        "Bandages, kits and the odd trauma kit.",
+        "the sick are fed here. fresh kills, and a vial that raises the dead.",
+    ) },
+    .{ .id = .grocery, .name = pair("Grocery", "Larder"), .item_chance = 0.20, .consumable_weights = .{ 50, 24, 2, 3, 3, 3, 4, 4, 0 }, .salvage_extra = 0.25, .text = pair(
+        "Food and first aid, and plenty to scrap.",
+        "meat on the hook. scraps worth chewing.",
+    ) },
+    .{ .id = .hardware, .name = pair("Hardware Store", "Scrap Heap"), .item_chance = 0.60, .slot_weights = .{ 4, 1, 1 }, .consumable_weights = .{ 30, 15, 2, 8, 8, 6, 3, 6, 0 }, .salvage_extra = 0.25, .text = pair(
+        "Weapons off the rack and salvage for upgrades.",
+        "claws and bone, heaped high. good for sharpening.",
+    ) },
+    .{ .id = .fuel, .name = pair("Gas Station", "Fume Pit"), .item_chance = 0.25, .consumable_weights = .{ 14, 6, 1, 18, 18, 18, 4, 14, 0 }, .salvage_extra = 0.25, .text = pair(
+        "Energy drinks, painkillers and whatever was left in the trunks.",
+        "the fumes sharpen everything. glands, still twitching.",
+    ) },
+    .{ .id = .police, .name = pair("Police Station", "Barracks"), .item_chance = 0.70, .slot_weights = .{ 1, 4, 1 }, .consumable_weights = .{ 20, 20, 6, 8, 10, 6, 4, 4, 0 }, .min_rarity = .uncommon, .legendary_mult = 2.0, .text = pair(
+        "Riot gear and better. The lockers are rarely empty.",
+        "hardened hides on racks. the best are kept back.",
+    ) },
+    .{ .id = .outfitter, .name = pair("Outfitter", "Shed Skins"), .item_chance = 0.65, .slot_weights = .{ 0.5, 3, 3 }, .consumable_weights = .{ 30, 16, 2, 4, 8, 8, 3, 4, 0 }, .text = pair(
+        "Jackets, packs and the gear that goes with them.",
+        "cast-off hides and strains, still warm.",
+    ) },
+    .{ .id = .diner, .name = pair("Diner", "Feeding Ground"), .item_chance = 0.20, .consumable_weights = .{ 36, 26, 2, 3, 3, 3, 16, 3, 0 }, .text = pair(
+        "A hot meal and a map on the wall: food, and a field manual or two.",
+        "the table is still set. a meal, and a memory.",
+    ) },
+};
+
+pub fn placeKind(k: PlaceKind) PlaceRow {
+    return place_kinds[@intFromEnum(k)];
+}
+
 // --- Abilities -----------------------------------------------------------------------------
 
 pub const AbilityRow = struct {
@@ -335,33 +395,39 @@ pub const ArchetypeRow = struct {
     guaranteed_consumable: bool = false,
     note: []const u8,
     flavour: Pair,
+    /// The stance that beats this enemy (+10% damage dealt, -10% taken), and the one it punishes
+    /// (the reverse). Null: no relationship.
+    counter: ?Stance = null,
+    punished: ?Stance = null,
+    /// What a player learns after fighting it a few times, in each faction's voice.
+    hint: Pair = pair("", ""),
 };
 
 pub const archetypes = [_]ArchetypeRow{
     .{ .id = .shambler, .name = pair("Shambler", "Scavenger"), .hp = 0.8, .atk = 0.8, .def = 0.8, .spd = 0.7, .weight = 40, .note = "Common", .flavour = pair(
         "Slow, stupid, relentless. It falls apart and keeps coming.",
         "Picks through the ruins for tins and boots. Wary, thin, armed with a pipe.",
-    ) },
+    ), .hint = pair("Shamblers are slow and dull. Any footing will do.", "scavengers are slow and wary. any hunt works.") },
     .{ .id = .runner, .name = pair("Runner", "Scout"), .hp = 0.6, .atk = 0.8, .def = 0.6, .spd = 1.5, .weight = 20, .note = "Fast", .flavour = pair(
         "Fast, loud and starving. You hear it before you see it.",
         "Moves ahead of the group, watching the rooftops. Quick on its feet.",
-    ) },
+    ), .counter = .careful, .punished = .evasive, .hint = pair("Runners are fast — careful footing beats them.", "scouts dart. stalk them.") },
     .{ .id = .bloater, .name = pair("Bloater", "Barricader"), .hp = 1.6, .atk = 0.7, .def = 1.2, .spd = 0.6, .weight = 15, .note = "Tanky", .flavour = pair(
         "Swollen and slow, a wall of rotten meat. Do not pop it.",
         "Hides behind doors and bedsprings lashed to a shopping trolley.",
-    ) },
+    ), .counter = .aggressive, .punished = .careful, .hint = pair("Bloaters soak up hits. Go in hard and break them.", "barricaders are walls. frenzy through them.") },
     .{ .id = .brute, .name = pair("Brute", "Soldier"), .hp = 1.3, .atk = 1.15, .def = 1.1, .spd = 0.8, .weight = 12, .note = "Strong", .flavour = pair(
         "Muscle that outlived the man.",
         "Kept his rifle and his discipline. He still counts you as a threat.",
-    ) },
+    ), .counter = .evasive, .punished = .aggressive, .hint = pair("Brutes hit like trucks. Stay light and slip them.", "soldiers hit hard. slink around them.") },
     .{ .id = .horde, .name = pair("Horde", "Raider Gang"), .hp = 2.2, .atk = 0.9, .def = 0.8, .spd = 0.9, .weight = 8, .reward_mult = 1.5, .note = "Group, +50% XP and loot", .flavour = pair(
         "Two dozen, shoulder to shoulder. The street goes quiet.",
         "Five of them, a van and a grudge.",
-    ) },
+    ), .counter = .careful, .punished = .aggressive, .hint = pair("A Horde swarms. Hold your ground and don't overreach.", "gangs swarm. stalk them, don't rush.") },
     .{ .id = .screamer, .name = pair("Screamer", "Medic"), .hp = 0.7, .atk = 0.6, .def = 0.7, .spd = 1.1, .weight = 5, .guaranteed_consumable = true, .note = "Rare, always drops a consumable", .flavour = pair(
         "Its cry draws every head on the street. Its pockets are full.",
         "A pale cross on the armband. Carries medicine, fights dirty.",
-    ) },
+    ), .counter = .aggressive, .punished = .evasive, .hint = pair("Screamers are fragile. Hit them before they cry out.", "medics are soft. frenzy before they patch up.") },
     .{ .id = .abomination, .name = pair("Abomination", "Warlord"), .hp = 10.0, .atk = 1.6, .def = 1.3, .spd = 0.9, .weight = 0, .note = "Raid boss only", .flavour = pair(
         "Too big, too many arms. The district holds its breath.",
         "Crowned in scrap, owed a debt by everyone. It comes for you.",
