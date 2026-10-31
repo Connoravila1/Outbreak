@@ -11,6 +11,7 @@ const fight = @import("fight.zig");
 const rewards = @import("rewards.zig");
 const missions = @import("missions.zig");
 const warstate = @import("warstate.zig");
+const worldevents = @import("worldevents.zig");
 
 const data = game.data;
 const progression = game.progression;
@@ -42,7 +43,8 @@ pub fn settleSide(req: *Req, p: *Player, a: fight.Side, foe: fight.Side, o: figh
     const won = o.won();
     const foe_level: u32 = foe.view.level;
     var acc = rewards.Acc{};
-    const win_xp = progression.pvpWinXp(foe_level);
+    const em = try worldevents.rewardMods(req, p);
+    const win_xp: u32 = @intFromFloat(@round(@as(f32, @floatFromInt(progression.pvpWinXp(foe_level))) * em.pvp_xp));
     if (won) {
         acc.xp = win_xp;
         var lrng = game.rng.Rng.init(game.rng.hash(o.seed, .{ "loot", p.id }));
@@ -61,7 +63,10 @@ pub fn settleSide(req: *Req, p: *Player, a: fight.Side, foe: fight.Side, o: figh
     p.last_pvp_at = req.now;
     rewards.settleHp(p, fight.hpAfter(a, o), req.now);
     const rw = try rewards.apply(req, p, &acc, district);
-    if (won) try missions.event(req, p, .{ .kind = .contact_win });
+    if (won) {
+        try missions.event(req, p, .{ .kind = .contact_win });
+        try worldevents.credit(req, p.id, district, .{ .contact_win = true });
+    }
 
     const me = try views.meFresh(req, p.id);
     const battle = try fight.battleView(req, if (foe.view.kind == .echo or foe.view.kind == .rogue) .echo else .pvp, a, foe, o, rw, me);

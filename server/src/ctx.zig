@@ -22,6 +22,9 @@ pub const Options = struct {
     tiles: Tiles = .{},
     /// The forced-update gate (see `Update`).
     update: Update = .{},
+    /// Run the calendar of limited-time events (DESIGN.md section 18). Off (`--no-events`): only
+    /// events an admin starts. Tests turn it off so the real calendar cannot change what they see.
+    events: bool = true,
 };
 
 /// Clients older than `min_client` get 426 `update_required`. A request with no version header

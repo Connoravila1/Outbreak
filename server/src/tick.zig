@@ -11,6 +11,7 @@ const contact = @import("contact.zig");
 const raids = @import("raids.zig");
 const warstate = @import("warstate.zig");
 const live = @import("live.zig");
+const worldevents = @import("worldevents.zig");
 
 const data = game.data;
 const geo = game.geo;
@@ -150,6 +151,7 @@ fn housekeeping(ctx: *Ctx, now: i64) !void {
     try db.run("DELETE FROM strongholds WHERE week < ?", .{game.war.weekIndex(now)});
     try strongholdIncome(&req);
     try raids.upkeep(&req);
+    try worldevents.upkeep(&req);
     try db.commit();
 }
 

@@ -611,6 +611,7 @@ deferred, cosmetic-only if ever added).
 | Inventory +10 slots | 400, then +200 each |
 | XP Boost (+50% for 1 h) | 200 |
 | Cosmetics: callsign colours 250–400, avatar frames 400–1000 (section 17) | 250–1000 |
+| Event Exchange, only while an event is live, L10+ (section 18) | 1,200–9,000 |
 
 ## 14. Identity and avatar
 
@@ -651,7 +652,7 @@ and plain.
 
 ## 15. Notifications
 
-Contact results, Echo reports, raid start, weekly war result, mission reset. Local notifications
+Contact results, Echo reports, raid start, weekly war result, mission reset, and the start of a world event (section 18). Local notifications
 first; push (FCM/APNs) when there is a hosted server.
 
 ## 16. What's deferred, honestly
@@ -723,3 +724,126 @@ frame about two and a half hours; achievements add about a fifth to the first fi
 1.6% of a whole career. Later the same prices are trivial, since the late game has few salvage sinks
 beyond upgrades. That is fine for cosmetics (the point is choice, not a grind), and it means the
 earned-only items are the long-term flex.
+
+## 18. World events
+
+Limited-time global events: a few days of the week the whole world plays a little differently, with
+one community goal to share. They change numbers in systems that already exist (spawn chances, XP,
+salvage, war points, Echoes) and add no combat code; the server decides everything and the client
+shows state. Every event is named in each faction's voice.
+
+### The events
+
+Night-only effects use solar time at the player's longitude, like day and night (section 7). "Open
+slot" means the Human-only night extra enemy (13.75% per cell and window) appears at that chance for
+everyone, by day too, and Zombies can meet it.
+
+| Event (Human / Zombie) | What changes | Goal (counted) |
+|---|---|---|
+| **Blood Moon** / The Red Feast | At night: elite chance x3 (8% to 24%), extra slot 40% open to all, elite XP x1.5, PvE salvage x1.25 | Elites beaten |
+| **Supply Run** / Carrion Rush | Cache chance 30% to 50%, a second airdrop per region and window, cache salvage x1.5 | Caches opened |
+| **The Swarm** / Pack Hunt | 60% of enemies become one archetype (the event's kind), extra slot 30% open, XP for that kind x1.25 | That kind beaten |
+| **Ghost Signal** / The Hive Remembers | Echo XP x1.5, Echo salvage x2, Echo item chance x2.4, Echo chance 85%, quiet time 20 min (not 30) | Echo wins |
+| **Last Light** / Feeding Frenzy | War points x2, Contact XP x1.25. Humans: 25% to find an extra Bandage on a PvE win. Zombies: heal 15% max HP on a PvE win | War points earned |
+| **Day Zero** / The Turning (monthly) | Elite chance x1.5, extra slot 20% open, cache chance x1.3, PvE XP x1.2, PvE salvage x1.25, cache salvage x1.25, war points x1.5, Echo XP x1.25 | Any action (win, cache, Contact, Echo, war point) |
+
+Spawn changes are read at the **start of the spawn window** (enemies 30 min, caches 2 h, airdrops 2 h),
+so spawns stay pure functions of (seed, cell, window): an event only widens chances rolled from the
+same random stream, so everything that spawns without the event still spawns with it. An event that
+ends or is stopped mid-window leaves that window's spawns standing and pays the new rates for the
+rest of it; ids validate against the window's own state. Pay changes (XP, salvage, war points) apply
+the moment they happen. The Echo Week "exclusive" is its portrait frame plus the item-chance rise; there
+is no separate drop.
+
+### The schedule
+
+Deterministic from the UTC calendar; the server holds no schedule table. Weeks start Monday 00:00 UTC.
+Raids run on weekends (section 12), so events never touch Saturday or Sunday.
+
+- **Slot A:** Tuesday 00:00 to Thursday 00:00. **Slot B:** Thursday 12:00 to Saturday 00:00.
+- Slot A type by week number mod 4: Swarm, Supply Run, Blood Moon, Echo Week. Slot B: Last Light, Blood Moon,
+  Last Light, Supply Run. The Swarm's archetype by (week / 4) mod 4: Runner, Bloater, Brute, Shambler.
+- The week whose Monday falls on day 1 to 7 of a month is the **monthly week**: Day Zero runs Wednesday
+  00:00 to Saturday 00:00 and replaces both slots. That is 12 a year, one per calendar month.
+- An admin event (`admin event start`) replaces whatever is running; the scheduled one that was running
+  is over for good (it is not resumed and does not pay twice).
+
+That is about 2.6 event days a week, 3 events in most weeks and 2 in a monthly week, with a Wednesday-night gap
+in normal weeks (Thursday 00:00 to 12:00) and every weekend free for raids.
+
+### Community goal
+
+Each event has a **global** goal and a **district** goal (a district is the 4-character geohash region (about 39 km by 20 km)
+already used for the War). Both count the same actions.
+
+- Global target = `max(min_target, per_player x max(1, A))`, where **A** is players active in the past 7
+  days (faction chosen, seen within 7 days, not banned), counted once at the event's start.
+- District target = `per_player x max(1, D)`, D being players with war activity in that district in the last two
+  weeks. It is made on the first contribution there. No floor, so a lone player in a quiet district has
+  a target of one player's share.
+- The goal is **met** when the global goal or any district goal the player contributed in is met, so a small
+  community can still finish.
+
+| Event | Per player | Minimum | Tiers (contribution) | Salvage (tier 1 / 2 / 3) |
+|---|---|---|---|---|
+| Blood Moon | 10 | 15 | 3 / 10 / 25 | 250 / 700 / 1,500 |
+| Supply Run | 25 | 30 | 6 / 20 / 50 | 250 / 700 / 1,500 |
+| The Swarm | 40 | 50 | 10 / 40 / 100 | 250 / 700 / 1,500 |
+| Ghost Signal | 6 | 10 | 2 / 6 / 14 | 250 / 700 / 1,500 |
+| Last Light | 60 | 90 | 20 / 60 / 150 | 250 / 700 / 1,500 |
+| Day Zero | 150 | 200 | 25 / 80 / 200 | 500 / 1,400 / 3,000 |
+
+A player's tier is the highest whose contribution they reached; below tier 1 there is no reward, so a
+drive-by does nothing. Contributions are personal and recorded per event; fights against the tutorial
+enemy do not count.
+
+### Rewards
+
+Granted by the server once, when the event ends (the 5-second tick, or the next request that sees it). The
+event is marked settled in the same transaction as the payouts, so a retry or a second server cannot pay
+twice. Delivered as an `event_reward` feed event carrying the rewards (and `unlocks`), so it toasts and sits
+in the feed.
+
+- **Goal met:** the tier's salvage; at tier 2 and up the event's cosmetic; at tier 3 a Rare-or-better
+  item at the player's level (Legendary chance doubled).
+- **Goal missed:** half the tier's salvage, nothing else.
+- **Title:** the monthly Day Zero at tier 3 with the goal met grants a title, "Day Zero Survivor {year}" /
+  "Of the Turning {year}". One per calendar year, so each year gives a new one.
+
+Cosmetics (price 0, type "event" in section 17): Blood Moon Red / Red Feast (colour), Crate Orange /
+Carrion Orange (colour), Dawn Pink / Frenzy Pink (colour), Tally Marks / Claw Marks (frame, Swarm),
+Static / Afterimage (frame, Ghost Signal), Quarantine Seal / Open Wound (frame, Day Zero). Never shown in a
+fight, like all cosmetics.
+
+### Event Exchange
+
+In the Store, from level 10, only while an event is live. Salvage only; cosmetic or convenience, nothing that
+changes a Contact. Limits are per event.
+
+| Item | Price | Limit |
+|---|---|---|
+| Priority Requisition (best of three Uncommon-or-better rolls at your level) | 1,200 | 5 |
+| Event Crate (one Rare-or-better item, Legendary chance doubled, and two consumables) | 4,000 | 2 |
+| Gilt Ink / Gilded Rot (callsign colour, Exchange-only) | 6,000 | 1 (once ever) |
+| Gilt Frame / Gilded Frame (portrait frame, Exchange-only) | 9,000 | 1 (once ever) |
+
+Priced for level 30 and up, where a player earns about 1,050 to 1,250 salvage an active hour: a crate is about
+four hours, the Gilt pair about fourteen. A level 30 player buying everything every event would spend
+about 34,000 a time, far more than an event of play brings in, so the Exchange is a choice and a sink, not a
+loop. Requisitions and crates are the same kind of item the Store and raids already give.
+
+### Pacing check
+
+`zig build sim -- --players 60 --events` (two active hours a day, the same seed) plays through the
+calendar. Time to level, medians, without and with events:
+
+| Level | Without | With | Target |
+|---|---|---|---|
+| 5 | 0.95 h | 0.91 h | 1 |
+| 10 | 4.66 h | 4.54 h | 5 |
+| 20 | 23.07 h | 22.46 h | 25 |
+| 30 | 65.17 h | 64.44 h | 70 |
+| 50 | 303.74 h | 300.24 h | 300 |
+
+Events speed levelling by about 1 to 3% and raise total salvage earned by about 1 to 2%; the section 5 targets still hold. The
+sim models the events' PvE XP, salvage, elite and Echo effects; war points and Contact bonuses are not in it.

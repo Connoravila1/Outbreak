@@ -8,6 +8,7 @@
 const std = @import("std");
 const game = @import("game");
 const db_mod = @import("db.zig");
+const worldevents = @import("worldevents.zig");
 
 const Db = db_mod.Db;
 const Writer = std.Io.Writer;
@@ -30,6 +31,11 @@ pub const usage =
     \\  resolve <report-id>            close one report without acting on it
     \\  errors [--since 7d]            crash and error reports from the app, grouped (d days, h hours)
     \\  errors clear                   delete every stored error report
+    \\  event list                     the running event and the next scheduled ones
+    \\  event start <type> [--hours N] [--kind runner|bloater|brute|shambler]
+    \\                                 start a one-off event now (default 24 h), ending any running one
+    \\  event stop                     end the running event now (its rewards are paid within a minute)
+    \\                                 types: blood_moon supply_run horde echo_week last_light day_zero
     \\
     \\Acting on a player, clan or message also closes the open reports about it.
     \\The data directory defaults to ./data (or OUTBREAK_DATA); it is the one the server uses.
@@ -69,6 +75,7 @@ pub fn run(gpa: Allocator, db: *Db, now: i64, rng: *game.rng.Rng, args: []const 
     if (eql(cmd, "resolve")) return resolve(c, try one(c, rest, "resolve <report-id>"));
     if (eql(cmd, "ban")) return ban(c, rest);
     if (eql(cmd, "errors")) return errors(c, rest);
+    if (eql(cmd, "event")) return event(c, rest);
     if (eql(cmd, "help") or eql(cmd, "--help") or eql(cmd, "-h")) return out.writeAll(usage);
     try out.print("Unknown command \"{s}\".\n\n{s}", .{ cmd, usage });
     return error.Failed;
@@ -362,6 +369,82 @@ fn errors(c: Ctx, rest: []const []const u8) Error!void {
     const when: []const u8 = if (span != null) " in that time" else "";
     try say(c, "{d} report{s} in {d} group{s}{s}. The table keeps the newest 5000.\n", .{ total, plural(total), groups, plural(groups), when });
     try table(c, &.{ "COUNT", "LAST SEEN (UTC)", "VERSIONS", "PLATFORMS", "MESSAGE", "TOP FRAME" }, rows.items);
+}
+
+// --- event --------------------------------------------------------------------------------------------
+
+const event_usage = "Usage: outbreak-server admin event list | start <type> [--hours N] [--kind ARCHETYPE] | stop\n";
+
+fn event(c: Ctx, rest: []const []const u8) Error!void {
+    if (rest.len == 0 or eql(rest[0], "list")) return eventList(c);
+    if (eql(rest[0], "stop") and rest.len == 1) {
+        const n = try worldevents.stopAll(c.db, c.now, true);
+        if (n == 0) return say(c, "No event is running.", .{});
+        return say(c, "Stopped {d} event{s}. Rewards are paid when the server next ticks (within a minute).", .{ n, plural(n) });
+    }
+    if (eql(rest[0], "start") and rest.len >= 2) return eventStart(c, rest[1], rest[2..]);
+    try c.out.writeAll(event_usage);
+    return error.Failed;
+}
+
+fn eventStart(c: Ctx, type_name: []const u8, flags: []const []const u8) Error!void {
+    const t = std.meta.stringToEnum(game.data.EventType, type_name) orelse {
+        return fail(c, "\"{s}\" is not an event type. The types are blood_moon, supply_run, horde, echo_week, last_light and day_zero.", .{type_name});
+    };
+    var hours: i64 = 24;
+    var kind: game.data.Archetype = .runner;
+    var i: usize = 0;
+    while (i < flags.len) : (i += 2) {
+        if (i + 1 >= flags.len) return fail(c, "{s} needs a value.\n{s}", .{ flags[i], event_usage });
+        if (eql(flags[i], "--hours")) {
+            hours = std.fmt.parseInt(i64, flags[i + 1], 10) catch 0;
+            if (hours < 1 or hours > 24 * 14) return fail(c, "--hours must be a whole number from 1 to 336.", .{});
+        } else if (eql(flags[i], "--kind")) {
+            kind = game.data.findArchetype(flags[i + 1]) orelse return fail(c, "\"{s}\" is not an enemy kind.", .{flags[i + 1]});
+            if (kind == .abomination or kind == .screamer) return fail(c, "The swarm can be a runner, bloater, brute, shambler or horde.", .{});
+        } else return fail(c, "Unknown option \"{s}\".\n{s}", .{ flags[i], event_usage });
+    }
+    try worldevents.materialize(c.db, c.now);
+    const was = try worldevents.rowAt(c.db, c.now);
+    _ = try worldevents.startAdmin(c.db, c.now, t, hours, kind, true);
+    const def = game.data.eventDef(t);
+    if (was) |w| try say(c, "Ended {s} early.", .{w.def().name.human});
+    try say(c, "Started {s} for {d} hour{s}, until {s} UTC.", .{ def.name.human, hours, plural(hours), try stamp(c.arena, c.now + hours * std.time.ms_per_hour) });
+}
+
+fn eventList(c: Ctx) Error!void {
+    var rows: Rows = .empty;
+    const running = try worldevents.rowAt(c.db, c.now);
+    if (running) |r| {
+        try rows.append(c.arena, try rowOf(c, .{
+            "running",
+            try eventLabel(c, r.type, r.param),
+            try stamp(c.arena, r.starts_at),
+            try stamp(c.arena, r.ends_at),
+            try std.fmt.allocPrint(c.arena, "{d} / {d}", .{ r.progress, r.target }),
+            if (r.admin) "admin" else "calendar",
+        }));
+    }
+    var buf: [6]game.events.Occurrence = undefined;
+    for (game.events.upcoming(c.now, &buf)) |o| {
+        // The calendar event already running has its own row above.
+        if (running != null and o.starts_at <= c.now) continue;
+        try rows.append(c.arena, try rowOf(c, .{
+            if (o.starts_at <= c.now) "running" else "next",
+            try eventLabel(c, o.type, o.param),
+            try stamp(c.arena, o.starts_at),
+            try stamp(c.arena, o.ends_at),
+            "-",
+            "calendar",
+        }));
+    }
+    try table(c, &.{ "STATE", "EVENT", "STARTS (UTC)", "ENDS (UTC)", "PROGRESS", "SOURCE" }, rows.items);
+}
+
+fn eventLabel(c: Ctx, t: game.data.EventType, param: u8) Allocator.Error![]const u8 {
+    const def = game.data.eventDef(t);
+    if (t == .horde) return std.fmt.allocPrint(c.arena, "{s} ({s})", .{ def.name.human, game.data.archetype(@enumFromInt(param)).name.human });
+    return def.name.human;
 }
 
 // --- rename -------------------------------------------------------------------------------------------
@@ -710,4 +793,70 @@ test "errors: groups with counts, versions and last seen; --since; clear" {
     defer testing.allocator.free(cleared.text);
     try testing.expect(cleared.ok and std.mem.indexOf(u8, cleared.text, "Deleted 5 error reports.") != null);
     try testing.expectEqual(@as(?i64, 0), try f.db.scalar("SELECT COUNT(*) FROM client_errors", .{}));
+}
+
+test "event: list shows the running scheduled event and the next ones" {
+    var f = try Fix.init();
+    defer f.deinit();
+    const r = try f.cmd(&.{ "event", "list" });
+    defer testing.allocator.free(r.text);
+    try testing.expect(r.ok);
+    const live = game.events.occurrenceAt(now_ms).?;
+    // 2026-10-28 12:00 is inside the Tuesday-to-Thursday slot: it is running, and others are listed.
+    try testing.expect(std.mem.indexOf(u8, r.text, "running") != null);
+    try testing.expect(std.mem.indexOf(u8, r.text, game.data.eventDef(live.type).name.human) != null);
+    try testing.expect(std.mem.indexOf(u8, r.text, "next") != null);
+    try testing.expect(std.mem.indexOf(u8, r.text, "calendar") != null);
+    // Listing does not make rows.
+    try testing.expectEqual(@as(?i64, 0), try f.db.scalar("SELECT COUNT(*) FROM world_events", .{}));
+}
+
+test "event: start replaces the running event, list shows it, stop ends it" {
+    var f = try Fix.init();
+    defer f.deinit();
+    const started = try f.cmd(&.{ "event", "start", "horde", "--hours", "6", "--kind", "brute" });
+    defer testing.allocator.free(started.text);
+    try testing.expect(started.ok);
+    try testing.expect(std.mem.indexOf(u8, started.text, "Started The Swarm for 6 hours, until 2026-10-28 18:00 UTC.") != null);
+    const row = (try worldevents.rowAt(&f.db, now_ms)).?;
+    try testing.expect(row.admin and row.type == .horde);
+    try testing.expectEqual(@as(u8, @intFromEnum(game.data.Archetype.brute)), row.param);
+    try testing.expectEqual(now_ms + 6 * std.time.ms_per_hour, row.ends_at);
+    // The scheduled event that was running is over, and does not come back.
+    try testing.expectEqual(@as(?i64, 1), try f.db.scalar("SELECT COUNT(*) FROM world_events WHERE source = 'calendar' AND ends_at = ?", .{now_ms}));
+
+    const list = try f.cmd(&.{ "event", "list" });
+    defer testing.allocator.free(list.text);
+    try testing.expect(std.mem.indexOf(u8, list.text, "The Swarm (Brute)") != null);
+    try testing.expect(std.mem.indexOf(u8, list.text, "admin") != null);
+
+    const stopped = try f.cmd(&.{ "event", "stop" });
+    defer testing.allocator.free(stopped.text);
+    try testing.expect(stopped.ok and std.mem.indexOf(u8, stopped.text, "Stopped 1 event.") != null);
+    try testing.expect((try worldevents.rowAt(&f.db, now_ms)) == null);
+    const again = try f.cmd(&.{ "event", "stop" });
+    defer testing.allocator.free(again.text);
+    try testing.expect(std.mem.indexOf(u8, again.text, "No event is running.") != null);
+}
+
+test "event: bad types, hours and options are refused plainly" {
+    var f = try Fix.init();
+    defer f.deinit();
+    for ([_][]const []const u8{
+        &.{ "event", "start", "party" },
+        &.{ "event", "start", "horde", "--hours", "0" },
+        &.{ "event", "start", "horde", "--hours", "9999" },
+        &.{ "event", "start", "horde", "--kind", "dragon" },
+        &.{ "event", "start", "horde", "--kind", "abomination" },
+        &.{ "event", "start", "horde", "--wat", "1" },
+        &.{ "event", "start", "horde", "--hours" },
+        &.{ "event", "start" },
+        &.{ "event", "pause" },
+    }) |line| {
+        const r = try f.cmd(line);
+        defer testing.allocator.free(r.text);
+        try testing.expect(!r.ok);
+        try testing.expect(r.text.len > 0);
+    }
+    try testing.expectEqual(@as(?i64, 0), try f.db.scalar("SELECT COUNT(*) FROM world_events", .{}));
 }

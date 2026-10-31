@@ -10,6 +10,7 @@ const views = @import("views.zig");
 const warstate = @import("warstate.zig");
 const notes_db = @import("notes.zig");
 const ach_db = @import("achievements.zig");
+const worldevents = @import("worldevents.zig");
 
 const data = game.data;
 const stats = game.stats;
@@ -146,8 +147,12 @@ pub fn apply(req: *Req, p: *Player, acc: *Acc, district: ?[]const u8) HandlerErr
     // A simulated location earns no war points (the fight itself still pays).
     if (acc.war_points > 0 and !req.ctx.live.simulated(p.id, req.now)) {
         if (district) |d| {
-            try warstate.addPoints(req, p.id, p.fac(), d, acc.war_points);
-            out.war_points = acc.war_points;
+            // Some events count war points double.
+            const em = try worldevents.rewardMods(req, p);
+            const pts: u32 = @intFromFloat(@round(@as(f32, @floatFromInt(acc.war_points)) * em.war_points));
+            try warstate.addPoints(req, p.id, p.fac(), d, pts);
+            out.war_points = pts;
+            try worldevents.credit(req, p.id, d, .{ .war_points = pts });
         }
     }
 

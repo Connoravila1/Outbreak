@@ -11,6 +11,8 @@ const Config = struct {
     bind: []const u8 = "0.0.0.0",
     data: []const u8 = "./data",
     dev: bool = false,
+    /// Run the calendar of limited-time events (--no-events turns it off).
+    events: bool = true,
     google_client_ids: []const u8 = "",
     apple_audiences: []const u8 = "",
     google_jwks_url: ?[]const u8 = null,
@@ -24,7 +26,7 @@ const Config = struct {
 };
 
 const usage =
-    \\usage: outbreak-server [--port 8080] [--bind 0.0.0.0] [--data ./data] [--dev]
+    \\usage: outbreak-server [--port 8080] [--bind 0.0.0.0] [--data ./data] [--dev] [--no-events]
     \\                       [--tiles FILE.pmtiles | --tiles-url URL] [--tiles-glyphs URL]
     \\                       [--min-client X.Y.Z] [--store-android URL] [--store-ios URL]
     \\                       [--google-client-ids ID,ID,...] [--apple-audiences ID,ID,...]
@@ -33,6 +35,8 @@ const usage =
     \\             OUTBREAK_GOOGLE_CLIENT_IDS, OUTBREAK_APPLE_AUDIENCES, OUTBREAK_TILES,
     \\             OUTBREAK_TILES_URL, OUTBREAK_TILES_GLYPHS, OUTBREAK_MIN_CLIENT,
     \\             OUTBREAK_STORE_ANDROID, OUTBREAK_STORE_IOS
+    \\Events: the weekly calendar of limited-time events runs by itself; --no-events leaves only the
+    \\ones an admin starts (`admin event start`).
     \\Map tiles: the client uses OpenFreeMap by default. --tiles serves a PMTiles extract from this
     \\binary (GET /tiles/map.pmtiles, range requests); --tiles-url advertises one hosted elsewhere;
     \\--tiles-glyphs overrides the font URL template. See docs/TILES.md.
@@ -88,6 +92,8 @@ fn parseConfig(init: std.process.Init) !Config {
             cfg.data = args.next() orelse return error.MissingValue;
         } else if (std.mem.eql(u8, arg, "--dev")) {
             cfg.dev = true;
+        } else if (std.mem.eql(u8, arg, "--no-events")) {
+            cfg.events = false;
         } else if (std.mem.eql(u8, arg, "--tiles")) {
             cfg.tiles_file = args.next() orelse return error.MissingValue;
         } else if (std.mem.eql(u8, arg, "--tiles-url")) {
@@ -194,7 +200,7 @@ pub fn main(init: std.process.Init) !void {
     if (cfg.google_jwks_url) |u| auth.google_jwks_url = u;
     if (cfg.apple_jwks_url) |u| auth.apple_jwks_url = u;
 
-    var ctx = try server.ctx.Ctx.init(gpa, io, db_path, .{ .dev = cfg.dev, .limits = !cfg.dev, .auth = auth, .tiles = .{ .file = cfg.tiles_file, .url = cfg.tiles_url, .glyphs = cfg.tiles_glyphs }, .update = .{
+    var ctx = try server.ctx.Ctx.init(gpa, io, db_path, .{ .dev = cfg.dev, .limits = !cfg.dev, .events = cfg.events, .auth = auth, .tiles = .{ .file = cfg.tiles_file, .url = cfg.tiles_url, .glyphs = cfg.tiles_glyphs }, .update = .{
         .min_client = server.client_version.parse(cfg.min_client),
         .min_client_text = cfg.min_client,
         .store_android = cfg.store_android,

@@ -59,6 +59,8 @@ const Config = struct {
     seed: u64 = 1,
     hours_per_day: f64 = 2.0,
     stance: Policy = .random,
+    /// Play through the weekly event calendar (DESIGN section 18); off keeps the plain game.
+    events: bool = false,
 };
 
 const ProbeCell = struct { fights: u32 = 0, wins: u32 = 0, turns: u64 = 0, lost: f64 = 0 };
@@ -110,6 +112,7 @@ const Player = struct {
     turns: [max_lvl + 1]u64 = [_]u64{0} ** (max_lvl + 1),
     probes: [probe_levels.len][probe_archetypes][stance_count]ProbeCell = [_][probe_archetypes][stance_count]ProbeCell{[_][stance_count]ProbeCell{[_]ProbeCell{.{}} ** stance_count} ** probe_archetypes} ** probe_levels.len,
     policy: Policy = .random,
+    events: bool = false,
 
     fn init(id: u64, seed: u64, cfg: Config) Player {
         var p = Player{
@@ -118,6 +121,7 @@ const Player = struct {
             .rng = game.rng.derive(seed, .{ "player", id }),
             .day_budget_s = cfg.hours_per_day * 3600.0,
             .policy = cfg.stance,
+            .events = cfg.events,
         };
         p.day = 20000 + @as(i64, @intCast(p.rng.below(7)));
         p.week = war.weekIndex(p.day * war.day_ms);
@@ -319,9 +323,24 @@ const Player = struct {
         return 1.0 + p.comp.mods.loot;
     }
 
+    /// The event running now, by the player's calendar day and how far through its play budget the day is.
+    fn eventMods(p: *const Player, night: bool) data.EventMods {
+        if (!p.events) return .{};
+        const into_day: i64 = @intFromFloat(p.day_clock / p.day_budget_s * @as(f64, @floatFromInt(war.day_ms)));
+        const occ = game.events.occurrenceAt(p.day * war.day_ms + into_day) orelse return .{};
+        return game.events.rewardMods(.{ .type = occ.type, .param = occ.param }, night);
+    }
+
+    fn scaled(d: loot.Drop, mult: f32) loot.Drop {
+        var out = d;
+        out.salvage = @intFromFloat(@round(@as(f32, @floatFromInt(d.salvage)) * mult));
+        return out;
+    }
+
     fn openCache(p: *Player) void {
+        const m = p.eventMods(p.rng.chance(night_share));
         p.gainXp(.cache, progression.cacheXp(p.level));
-        p.takeDrop(loot.rollCache(&p.rng, p.level, p.lootMult()));
+        p.takeDrop(scaled(loot.rollCache(&p.rng, p.level, p.lootMult()), m.cache_salvage));
         p.missionEvent(.{ .kind = .cache_open });
     }
 
@@ -441,7 +460,11 @@ const Player = struct {
         const new_player = p.level < stats.grace_levels;
         for (0..6) |_| {
             arch = @enumFromInt(p.rng.weighted(&data.archetype_weights));
-            elite = p.rng.chance(game.spawns.elite_chance);
+            // Night-only events lift the elite rate for the share of play that happens at night.
+            const em_day = p.eventMods(false).elite_chance_mult;
+            const em_night = p.eventMods(true).elite_chance_mult;
+            const elite_mult: f32 = em_day + (em_night - em_day) * night_share;
+            elite = p.rng.chance(game.spawns.elite_chance * elite_mult);
             offset = if (elite) p.rng.intRange(3, 5) else p.rng.intRange(-2, 2);
             if (new_player) {
                 // Below level 5 the world has no elites and nothing above the player.
@@ -479,11 +502,13 @@ const Player = struct {
         const class: progression.EnemyClass = if (elite) .elite else .normal;
         const base_xp = progression.pveWinXp(e_level, class, row.reward_mult);
         const xp_mult: f32 = if (p.policy == .none) 1.0 else daynight.pveXpMult(p.faction, night);
-        const win_xp: u32 = @intFromFloat(@round(@as(f32, @floatFromInt(base_xp)) * xp_mult));
+        const em = p.eventMods(night);
+        const ev_xp: f32 = em.pve_xp * (if (elite) em.elite_xp else 1.0);
+        const win_xp: u32 = @intFromFloat(@round(@as(f32, @floatFromInt(base_xp)) * xp_mult * ev_xp));
         if (r.winner == .a) {
             p.wins[lvl] += 1;
             p.total_wins += 1;
-            p.takeDrop(loot.rollPve(&p.rng, .{ .player_level = lvl, .enemy_level = e_level, .archetype = arch, .loot_mult = p.lootMult() }));
+            p.takeDrop(scaled(loot.rollPve(&p.rng, .{ .player_level = lvl, .enemy_level = e_level, .archetype = arch, .loot_mult = p.lootMult() }), em.pve_salvage));
             if (first_blood) p.handleItem(loot.rollItem(&p.rng, .{ .level = lvl, .min_rarity = .uncommon }), true);
             p.gainXp(.fight, win_xp);
             p.missionEvent(.{ .kind = .pve_win, .archetype = arch, .elite = elite });
@@ -515,8 +540,9 @@ const Player = struct {
         p.advance(fight_seconds, false);
         p.hp = @floatFromInt(r.hp_a);
         if (r.winner == .a) {
-            p.takeDrop(loot.rollPvp(&p.rng, p.level, p.level, p.lootMult()));
-            p.gainXp(.echo, progression.echoWinXp(p.level));
+            const em = p.eventMods(false);
+            p.takeDrop(scaled(loot.rollPvp(&p.rng, p.level, p.level, p.lootMult()), em.echo_salvage));
+            p.gainXp(.echo, @intFromFloat(@round(@as(f32, @floatFromInt(progression.echoWinXp(p.level))) * em.echo_xp)));
             p.missionEvent(.{ .kind = .contact_win });
         } else {
             p.lose();
@@ -614,6 +640,8 @@ pub fn main(init: std.process.Init) !void {
             cfg.seed = try std.fmt.parseInt(u64, it.next() orelse return error.MissingValue, 10);
         } else if (std.mem.eql(u8, arg, "--hours-per-day")) {
             cfg.hours_per_day = try std.fmt.parseFloat(f64, it.next() orelse return error.MissingValue);
+        } else if (std.mem.eql(u8, arg, "--events")) {
+            cfg.events = true;
         } else if (std.mem.eql(u8, arg, "--stance")) {
             cfg.stance = std.meta.stringToEnum(Policy, it.next() orelse return error.MissingValue) orelse return error.UnknownStance;
         } else return error.UnknownArgument;
@@ -631,7 +659,7 @@ pub fn main(init: std.process.Init) !void {
         p.run();
     }
 
-    try w.print("Outbreak balance simulation: {d} players, {d:.1} active h/day, seed {d}, stance policy {s}\n\n", .{ cfg.players, cfg.hours_per_day, cfg.seed, @tagName(cfg.stance) });
+    try w.print("Outbreak balance simulation: {d} players, {d:.1} active h/day, seed {d}, stance policy {s}, events {s}\n\n", .{ cfg.players, cfg.hours_per_day, cfg.seed, @tagName(cfg.stance), if (cfg.events) "on" else "off" });
     if (cfg.players > 0) {
         try reportPlayers(w, gpa, players, cfg);
         try reportStances(w, players);

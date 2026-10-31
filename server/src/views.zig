@@ -9,6 +9,7 @@ const missions = @import("missions.zig");
 const warstate = @import("warstate.zig");
 const notes_db = @import("notes.zig");
 const ach_db = @import("achievements.zig");
+const worldevents = @import("worldevents.zig");
 
 const data = game.data;
 const stats = game.stats;
@@ -93,6 +94,9 @@ pub fn noteRef(idx: u16) NoteRef {
     return .{ .id = n.id, .title = n.title, .set = @tagName(n.set), .rarity = n.rarity, .form = n.form };
 }
 
+/// Something a payout unlocked beyond items: a cosmetic (`kind` "color" or "frame") or a title.
+pub const UnlockRef = struct { kind: []const u8, id: []const u8, name: []const u8 };
+
 pub const RewardsView = struct {
     xp: u32 = 0,
     salvage: u32 = 0,
@@ -106,6 +110,8 @@ pub const RewardsView = struct {
     notes: []const NoteRef = &.{},
     /// Achievements this payout completed (their salvage is paid on top, not counted in `salvage`).
     achievements: []const ach_db.EarnedView = &.{},
+    /// Cosmetics and titles this payout unlocked (event rewards).
+    unlocks: []const UnlockRef = &.{},
 };
 
 pub const EquippedView = struct { weapon: ?[]const u8, armor: ?[]const u8, utility: ?[]const u8 };
@@ -372,7 +378,7 @@ pub fn meView(req: *Req, p: *Player) HandlerError!MeView {
         .stance = p.stance,
         .bestiary = .{ .counts = p.bestiary },
         .notes = .{ .found = @intCast((try notes_db.foundSet(req, p.id)).count()), .total = game.notes.visibleTotal(p.fac()) },
-        .titles_extra = try std.mem.concat(a, []const u8, &.{ try notes_db.titles(req, p.id), try ach_db.titles(req, p.id, p.fac()) }),
+        .titles_extra = try std.mem.concat(a, []const u8, &.{ try notes_db.titles(req, p.id), try ach_db.titles(req, p.id, p.fac()), try worldevents.titles(req, p.id, p.fac()) }),
         .cosmetics = .{ .owned = try ach_db.owned(req, p.id), .color = ach_db.optId(p.callsign_color), .frame = ach_db.optId(p.avatar_frame) },
         .achievements = .{ .earned = @intCast((try ach_db.earnedSet(req, p.id)).count()), .total = game.achievements.list.len },
         .simulated_location = req.ctx.live.simulated(p.id, now),

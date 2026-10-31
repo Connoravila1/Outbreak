@@ -25,6 +25,10 @@ pub const stronghold_precision = 6;
 
 const stats_grace_levels = @import("stats.zig").grace_levels;
 const daynight = @import("daynight.zig");
+const events = @import("events.zig");
+
+/// A live event (or none). Spawns are a function of it taken at the start of their window.
+pub const Ev = ?events.Active;
 
 pub const cache_chance = 0.30;
 pub const elite_chance = 0.08;
@@ -134,6 +138,8 @@ pub const Enemy = struct {
     lat: f64,
     lon: f64,
     expires_at: i64,
+    /// An event opened the extra slot to everyone, at any hour.
+    extra_open: bool = false,
 
     pub fn id(self: *const Enemy) Id {
         return formatId(.enemy, self.cell, self.window, self.idx);
@@ -146,7 +152,7 @@ pub const Enemy = struct {
 
     /// Whether `viewer` can meet this enemy at `now_ms` (night extras aside, always).
     pub fn presentFor(self: *const Enemy, viewer: data.Faction, now_ms: i64) bool {
-        return !self.isNightExtra() or (viewer == .human and daynight.isNight(now_ms, self.lon));
+        return !self.isNightExtra() or self.extra_open or (viewer == .human and daynight.isNight(now_ms, self.lon));
     }
 
     /// The enemy's level as seen by a player of `player_level`. New players (below level 5)
@@ -166,16 +172,35 @@ pub const Enemy = struct {
 
 /// Enemy `idx` of `cell` in `window`, or null if the cell has fewer enemies than that.
 pub fn enemy(seed: u64, cell: Geohash, window: i64, idx: u8) ?Enemy {
+    return enemyWith(seed, cell, window, idx, null);
+}
+
+/// The cell's longitude, for the night rule of events.
+fn cellLon(cell: Geohash) f64 {
+    const box = geo.decode(cell);
+    return (box.lon_min + box.lon_max) / 2;
+}
+
+/// `enemy` under an event. Each change only widens a chance that is rolled the same way without
+/// it, so what a cell holds without the event is still there with it (plus the surge).
+pub fn enemyWith(seed: u64, cell: Geohash, window: i64, idx: u8, ev: Ev) ?Enemy {
+    const sm = events.spawnMods(ev, windowStart(window, enemy_window_ms), cellLon(cell));
     if (idx == night_extra_idx) {
         var gate = rng_mod.derive(seed, .{ "en", cell.str(), window });
-        if (!gate.chance(daynight.extraSpawnChance(enemy_mean_per_cell))) return null;
+        if (!gate.chance(sm.extra_chance orelse daynight.extraSpawnChance(enemy_mean_per_cell))) return null;
     } else if (idx >= enemyCount(seed, cell, window)) return null;
     var rng = rng_mod.derive(seed, .{ "e", cell.str(), window, idx });
-    const arch: data.Archetype = @enumFromInt(rng.weighted(&data.archetype_weights));
-    const elite = rng.chance(elite_chance);
+    var arch: data.Archetype = @enumFromInt(rng.weighted(&data.archetype_weights));
+    const elite = rng.chance(@min(1.0, elite_chance * sm.elite_mult));
     const offset: i32 = if (elite) rng.intRange(3, 5) else rng.intRange(-2, 2);
     const p = pointIn(&rng, cell);
+    // The swarm: a share of the cell's enemies are the event's kind (its own stream).
+    if (sm.swarm) |kind| {
+        var s = rng_mod.derive(seed, .{ "es", cell.str(), window, idx });
+        if (s.chance(sm.swarm_share)) arch = kind;
+    }
     return .{
+        .extra_open = idx == night_extra_idx and sm.extra_open,
         .cell = cell,
         .window = window,
         .idx = idx,
@@ -190,8 +215,12 @@ pub fn enemy(seed: u64, cell: Geohash, window: i64, idx: u8) ?Enemy {
 
 /// The ordinary enemies of a cell in a window (at most two); the night extra is `enemy(.., night_extra_idx)`.
 pub fn enemiesInCell(seed: u64, cell: Geohash, window: i64, out: *[max_enemies_per_cell]Enemy) []const Enemy {
+    return enemiesInCellWith(seed, cell, window, out, null);
+}
+
+pub fn enemiesInCellWith(seed: u64, cell: Geohash, window: i64, out: *[max_enemies_per_cell]Enemy, ev: Ev) []const Enemy {
     const n = enemyCount(seed, cell, window);
-    for (0..n) |i| out[i] = enemy(seed, cell, window, @intCast(i)).?;
+    for (0..n) |i| out[i] = enemyWith(seed, cell, window, @intCast(i), ev).?;
     return out[0..n];
 }
 
@@ -232,8 +261,13 @@ pub const Cache = struct {
 
 /// The cell's cache for a 30-minute window (30% of cells have one).
 pub fn cache(seed: u64, cell: Geohash, window: i64) ?Cache {
+    return cacheWith(seed, cell, window, null);
+}
+
+pub fn cacheWith(seed: u64, cell: Geohash, window: i64, ev: Ev) ?Cache {
+    const sm = events.spawnMods(ev, windowStart(window, cache_window_ms), cellLon(cell));
     var rng = rng_mod.derive(seed, .{ "c", cell.str(), window });
-    if (!rng.chance(cache_chance)) return null;
+    if (!rng.chance(@min(1.0, cache_chance * sm.cache_mult))) return null;
     const p = pointIn(&rng, cell);
     return .{ .cell = cell, .window = window, .lat = p.lat, .lon = p.lon, .expires_at = windowStart(window + 1, cache_window_ms) };
 }
@@ -249,8 +283,11 @@ pub const Airdrop = struct {
     starts_at: i64,
     expires_at: i64,
 
+    /// 0, or 1 for the second drop an event adds to the window.
+    idx: u8 = 0,
+
     pub fn id(self: *const Airdrop) Id {
-        return formatId(.airdrop, self.cell, self.window, 0);
+        return formatId(.airdrop, self.cell, self.window, self.idx);
     }
 
     pub fn liveAt(self: *const Airdrop, now_ms: i64) bool {
@@ -260,11 +297,21 @@ pub const Airdrop = struct {
 
 /// The region's airdrop for a 2-hour window; it lands at a hashed time and stays 45 minutes.
 pub fn airdrop(seed: u64, cell: Geohash, window: i64) Airdrop {
-    var rng = rng_mod.derive(seed, .{ "a", cell.str(), window });
+    return airdropN(seed, cell, window, 0);
+}
+
+/// Drop `idx` of the window: 0 is the ordinary one, 1 exists only while an event adds a second.
+pub fn airdropN(seed: u64, cell: Geohash, window: i64, idx: u8) Airdrop {
+    var rng = if (idx == 0) rng_mod.derive(seed, .{ "a", cell.str(), window }) else rng_mod.derive(seed, .{ "a2", cell.str(), window });
     const slack: f64 = @floatFromInt(airdrop_window_ms - airdrop_live_ms);
     const start = windowStart(window, airdrop_window_ms) + @as(i64, @intFromFloat(rng.float() * slack));
     const p = pointIn(&rng, cell);
-    return .{ .cell = cell, .window = window, .lat = p.lat, .lon = p.lon, .starts_at = start, .expires_at = start + airdrop_live_ms };
+    return .{ .cell = cell, .window = window, .lat = p.lat, .lon = p.lon, .starts_at = start, .expires_at = start + airdrop_live_ms, .idx = idx };
+}
+
+/// Whether an event gives window `window` a second airdrop.
+pub fn hasExtraAirdrop(window: i64, cell: Geohash, ev: Ev) bool {
+    return events.spawnMods(ev, windowStart(window, airdrop_window_ms), cellLon(cell)).airdrop_extra;
 }
 
 // --- Strongholds -------------------------------------------------------------------------------------
@@ -298,17 +345,45 @@ pub fn resolveEnemy(seed: u64, id: []const u8, now_ms: i64) ?Enemy {
     return enemy(seed, p.cell, p.window, p.idx);
 }
 
+/// When the window an enemy, cache or airdrop id belongs to began: the moment whose event decides
+/// what that id means (null: not such an id).
+pub fn idWindowStart(id: []const u8) ?i64 {
+    const p = parseId(id) catch return null;
+    return switch (p.kind) {
+        .enemy => windowStart(p.window, enemy_window_ms),
+        .cache => windowStart(p.window, cache_window_ms),
+        .airdrop => windowStart(p.window, airdrop_window_ms),
+        .stronghold => null,
+    };
+}
+
+pub fn resolveEnemyWith(seed: u64, id: []const u8, now_ms: i64, ev: Ev) ?Enemy {
+    const p = parseId(id) catch return null;
+    if (p.kind != .enemy or p.cell.len != enemy_precision) return null;
+    if (p.window != windowIndex(now_ms, enemy_window_ms)) return null;
+    return enemyWith(seed, p.cell, p.window, p.idx, ev);
+}
+
 pub fn resolveCache(seed: u64, id: []const u8, now_ms: i64) ?Cache {
+    return resolveCacheWith(seed, id, now_ms, null);
+}
+
+pub fn resolveCacheWith(seed: u64, id: []const u8, now_ms: i64, ev: Ev) ?Cache {
     const p = parseId(id) catch return null;
     if (p.kind != .cache or p.cell.len != cache_precision or p.idx != 0) return null;
     if (p.window != windowIndex(now_ms, cache_window_ms)) return null;
-    return cache(seed, p.cell, p.window);
+    return cacheWith(seed, p.cell, p.window, ev);
 }
 
 pub fn resolveAirdrop(seed: u64, id: []const u8, now_ms: i64) ?Airdrop {
+    return resolveAirdropWith(seed, id, now_ms, null);
+}
+
+pub fn resolveAirdropWith(seed: u64, id: []const u8, now_ms: i64, ev: Ev) ?Airdrop {
     const p = parseId(id) catch return null;
-    if (p.kind != .airdrop or p.cell.len != airdrop_precision or p.idx != 0) return null;
-    const a = airdrop(seed, p.cell, p.window);
+    if (p.kind != .airdrop or p.cell.len != airdrop_precision or p.idx > 1) return null;
+    if (p.idx == 1 and !hasExtraAirdrop(p.window, p.cell, ev)) return null;
+    const a = airdropN(seed, p.cell, p.window, p.idx);
     if (!a.liveAt(now_ms)) return null;
     return a;
 }
@@ -565,4 +640,138 @@ test "ids resolve by recomputation and reject forgeries" {
     try testing.expectEqualDeep(a, resolveAirdrop(world, aid.str(), a.starts_at + 1000).?);
     try testing.expect(resolveAirdrop(world, aid.str(), a.expires_at) == null);
     try testing.expect(resolveAirdrop(world, aid.str(), a.starts_at - 1) == null);
+}
+
+// --- Events ----------------------------------------------------------------------------------------------
+
+const hour: i64 = 60 * 60 * 1000;
+
+test "an event only adds to what a cell holds: the ordinary spawns are all still there" {
+    const night = 2 * hour; // 02:00 UTC at Greenwich
+    const w = windowIndex(night, enemy_window_ms);
+    const evs = [_]events.Active{ .{ .type = .blood_moon }, .{ .type = .supply_run }, .{ .type = .horde, .param = @intFromEnum(data.Archetype.runner) }, .{ .type = .day_zero } };
+    for (evs) |ev| {
+        var cell = geo.encode(0.0, 0.0, 7);
+        for (0..300) |_| {
+            var a: [max_enemies_per_cell]Enemy = undefined;
+            var b: [max_enemies_per_cell]Enemy = undefined;
+            const base = enemiesInCell(world, cell, w, &a);
+            const with = enemiesInCellWith(world, cell, w, &b, ev);
+            try testing.expectEqual(base.len, with.len);
+            for (base, with) |x, y| {
+                // Same place, same level offset; an event may promote to elite or swap the kind.
+                try testing.expectEqual(x.lat, y.lat);
+                try testing.expectEqual(x.lon, y.lon);
+                if (x.elite) try testing.expect(y.elite);
+            }
+            if (cache(world, cell, windowIndex(night, cache_window_ms)) != null) {
+                try testing.expect(cacheWith(world, cell, windowIndex(night, cache_window_ms), ev) != null);
+            }
+            cell = geo.neighbors(cell)[2].?;
+        }
+    }
+}
+
+test "blood moon: elites triple and the extra slot opens to everyone, at night only" {
+    const ev: Ev = .{ .type = .blood_moon };
+    const night = 2 * hour;
+    const day = 12 * hour;
+    var cell = geo.encode(0.0, 0.0, 7);
+    var elites = [_]f64{ 0, 0, 0 }; // base at night, event at night, event by day
+    var total: f64 = 0;
+    var extras = [_]f64{ 0, 0 }; // base, event (night)
+    var zombie_sees: f64 = 0;
+    const n = 3000;
+    for (0..n) |_| {
+        for ([_]struct { t: i64, ev: Ev, i: usize }{ .{ .t = night, .ev = null, .i = 0 }, .{ .t = night, .ev = ev, .i = 1 }, .{ .t = day, .ev = ev, .i = 2 } }) |c| {
+            const w = windowIndex(c.t, enemy_window_ms);
+            var buf: [max_enemies_per_cell]Enemy = undefined;
+            for (enemiesInCellWith(world, cell, w, &buf, c.ev)) |e| {
+                if (c.i == 0) total += 1;
+                if (e.elite) elites[c.i] += 1;
+            }
+        }
+        const wn = windowIndex(night, enemy_window_ms);
+        if (enemyWith(world, cell, wn, night_extra_idx, null)) |_| extras[0] += 1;
+        if (enemyWith(world, cell, wn, night_extra_idx, ev)) |e| {
+            extras[1] += 1;
+            if (e.presentFor(.zombie, night)) zombie_sees += 1;
+        }
+        cell = geo.neighbors(cell)[2].?;
+    }
+    try testing.expectApproxEqAbs(0.08, elites[0] / total, 0.015);
+    try testing.expectApproxEqAbs(0.24, elites[1] / total, 0.03);
+    // By day the event does nothing to the elite rate.
+    try testing.expectApproxEqAbs(0.08, elites[2] / total, 0.015);
+    try testing.expectApproxEqAbs(0.1375, extras[0] / n, 0.02);
+    try testing.expectApproxEqAbs(0.40, extras[1] / n, 0.03);
+    try testing.expectEqual(extras[1], zombie_sees);
+    // Without the event a Zombie never meets the extra; by day it does not exist for anyone under the moon either.
+    const e0 = blk: {
+        var c = geo.encode(0.0, 0.0, 7);
+        while (true) : (c = geo.neighbors(c)[2].?) {
+            if (enemy(world, c, windowIndex(night, enemy_window_ms), night_extra_idx)) |e| break :blk e;
+        }
+    };
+    try testing.expect(!e0.presentFor(.zombie, night) and e0.presentFor(.human, night));
+    try testing.expect(!e0.extra_open);
+}
+
+test "supply run: caches 50 percent instead of 30, and a second airdrop that is its own" {
+    const ev: Ev = .{ .type = .supply_run };
+    const w = windowIndex(0, cache_window_ms);
+    var cell = geo.encode(0.0, 0.0, 7);
+    var base: f64 = 0;
+    var with: f64 = 0;
+    const n = 4000;
+    for (0..n) |_| {
+        if (cache(world, cell, w) != null) base += 1;
+        if (cacheWith(world, cell, w, ev) != null) with += 1;
+        cell = geo.neighbors(cell)[2].?;
+    }
+    try testing.expectApproxEqAbs(0.30, base / n, 0.02);
+    try testing.expectApproxEqAbs(0.50, with / n, 0.02);
+
+    const region = geo.encode(40.0, -74.0, 5);
+    const aw = windowIndex(0, airdrop_window_ms);
+    const first = airdropN(world, region, aw, 0);
+    const second = airdropN(world, region, aw, 1);
+    try testing.expectEqualDeep(airdrop(world, region, aw), first);
+    try testing.expect(first.lat != second.lat or first.lon != second.lon);
+    try testing.expect(second.starts_at >= windowStart(aw, airdrop_window_ms) and second.expires_at <= windowStart(aw + 1, airdrop_window_ms));
+    const id = second.id();
+    try testing.expect(std.mem.endsWith(u8, id.str(), ".1"));
+    // The id resolves only under the event (and only inside its live minutes).
+    try testing.expect(resolveAirdropWith(world, id.str(), second.starts_at + 1000, ev) != null);
+    try testing.expect(resolveAirdropWith(world, id.str(), second.starts_at + 1000, null) == null);
+    try testing.expect(resolveAirdropWith(world, id.str(), second.expires_at, ev) == null);
+    try testing.expect(hasExtraAirdrop(aw, region, ev) and !hasExtraAirdrop(aw, region, null));
+    try testing.expect(idWindowStart(id.str()).? == windowStart(aw, airdrop_window_ms));
+}
+
+test "the swarm replaces 60 percent of enemies with its kind, and nothing else about them" {
+    const ev: Ev = .{ .type = .horde, .param = @intFromEnum(data.Archetype.bloater) };
+    const w = windowIndex(12 * hour, enemy_window_ms);
+    var cell = geo.encode(0.0, 0.0, 7);
+    var kind: f64 = 0;
+    var total: f64 = 0;
+    var base_kind: f64 = 0;
+    for (0..3000) |_| {
+        var a: [max_enemies_per_cell]Enemy = undefined;
+        var b: [max_enemies_per_cell]Enemy = undefined;
+        const base = enemiesInCell(world, cell, w, &a);
+        const with = enemiesInCellWith(world, cell, w, &b, ev);
+        for (base, with) |x, y| {
+            total += 1;
+            if (y.archetype == .bloater) kind += 1;
+            if (x.archetype == .bloater) base_kind += 1;
+            try testing.expectEqual(x.elite, y.elite);
+            try testing.expectEqual(x.offset, y.offset);
+            if (y.archetype != .bloater) try testing.expectEqual(x.archetype, y.archetype);
+        }
+        cell = geo.neighbors(cell)[2].?;
+    }
+    // 15% bloaters to begin with; 60% of the rest (85%) join them.
+    try testing.expectApproxEqAbs(0.15, base_kind / total, 0.03);
+    try testing.expectApproxEqAbs(0.15 + 0.6 * 0.85, kind / total, 0.03);
 }

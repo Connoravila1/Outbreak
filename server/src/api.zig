@@ -9,6 +9,7 @@ const world = @import("api/world.zig");
 const gear = @import("api/gear.zig");
 const social = @import("api/social.zig");
 const war = @import("api/war.zig");
+const events = @import("api/events.zig");
 const dev = @import("api/dev.zig");
 const auth = @import("api/auth.zig");
 const notes = @import("api/notes.zig");
@@ -96,6 +97,9 @@ const routes = [_]Route{
     .{ .method = .get, .path = "/api/collection", .access = .faction, .handler = collection.collection },
     .{ .method = .post, .path = "/api/cosmetics/equip", .access = .faction, .handler = collection.equipCosmetic },
 
+    .{ .method = .get, .path = "/api/events", .access = .faction, .handler = events.list },
+    .{ .method = .post, .path = "/api/events/exchange", .access = .faction, .handler = events.exchange },
+
     .{ .method = .get, .path = "/api/war", .access = .faction, .handler = war.war },
     .{ .method = .get, .path = "/api/leaderboard", .access = .faction, .handler = war.leaderboard },
     .{ .method = .get, .path = "/api/feed", .access = .faction, .handler = war.feed },
@@ -115,6 +119,8 @@ const routes = [_]Route{
     .{ .method = .post, .path = "/api/dev/heal", .access = .faction, .handler = dev.heal, .dev_only = true },
     .{ .method = .post, .path = "/api/dev/down", .access = .faction, .handler = dev.down, .dev_only = true },
     .{ .method = .post, .path = "/api/dev/spawn_raid", .access = .faction, .handler = dev.spawnRaid, .dev_only = true },
+    .{ .method = .post, .path = "/api/dev/event", .access = .faction, .handler = dev.startEvent, .dev_only = true },
+    .{ .method = .post, .path = "/api/dev/event_stop", .access = .faction, .handler = dev.stopEvent, .dev_only = true },
     .{ .method = .post, .path = "/api/dev/reset_cooldowns", .access = .faction, .handler = dev.resetCooldowns, .dev_only = true },
     .{ .method = .post, .path = "/api/dev/bot_contact", .access = .faction, .handler = dev.botContact, .dev_only = true },
 };

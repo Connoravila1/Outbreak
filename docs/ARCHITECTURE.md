@@ -29,6 +29,7 @@ The server is authoritative over every outcome. The client renders state and sen
     haversine), `spawns.zig` (deterministic world content), `missions.zig`, `war.zig`, `rng.zig`, `stance.zig` (stance, counters), `daynight.zig` (solar phase), `landmarks.zig` (place validation, windows, rate limit), `notes.zig` + `notes_data.zig` (found notes: the 60 texts, drop rules, set rewards; see LORE.md).
   - `src/notes.zig` — what a player holds (`player_notes`), set claims (`note_claims`), titles. `src/api/notes.zig` — the archive endpoints.
   - `src/achievements.zig` + `src/api/collection.zig` + `src/game/achievements.zig` + `src/game/cosmetics.zig` — achievements (pure definitions; counters, earned rows, discoveries, cosmetics owned; the check run inside `rewards.apply`), the collection log and cosmetic equip. See DESIGN.md section 17.
+  - `src/worldevents.zig` + `src/api/events.zig` + `src/game/events.zig` — limited-time world events (DESIGN.md section 18): pure calendar, modifiers and goal maths; event rows, contributions, settling and the Exchange; the endpoints. `--no-events` turns the calendar off (tests use it; an admin can still start one).
   - `src/live.zig` — in-memory state: latest position per player (never persisted, expires in
     2 min, or 4 min when it came from a Patrol check-in), active echoes, rate limits, and reported landmarks per geohash-6 area (12 h TTL, capped, never persisted).
   - `src/tick.zig` — every 5 s: PvP contact matching, raid/war housekeeping.
@@ -179,6 +180,35 @@ fight it missed and never notifies about one it already showed. The latest schem
 
 Cosmetics are bought with `POST /api/store/buy {sku: <cosmetic id>}` (`{me}`; 409 `owned`, 409 `not_for_sale` for earned-only ones, 409 `not_enough_salvage`). Achievements are checked inside every payout; each new one pays its salvage, may unlock a cosmetic, and is pushed as an `achievement` event (`rewards.achievements`), so `/api/location` toasts it and `/api/feed` keeps it. `callsign_color` (a cosmetic id or null) rides on leaderboard entries, `war.top`, clan members and chat messages, never on a Contact, battle or opponent. Schema 7 adds `players.callsign_color`, `players.avatar_frame` and the tables `counters`, `achievements`, `cosmetics`, `discoveries` (all cascade on account deletion); it backfills discoveries from held items and the counters from older tables.
 
+### World events (DESIGN.md section 18)
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| GET | `/api/events` | | `{now, live: LiveEvent|null, upcoming:[{type, kind, starts_at, ends_at}], exchange: {open, min_level, items:[{sku, price, limit, bought, owned}]}}` — settles any ended event first |
+| POST | `/api/events/exchange` | `{sku}` | `{rewards?, me}` — 404 `not_found`, 409 `no_event`, `locked` (below level 10), `sold_out`, `owned`, `not_enough_salvage`, `inventory_full` |
+
+```ts
+LiveEvent = { id, type: EventType, kind: string|null /* swarm archetype */, admin: boolean, starts_at, ends_at,
+              active_players: number,
+              goal: {target, progress, done},
+              district: {id, target, progress, done}|null /* the district you stand in, once it has a goal */,
+              mine: {n: number, tier: 0|1|2|3, next_at: number|null, goal_met: boolean} }
+```
+
+Events are rows in `world_events`: scheduled ones are made the first time anything looks at the
+calendar (unique on `starts_at`), admin ones by `admin event start` or the dev endpoint. An admin event
+replaces the running one, which ends then and is not remade. `settled` is set before the payouts in the
+same transaction, so each event pays exactly once; housekeeping (`tick.zig`) and `GET /api/events` both
+settle ended events and prune rows older than 60 days. Spawn changes are evaluated at the start of the
+spawn window the id names (`spawns.idWindowStart`), so spawns stay pure and ids validate by recomputation.
+Contributions are recorded as the actions happen (`worldevents.credit`) in `world_event_player` and
+`world_event_district`; no positions are stored, only the district id an action happened in.
+
+`/api/location` carries `event: {id, type, kind, starts_at, ends_at, target, progress, mine}|null` for the map banner. Payouts arrive as
+an `event_reward` feed event whose `rewards` is a `Rewards` with `unlocks:[{kind:"cosmetic"|"title", id, name}]`.
+`/api/catalog` (version 3) adds `events:[{id, names, blurb, unit, monthly, goal, per_player, min_target, tiers:[3], salvage:[3], consolation, cosmetic, title, mods}]`,
+`event_exchange:{min_level, items:[{sku, names, text, price, limit}]}` and `cosmetics[].event` / `cosmetics[].exchange`. Schema 11 adds `world_events`,
+`world_event_district`, `world_event_player`, `world_event_buys` and `event_titles`.
+
 ### Notes (docs/LORE.md)
 | Method | Path | Body | Returns |
 |---|---|---|---|
@@ -282,7 +312,7 @@ garrison (an Echo already rolled from it is withdrawn), and their sessions get n
 ### Dev only (`--dev`)
 `POST /api/dev/grant {xp?, salvage?, item?:{base, rarity}, consumable?:{id, n}, note?: id | "all"}`,
 `POST /api/dev/heal`, `POST /api/dev/reset_cooldowns`, `POST /api/dev/bot_contact` (stages an
-immediate Contact against a generated opponent so PvP can be tested alone; `POST /api/dev/down` puts the caller in Downed; `POST /api/dev/spawn_raid {hp?}` puts a raid boss at the stronghold of the cell the caller stands in, so raids can be tried on any day).
+immediate Contact against a generated opponent so PvP can be tested alone; `POST /api/dev/down` puts the caller in Downed; `POST /api/dev/spawn_raid {hp?}` puts a raid boss at the stronghold of the cell the caller stands in, so raids can be tried on any day), `POST /api/dev/event {type, hours?, kind?}` and `POST /api/dev/event_stop` (the same as `admin event start` and `stop`).
 
 ### Shapes
 
@@ -348,7 +378,7 @@ Rewards = { xp, salvage, items: Item[], consumables: Record<string,number>, war_
 Note = { id, set, rarity, locked: boolean, title, author, date, form, body, found_at }
        /* form: notebook|memo|email|chat|receipt|sticky|radio|poster|letter|review|card */
 
-Event = { id, at, type: "contact"|"echo_report"|"level_up"|"raid"|"war_result"|"clan",
+Event = { id, at, type: "contact"|"echo_report"|"level_up"|"raid"|"war_result"|"clan"|"event_reward",
           text: string, battle?: Battle, rewards?: Rewards }
 ```
 

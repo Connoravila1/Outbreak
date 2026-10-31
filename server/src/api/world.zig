@@ -13,6 +13,8 @@ const events = @import("../events.zig");
 const echo_mod = @import("../echo.zig");
 const live = @import("../live.zig");
 const ach_db = @import("../achievements.zig");
+const worldevents = @import("../worldevents.zig");
+const gev = game.events;
 
 const data = game.data;
 const geo = game.geo;
@@ -167,6 +169,7 @@ pub fn location(req: *Req, jw: *Stringify) HandlerError!void {
         .strongholds = strongholds.items,
         .raids = raids.items,
         .events = try events.takeUndelivered(req, p.id),
+        .event = try worldevents.brief(req, p.id),
     });
 }
 
@@ -241,9 +244,11 @@ fn worldEnemies(req: *Req, p: *const Player, pos: live.Pos, out: *std.ArrayList(
     var cells: [128]geo.Geohash = undefined;
     const n = geo.cellsWithin(pos.lat, pos.lon, view_radius_m, spawns.enemy_precision, &cells);
     const window = spawns.windowIndex(req.now, spawns.enemy_window_ms);
+    // An enemy is what the event live when its window began makes it.
+    const ev = try worldevents.activeAt(req, spawns.windowStart(window, spawns.enemy_window_ms));
     var buf: [spawns.max_enemies_per_cell]spawns.Enemy = undefined;
     for (cells[0..n]) |cell| {
-        for (spawns.enemiesInCell(req.ctx.seed, cell, window, &buf)) |e| {
+        for (spawns.enemiesInCellWith(req.ctx.seed, cell, window, &buf, ev)) |e| {
             if (geo.haversineM(pos.lat, pos.lon, e.lat, e.lon) > view_radius_m) continue;
             if (!e.visibleTo(p.level)) continue;
             const id = e.id();
@@ -260,7 +265,7 @@ fn worldEnemies(req: *Req, p: *const Player, pos: live.Pos, out: *std.ArrayList(
             });
         }
         // After dark Humans meet one more in a quarter of the cells' worth of spawns.
-        if (spawns.enemy(req.ctx.seed, cell, window, spawns.night_extra_idx)) |e| {
+        if (spawns.enemyWith(req.ctx.seed, cell, window, spawns.night_extra_idx, ev)) |e| {
             if (!e.presentFor(p.fac(), req.now)) continue;
             if (geo.haversineM(pos.lat, pos.lon, e.lat, e.lon) > view_radius_m) continue;
             if (!e.visibleTo(p.level)) continue;
@@ -317,8 +322,9 @@ fn worldCaches(req: *Req, p: *const Player, pos: live.Pos, out: *std.ArrayList(C
     var cells: [128]geo.Geohash = undefined;
     const n = geo.cellsWithin(pos.lat, pos.lon, view_radius_m, spawns.cache_precision, &cells);
     const window = spawns.windowIndex(req.now, spawns.cache_window_ms);
+    const cache_ev = try worldevents.activeAt(req, spawns.windowStart(window, spawns.cache_window_ms));
     for (cells[0..n]) |cell| {
-        const c = spawns.cache(req.ctx.seed, cell, window) orelse continue;
+        const c = spawns.cacheWith(req.ctx.seed, cell, window, cache_ev) orelse continue;
         if (geo.haversineM(pos.lat, pos.lon, c.lat, c.lon) > view_radius_m) continue;
         const id = c.id();
         if (try isDone(req, p.id, id.str())) continue;
@@ -328,13 +334,17 @@ fn worldCaches(req: *Req, p: *const Player, pos: live.Pos, out: *std.ArrayList(C
     var regions: [32]geo.Geohash = undefined;
     const rn = geo.cellsWithin(pos.lat, pos.lon, airdrop_radius_m, spawns.airdrop_precision, &regions);
     const aw = spawns.windowIndex(req.now, spawns.airdrop_window_ms);
+    const drop_ev = try worldevents.activeAt(req, spawns.windowStart(aw, spawns.airdrop_window_ms));
     for (regions[0..rn]) |region| {
-        const a = spawns.airdrop(req.ctx.seed, region, aw);
-        if (!a.liveAt(req.now)) continue;
-        if (geo.haversineM(pos.lat, pos.lon, a.lat, a.lon) > airdrop_radius_m) continue;
-        const id = a.id();
-        if (try isDone(req, p.id, id.str())) continue;
-        try out.append(req.arena, .{ .id = try req.arena.dupe(u8, id.str()), .kind = "airdrop", .lat = a.lat, .lon = a.lon, .expires_at = a.expires_at });
+        const drops: u8 = if (spawns.hasExtraAirdrop(aw, region, drop_ev)) 2 else 1;
+        for (0..drops) |di| {
+            const a = spawns.airdropN(req.ctx.seed, region, aw, @intCast(di));
+            if (!a.liveAt(req.now)) continue;
+            if (geo.haversineM(pos.lat, pos.lon, a.lat, a.lon) > airdrop_radius_m) continue;
+            const id = a.id();
+            if (try isDone(req, p.id, id.str())) continue;
+            try out.append(req.arena, .{ .id = try req.arena.dupe(u8, id.str()), .kind = "airdrop", .lat = a.lat, .lon = a.lon, .expires_at = a.expires_at });
+        }
     }
 }
 
@@ -474,7 +484,8 @@ fn resolveTarget(req: *Req, p: *const Player, id: []const u8, night: bool) Handl
         }
         return .{ .archetype = tutorial_archetype, .level = p.level, .elite = false, .tutorial = true, .lat = t.?.lat, .lon = t.?.lon, .expires_at = t.?.expires_at, .mult = stats.tutorial_factor };
     }
-    const en = spawns.resolveEnemy(req.ctx.seed, id, req.now) orelse return req.fail(404, "not_found", "That enemy is gone.");
+    const ev = if (spawns.idWindowStart(id)) |t| try worldevents.activeAt(req, t) else null;
+    const en = spawns.resolveEnemyWith(req.ctx.seed, id, req.now, ev) orelse return req.fail(404, "not_found", "That enemy is gone.");
     if (!en.visibleTo(p.level) or !en.presentFor(p.fac(), req.now)) return req.fail(404, "not_found", "That enemy is gone.");
     // After dark the enemies Humans face are 10% tougher.
     const mult = stats.graceFactor(p.level) * daynight.enemyMult(p.fac(), night);
@@ -496,13 +507,23 @@ fn engageEnemy(req: *Req, jw: *Stringify, p: *Player, pos: live.Pos, id: []const
     var acc = rewards.Acc{};
     // Risk and reward: Humans earn more PvE XP by night, Zombies by day.
     const base_xp = progression.pveWinXp(level, if (en.elite) .elite else .normal, row.reward_mult);
-    const win_xp: u32 = @intFromFloat(@round(@as(f32, @floatFromInt(base_xp)) * daynight.pveXpMult(p.fac(), night)));
+    // A live event pays more for what it is about (game/events.zig).
+    const ev = try worldevents.activeAt(req, req.now);
+    const em = gev.rewardMods(ev, night);
+    const event_xp = em.pve_xp * (if (en.elite) em.elite_xp else 1.0) * (if (ev != null and ev.?.swarm() == en.archetype) em.swarm_xp else 1.0);
+    const win_xp: u32 = @intFromFloat(@round(@as(f32, @floatFromInt(base_xp)) * daynight.pveXpMult(p.fac(), night) * event_xp));
     p.bestiary[@intFromEnum(en.archetype)] +|= 1;
     const district = try districtOf(req.arena, en.lat, en.lon);
     if (o.won()) {
         acc.xp = win_xp;
         var lrng = game.rng.Rng.init(game.rng.hash(o.seed, .{"loot"}));
         try acc.addDrop(req, loot.rollPve(&lrng, .{ .player_level = p.level, .enemy_level = level, .archetype = en.archetype, .loot_mult = rewards.lootMult(p, req.now) }));
+        acc.salvage = @intFromFloat(@round(@as(f32, @floatFromInt(acc.salvage)) * em.pve_salvage));
+        // Last Light: a dawn patrol sometimes turns up a bandage.
+        if (em.human_heal_chance > 0 and p.fac() == .human) {
+            var hrng = game.rng.derive(o.seed, .{"evheal"});
+            if (hrng.chance(em.human_heal_chance)) acc.addConsumable(.heal_s, 1);
+        }
         // First Blood always leaves something worth wearing.
         if (en.tutorial) try acc.items.append(req.arena, loot.rollItem(&lrng, .{ .level = p.level, .min_rarity = .uncommon }));
         // ...and the first note of the story; otherwise a small chance of one.
@@ -521,8 +542,16 @@ fn engageEnemy(req: *Req, jw: *Stringify, p: *Player, pos: live.Pos, id: []const
         p.losses += 1;
     }
     rewards.settleHp(p, fight.hpAfter(a, o), req.now);
+    // Feeding Frenzy: every kill feeds a Zombie.
+    if (o.won() and em.zombie_heal_on_win > 0 and p.fac() == .zombie and !p.downed(req.now)) {
+        const max = p.maxHp(req.now);
+        p.setHp(@min(max, p.hp + @as(i32, @intFromFloat(@round(@as(f32, @floatFromInt(max)) * em.zombie_heal_on_win)))), req.now);
+    }
     const rw = try rewards.apply(req, p, &acc, district);
-    if (o.won()) try missions.event(req, p, .{ .kind = .pve_win, .archetype = en.archetype, .elite = en.elite });
+    if (o.won()) {
+        try missions.event(req, p, .{ .kind = .pve_win, .archetype = en.archetype, .elite = en.elite });
+        if (!en.tutorial) try worldevents.credit(req, p.id, district, .{ .pve_win = true, .elite = en.elite, .archetype = en.archetype });
+    }
 
     const me = try views.meFresh(req, p.id);
     try jw.write(try fight.battleView(req, .pve, a, b, o, rw, me));
@@ -544,12 +573,14 @@ fn engageEcho(req: *Req, jw: *Stringify, p: *Player, pos: live.Pos, id: []const 
     const o = try fight.run(req, a, b, fight.seedFor(req, p.id, game.rng.hashBytes(2, id)));
 
     var acc = rewards.Acc{};
-    const win_xp = progression.echoWinXp(e.build.level);
+    const em = gev.rewardMods(try worldevents.activeAt(req, req.now), daynight.isNight(req.now, pos.lon));
+    const win_xp: u32 = @intFromFloat(@round(@as(f32, @floatFromInt(progression.echoWinXp(e.build.level))) * em.echo_xp * em.pvp_xp));
     const district = try districtOf(req.arena, e.lat, e.lon);
     if (o.won()) {
         acc.xp = win_xp;
         var lrng = game.rng.Rng.init(game.rng.hash(o.seed, .{"loot"}));
-        try acc.addDrop(req, loot.rollPvp(&lrng, p.level, e.build.level, rewards.lootMult(p, req.now)));
+        try acc.addDrop(req, loot.rollPvp(&lrng, p.level, e.build.level, rewards.lootMult(p, req.now) * em.echo_item));
+        acc.salvage = @intFromFloat(@round(@as(f32, @floatFromInt(acc.salvage)) * em.echo_salvage));
         acc.war_points = game.war.points(.echo_win);
         p.wins += 1;
         p.echoes_won += 1;
@@ -562,7 +593,10 @@ fn engageEcho(req: *Req, jw: *Stringify, p: *Player, pos: live.Pos, id: []const 
     ctx.live.dropEcho(p.id);
     rewards.settleHp(p, fight.hpAfter(a, o), req.now);
     const rw = try rewards.apply(req, p, &acc, district);
-    if (o.won()) try missions.event(req, p, .{ .kind = .contact_win });
+    if (o.won()) {
+        try missions.event(req, p, .{ .kind = .contact_win });
+        try worldevents.credit(req, p.id, district, .{ .echo_win = true });
+    }
     if (e.source) |owner| try reportToOwner(req, owner, o.won(), p.fac());
 
     const me = try views.meFresh(req, p.id);
@@ -605,11 +639,12 @@ pub fn open(req: *Req, jw: *Stringify) HandlerError!void {
     var lon: f64 = undefined;
     var expires: i64 = undefined;
     var airdrop = false;
-    if (spawns.resolveCache(req.ctx.seed, id, req.now)) |c| {
+    const ev = if (spawns.idWindowStart(id)) |t| try worldevents.activeAt(req, t) else null;
+    if (spawns.resolveCacheWith(req.ctx.seed, id, req.now, ev)) |c| {
         lat = c.lat;
         lon = c.lon;
         expires = c.expires_at;
-    } else if (spawns.resolveAirdrop(req.ctx.seed, id, req.now)) |a| {
+    } else if (spawns.resolveAirdropWith(req.ctx.seed, id, req.now, ev)) |a| {
         if (p.level < airdrop_min_level) return req.fail(409, "locked", "Airdrops unlock at level 8.");
         lat = a.lat;
         lon = a.lon;
@@ -625,12 +660,20 @@ pub fn open(req: *Req, jw: *Stringify) HandlerError!void {
     const mult = rewards.lootMult(&p, req.now);
     var acc = rewards.Acc{ .xp = progression.cacheXp(p.level), .war_points = game.war.points(.cache) };
     try acc.addDrop(req, if (airdrop) loot.rollAirdrop(&lrng, p.level, mult) else loot.rollCache(&lrng, p.level, mult));
+    acc.salvage = eventSalvage(acc.salvage, (try worldevents.rewardMods(req, &p)).cache_salvage);
     try acc.rollNote(req, &p, if (airdrop) .airdrop else .cache, null, lrng.next());
     p.caches += 1;
     if (airdrop) try ach_db.bump(req, p.id, .airdrops, 1);
-    const rw = try rewards.apply(req, &p, &acc, try districtOf(req.arena, lat, lon));
+    const district = try districtOf(req.arena, lat, lon);
+    const rw = try rewards.apply(req, &p, &acc, district);
     try missions.event(req, &p, .{ .kind = .cache_open });
+    try worldevents.credit(req, p.id, district, .{ .cache = true });
     try jw.write(.{ .loot = rw, .me = try views.meFresh(req, p.id) });
+}
+
+/// Salvage scaled by an event's multiplier.
+fn eventSalvage(salvage: u32, mult: f32) u32 {
+    return @intFromFloat(@round(@as(f32, @floatFromInt(salvage)) * mult));
 }
 
 /// A landmark cache: a real place a player's map reported, once per player per 4-hour window,
@@ -652,11 +695,14 @@ fn openLandmark(req: *Req, jw: *Stringify, p: *Player, pos: live.Pos, id: []cons
     var lrng = game.rng.Rng.init(game.rng.hash(ctx.seed, .{ "landmark", p.id, id, req.now }));
     var acc = rewards.Acc{ .xp = progression.cacheXp(p.level), .war_points = game.war.points(.cache) };
     try acc.addDrop(req, loot.rollLandmark(&lrng, p.level, rewards.lootMult(p, req.now), data.placeKind(place.place.kind)));
+    acc.salvage = eventSalvage(acc.salvage, (try worldevents.rewardMods(req, p)).cache_salvage);
     try acc.rollNote(req, p, .landmark, place.place.kind, lrng.next());
     p.caches += 1;
     try ach_db.bump(req, p.id, .landmarks, 1);
-    const rw = try rewards.apply(req, p, &acc, try districtOf(req.arena, place.place.lat, place.place.lon));
+    const district = try districtOf(req.arena, place.place.lat, place.place.lon);
+    const rw = try rewards.apply(req, p, &acc, district);
     try missions.event(req, p, .{ .kind = .cache_open });
+    try worldevents.credit(req, p.id, district, .{ .cache = true });
     // Only a landmark that paid out counts against the limit.
     var o = opens;
     o.record(req.now);

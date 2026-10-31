@@ -10,6 +10,7 @@ const contact = @import("../contact.zig");
 const snapshot = @import("../snapshot.zig");
 const fight = @import("../fight.zig");
 const notes_db = @import("../notes.zig");
+const worldevents = @import("../worldevents.zig");
 
 const data = game.data;
 const Req = ctx_mod.Req;
@@ -87,6 +88,20 @@ pub fn spawnRaid(req: *Req, jw: *Stringify) HandlerError!void {
         .{ id, district.str(), week, cell.str(), hp, hp, req.now, req.now + 48 * 60 * 60 * 1000 },
     );
     try jw.write(.{ .id = id });
+}
+
+/// Start a one-off event now (ends any running): `{type, hours?, kind?}`; `kind` is the swarm's archetype.
+pub fn startEvent(req: *Req, jw: *Stringify) HandlerError!void {
+    const body = try req.json(struct { type: []const u8, hours: ?i64 = null, kind: ?[]const u8 = null });
+    const t = std.meta.stringToEnum(data.EventType, body.type) orelse return req.fail(400, "bad_request", "Unknown event type.");
+    const kind = if (body.kind) |k| (data.findArchetype(k) orelse return req.fail(400, "bad_request", "Unknown archetype.")) else data.Archetype.runner;
+    const id = try worldevents.startAdmin(&req.ctx.db, req.now, t, std.math.clamp(body.hours orelse 48, 1, 24 * 14), kind, req.ctx.opts.events);
+    try jw.write(.{ .id = id });
+}
+
+pub fn stopEvent(req: *Req, jw: *Stringify) HandlerError!void {
+    const n = try worldevents.stopAll(&req.ctx.db, req.now, req.ctx.opts.events);
+    try jw.write(.{ .stopped = n });
 }
 
 pub fn resetCooldowns(req: *Req, jw: *Stringify) HandlerError!void {

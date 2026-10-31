@@ -74,6 +74,23 @@ Start the server with `--min-client 0.2.0` (and `--store-android` / `--store-ios
 older than that shows "Update to keep playing" instead of the game. Change it by restarting the
 server. Only raise it once the new build is available in the stores; players keep their characters.
 
+## World events
+
+The server runs a calendar of limited-time events by itself (Tuesday to Thursday, Thursday noon to
+Saturday, and a longer Day Zero in the first full week of each month; never a weekend). You can also
+start one by hand, for instance to cheer up a quiet week or to test:
+
+    ./outbreak-server admin --data /opt/outbreak/data event list
+    ./outbreak-server admin --data /opt/outbreak/data event start blood_moon --hours 6
+    ./outbreak-server admin --data /opt/outbreak/data event stop
+
+`list` shows the one running (with its goal) and the next few scheduled. `start` takes a type
+(`blood_moon`, `supply_run`, `horde`, `echo_week`, `last_light`, `day_zero`), `--hours` (1 to 336,
+default 24) and, for `horde`, `--kind runner|bloater|brute|shambler`. Starting one ends whatever is
+running; a scheduled event that was ended this way does not come back. `stop` ends the running event
+now; players who took part are still paid, once. New spawns follow from the next 30-minute window.
+Start the server with `--no-events` to turn the calendar off (admin events still work).
+
 ## What a suspended player sees
 
 Their app shows a plain screen with your reason and the date the suspension ends (or that it has no

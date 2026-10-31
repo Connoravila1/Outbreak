@@ -17,6 +17,7 @@ pub const notes = @import("notes.zig");
 pub const achievements = @import("achievements.zig");
 pub const cosmetics = @import("cosmetics.zig");
 pub const transit = @import("transit.zig");
+pub const events = @import("events.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());

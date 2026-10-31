@@ -8,6 +8,7 @@ const ctx_mod = @import("ctx.zig");
 const model = @import("model.zig");
 const live = @import("live.zig");
 const snapshot = @import("snapshot.zig");
+const worldevents = @import("worldevents.zig");
 
 const data = game.data;
 const rng_mod = game.rng;
@@ -45,9 +46,12 @@ pub fn current(req: *Req, p: *const model.Player, pos: live.Pos) HandlerError!?l
     var echo = live.Echo{ .owner = p.id, .window = window, .none = true, .expires_at = (window + 1) * window_ms };
     defer ctx.live.putEcho(echo) catch {};
 
-    if (p.level < min_level or req.now - p.last_pvp_at < quiet_after_contact_ms) return null;
+    // Echo Week: Echoes come sooner after a real fight and more often.
+    const em = game.events.rewardMods(try worldevents.activeAt(req, req.now), false);
+    const quiet_ms = if (em.echo_quiet_ms > 0) em.echo_quiet_ms else quiet_after_contact_ms;
+    if (p.level < min_level or req.now - p.last_pvp_at < quiet_ms) return null;
     var rng = rng_mod.derive(ctx.seed, .{ "echo", p.id, window });
-    if (!rng.chance(chance)) return null;
+    if (!rng.chance(if (em.echo_chance > 0) em.echo_chance else chance)) return null;
 
     const foe = p.fac().opposite();
     if (try pickSnapshot(req, foe, p.id, p.level, &rng)) |picked| {

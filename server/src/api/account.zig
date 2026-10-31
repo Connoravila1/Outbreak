@@ -299,7 +299,7 @@ fn pairView(p: data.Pair) PairView {
     return .{ .human = p.human, .zombie = p.zombie };
 }
 
-pub const catalog_version = 2;
+pub const catalog_version = 3;
 
 const StanceRow = struct { id: data.Stance, names: PairView, text: []const u8 };
 const stance_rows = [_]StanceRow{
@@ -426,9 +426,43 @@ pub fn catalog(req: *Req, jw: *Stringify) HandlerError!void {
             .survey = c.survey,
             .heat = c.heat,
             .unlock = if (by) |i| game.achievements.list[i].id else null,
+            .event = c.event,
+            .exchange = c.exchange,
         });
     }
     try jw.endArray();
+
+    try jw.objectField("events");
+    try jw.beginArray();
+    for (data.events) |e| {
+        try jw.write(.{
+            .id = e.id,
+            .names = pairView(e.name),
+            .blurb = pairView(e.blurb),
+            .unit = pairView(e.unit),
+            .monthly = e.monthly,
+            .goal = e.goal,
+            .per_player = e.per_player,
+            .min_target = e.min_target,
+            .tiers = e.tiers,
+            .salvage = e.salvage,
+            .consolation = data.event_consolation,
+            .cosmetic = e.cosmetic,
+            .title = if (e.title) |t| pairView(t) else null,
+            .mods = e.mods,
+        });
+    }
+    try jw.endArray();
+
+    try jw.objectField("event_exchange");
+    try jw.beginObject();
+    try jw.objectField("min_level");
+    try jw.write(data.exchange_min_level);
+    try jw.objectField("items");
+    try jw.beginArray();
+    for (data.event_exchange) |x| try jw.write(.{ .sku = x.sku, .names = pairView(x.name), .text = x.text, .price = x.price, .limit = x.limit });
+    try jw.endArray();
+    try jw.endObject();
 
     try jw.objectField("levels");
     try jw.beginObject();

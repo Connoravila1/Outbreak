@@ -12,6 +12,7 @@ pub const http = @import("http.zig");
 pub const admin = @import("admin.zig");
 pub const names = @import("names.zig");
 pub const client_version = @import("client_version.zig");
+pub const worldevents = @import("worldevents.zig");
 
 test {
     _ = @import("api_tests.zig");
@@ -23,6 +24,8 @@ test {
     _ = @import("fight.zig");
     _ = @import("raids.zig");
     _ = @import("warstate.zig");
+    _ = @import("worldevents.zig");
+    _ = @import("api/events.zig");
 }
 
 test {

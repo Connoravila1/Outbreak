@@ -519,6 +519,188 @@ pub fn inventoryExpansionPrice(n: u32) u32 {
     return 400 + 200 * n;
 }
 
+// --- Limited-time events (DESIGN.md section 18) -------------------------------------------------
+
+pub const EventType = enum { blood_moon, supply_run, horde, echo_week, last_light, day_zero };
+
+/// What an event's community goal counts. `archetype` is the swarm's kind (the Horde event);
+/// `actions` is every PvE win, cache, Echo win and Contact win.
+pub const EventGoal = enum { elites, caches, archetype, echo_wins, war_points, actions };
+
+/// Every knob an event turns on an existing system. Multipliers default to 1 (no change).
+pub const EventMods = struct {
+    // World. With `night_only` these hold only where it is night (solar time, like day and night).
+    night_only: bool = false,
+    elite_chance_mult: f32 = 1.0,
+    /// Chance of the extra enemy slot per cell and window (the night extra: 13.75% normally);
+    /// 0 leaves it alone. With `extra_open` Zombies meet it too and it exists by day.
+    extra_slot_chance: f32 = 0,
+    extra_open: bool = false,
+    /// Chance that an enemy is replaced by the swarm archetype (the event's param).
+    swarm_share: f32 = 0,
+    cache_chance_mult: f32 = 1.0,
+    /// A second airdrop per region and 2-hour window.
+    airdrop_extra: bool = false,
+    // Pay.
+    pve_xp: f32 = 1.0,
+    elite_xp: f32 = 1.0,
+    swarm_xp: f32 = 1.0,
+    pve_salvage: f32 = 1.0,
+    cache_salvage: f32 = 1.0,
+    echo_xp: f32 = 1.0,
+    echo_salvage: f32 = 1.0,
+    echo_item: f32 = 1.0,
+    pvp_xp: f32 = 1.0,
+    war_points: f32 = 1.0,
+    // Echoes show up more: chance per 30 minutes and how soon after a real Contact (0: unchanged).
+    echo_chance: f32 = 0,
+    echo_quiet_ms: i64 = 0,
+    // Faction twists (Last Light / Feeding Frenzy).
+    human_heal_chance: f32 = 0,
+    zombie_heal_on_win: f32 = 0,
+};
+
+pub const EventDef = struct {
+    id: EventType,
+    name: Pair,
+    /// One line for the map banner.
+    blurb: Pair,
+    /// What the goal counts, as "<n> <unit>" (the Horde event names its archetype instead).
+    unit: Pair,
+    /// The monthly one: longer, bigger, and a yearly title.
+    monthly: bool = false,
+    goal: EventGoal,
+    /// Goal per active player this week, and the floor that keeps a tiny population finishing.
+    per_player: u32,
+    min_target: u32,
+    /// Personal contribution for tiers 1, 2 and 3.
+    tiers: [3]u32,
+    /// Salvage for tiers 1..3 when the goal was reached; a missed goal pays `event_consolation` of it.
+    salvage: [3]u32,
+    /// The exclusive cosmetic earned at tier 2 when the goal was reached (game/cosmetics.zig id).
+    cosmetic: []const u8,
+    /// A title for tier 3, once a year (monthly only).
+    title: ?Pair = null,
+    mods: EventMods,
+};
+
+pub const events = [_]EventDef{
+    .{
+        .id = .blood_moon,
+        .name = pair("Blood Moon", "The Red Feast"),
+        .blurb = pair("After dark the elites walk and the streets fill up.", "After dark the big ones wake and the streets run thick."),
+        .unit = pair("elites defeated", "big ones put down"),
+        .goal = .elites,
+        .per_player = 10,
+        .min_target = 15,
+        .tiers = .{ 3, 10, 25 },
+        .salvage = .{ 250, 700, 1500 },
+        .cosmetic = "color_bloodmoon",
+        .mods = .{ .night_only = true, .elite_chance_mult = 3.0, .extra_slot_chance = 0.40, .extra_open = true, .elite_xp = 1.5, .pve_salvage = 1.25 },
+    },
+    .{
+        .id = .supply_run,
+        .name = pair("Supply Run", "Carrion Rush"),
+        .blurb = pair("Caches and airdrops are everywhere, and richer.", "Remains and drops everywhere, and fatter."),
+        .unit = pair("caches opened", "remains opened"),
+        .goal = .caches,
+        .per_player = 25,
+        .min_target = 30,
+        .tiers = .{ 6, 20, 50 },
+        .salvage = .{ 250, 700, 1500 },
+        .cosmetic = "color_supply",
+        .mods = .{ .cache_chance_mult = 5.0 / 3.0, .airdrop_extra = true, .cache_salvage = 1.5 },
+    },
+    .{
+        .id = .horde,
+        .name = pair("The Swarm", "Pack Hunt"),
+        .blurb = pair("The whole district is moving. One kind of enemy is everywhere.", "The whole district moves as one. One kind of prey is everywhere."),
+        .unit = pair("defeated", "put down"),
+        .goal = .archetype,
+        .per_player = 40,
+        .min_target = 50,
+        .tiers = .{ 10, 40, 100 },
+        .salvage = .{ 250, 700, 1500 },
+        .cosmetic = "frame_horde",
+        .mods = .{ .extra_slot_chance = 0.30, .extra_open = true, .swarm_share = 0.6, .swarm_xp = 1.25 },
+    },
+    .{
+        .id = .echo_week,
+        .name = pair("Ghost Signal", "The Hive Remembers"),
+        .blurb = pair("Echoes come thick and pay double.", "The echoes crowd in and give more."),
+        .unit = pair("Echoes defeated", "echoes put down"),
+        .goal = .echo_wins,
+        .per_player = 6,
+        .min_target = 10,
+        .tiers = .{ 2, 6, 14 },
+        .salvage = .{ 250, 700, 1500 },
+        .cosmetic = "frame_echo",
+        .mods = .{ .echo_xp = 1.5, .echo_salvage = 2.0, .echo_item = 2.4, .echo_chance = 0.85, .echo_quiet_ms = 20 * 60 * 1000 },
+    },
+    .{
+        .id = .last_light,
+        .name = pair("Last Light", "Feeding Frenzy"),
+        .blurb = pair("War points count double. Dawn patrols turn up bandages.", "War points count double. Every kill feeds you."),
+        .unit = pair("war points", "war points"),
+        .goal = .war_points,
+        .per_player = 60,
+        .min_target = 90,
+        .tiers = .{ 20, 60, 150 },
+        .salvage = .{ 250, 700, 1500 },
+        .cosmetic = "color_lastlight",
+        .mods = .{ .war_points = 2.0, .pvp_xp = 1.25, .human_heal_chance = 0.25, .zombie_heal_on_win = 0.15 },
+    },
+    .{
+        .id = .day_zero,
+        .name = pair("Day Zero", "The Turning"),
+        .blurb = pair("Everything surges at once: elites, drops, double the work.", "Everything surges at once: big ones, drops, more to feed on."),
+        .unit = pair("fights won and caches opened", "kills and remains taken"),
+        .monthly = true,
+        .goal = .actions,
+        .per_player = 150,
+        .min_target = 200,
+        .tiers = .{ 25, 80, 200 },
+        .salvage = .{ 500, 1400, 3000 },
+        .cosmetic = "frame_dayzero",
+        .title = pair("Day Zero Survivor", "Of the Turning"),
+        .mods = .{ .elite_chance_mult = 1.5, .extra_slot_chance = 0.20, .extra_open = true, .cache_chance_mult = 1.3, .pve_xp = 1.2, .pve_salvage = 1.25, .cache_salvage = 1.25, .war_points = 1.5, .echo_xp = 1.25 },
+    },
+};
+
+pub fn eventDef(t: EventType) EventDef {
+    return events[@intFromEnum(t)];
+}
+
+/// What a missed goal pays, as a share of the tier's salvage.
+pub const event_consolation = 0.5;
+
+pub const ExchangeSku = struct {
+    sku: []const u8,
+    name: Pair,
+    text: []const u8,
+    price: u32,
+    /// How many one player can buy per event (1 for cosmetics, which are owned once anyway).
+    limit: u8,
+};
+
+/// The Event Exchange: open in the Store while an event is live. Cosmetic or convenience only.
+pub const event_exchange = [_]ExchangeSku{
+    .{ .sku = "ex_requisition", .name = pair("Priority Requisition", "Priority Cache"), .text = "Three item rolls at your level, Uncommon or better. You keep the best one.", .price = 1200, .limit = 5 },
+    .{ .sku = "ex_crate", .name = pair("Event Crate", "Event Remains"), .text = "One item at your level, Rare or better with a better chance of Legendary, and two consumables.", .price = 4000, .limit = 2 },
+    .{ .sku = "color_gilt", .name = pair("Gilt Ink", "Gilded Rot"), .text = "A callsign colour sold only at the Exchange.", .price = 6000, .limit = 1 },
+    .{ .sku = "frame_gilt", .name = pair("Gilt Frame", "Gilded Frame"), .text = "A portrait frame sold only at the Exchange.", .price = 9000, .limit = 1 },
+};
+
+pub fn findExchange(sku: []const u8) ?u8 {
+    for (event_exchange, 0..) |s, i| {
+        if (std.mem.eql(u8, s.sku, sku)) return @intCast(i);
+    }
+    return null;
+}
+
+/// The level the Exchange opens at.
+pub const exchange_min_level: u8 = 10;
+
 test "tables line up with their enums" {
     for (rarities, 0..) |r, i| try std.testing.expectEqual(i, @intFromEnum(r.id));
     for (perks, 0..) |r, i| try std.testing.expectEqual(i, @intFromEnum(r.id));

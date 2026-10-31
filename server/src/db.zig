@@ -575,6 +575,56 @@ const migrations = [_][:0]const u8{
     \\ALTER TABLE players ADD COLUMN mock_sessions INTEGER NOT NULL DEFAULT 0;
     \\ALTER TABLE players ADD COLUMN mock_at INTEGER NOT NULL DEFAULT 0;
     ,
+    // Limited-time events (DESIGN.md section 18). A row per event that has run: from the calendar
+    // (made the first time anything looks, at most one per start) or started by an admin. `target`
+    // is fixed from the active-player count when it starts; `settled` is set once the rewards are
+    // paid. Contributions are per player and district; districts get their own target on their
+    // first contribution. `world_event_buys` counts Exchange purchases per event, `event_titles`
+    // the yearly title of the monthly event.
+    \\CREATE TABLE world_events (
+    \\  id INTEGER PRIMARY KEY,
+    \\  type TEXT NOT NULL,
+    \\  source TEXT NOT NULL,
+    \\  starts_at INTEGER NOT NULL,
+    \\  ends_at INTEGER NOT NULL,
+    \\  param INTEGER NOT NULL DEFAULT 0,
+    \\  active_players INTEGER NOT NULL DEFAULT 1,
+    \\  target INTEGER NOT NULL DEFAULT 0,
+    \\  progress INTEGER NOT NULL DEFAULT 0,
+    \\  settled INTEGER NOT NULL DEFAULT 0
+    \\);
+    \\CREATE UNIQUE INDEX world_events_calendar ON world_events(starts_at) WHERE source = 'calendar';
+    \\CREATE INDEX world_events_span ON world_events(starts_at, ends_at);
+    \\CREATE TABLE world_event_district (
+    \\  event_id INTEGER NOT NULL REFERENCES world_events(id) ON DELETE CASCADE,
+    \\  district TEXT NOT NULL,
+    \\  active_players INTEGER NOT NULL,
+    \\  target INTEGER NOT NULL,
+    \\  progress INTEGER NOT NULL DEFAULT 0,
+    \\  PRIMARY KEY (event_id, district)
+    \\);
+    \\CREATE TABLE world_event_player (
+    \\  event_id INTEGER NOT NULL REFERENCES world_events(id) ON DELETE CASCADE,
+    \\  player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    \\  district TEXT NOT NULL,
+    \\  n INTEGER NOT NULL DEFAULT 0,
+    \\  PRIMARY KEY (event_id, player_id, district)
+    \\);
+    \\CREATE INDEX world_event_player_player ON world_event_player(player_id);
+    \\CREATE TABLE world_event_buys (
+    \\  event_id INTEGER NOT NULL REFERENCES world_events(id) ON DELETE CASCADE,
+    \\  player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    \\  sku TEXT NOT NULL,
+    \\  n INTEGER NOT NULL DEFAULT 0,
+    \\  PRIMARY KEY (event_id, player_id, sku)
+    \\);
+    \\CREATE TABLE event_titles (
+    \\  player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    \\  year INTEGER NOT NULL,
+    \\  earned_at INTEGER NOT NULL,
+    \\  PRIMARY KEY (player_id, year)
+    \\);
+    ,
 };
 
 // --- Tests -------------------------------------------------------------------------------------------

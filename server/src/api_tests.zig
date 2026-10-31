@@ -88,6 +88,8 @@ const Harness = struct {
     fn init(h: *Harness, opts: ctx_mod.Options) !void {
         h.ctx = try ctx_mod.Ctx.init(testing.allocator, testing.io, ":memory:", opts);
         h.ctx.clock_ms = wednesday;
+        // The real calendar must not change what a test sees; the event tests start events themselves.
+        h.ctx.opts.events = false;
     }
 
     fn deinit(h: *Harness) void {
@@ -3898,4 +3900,601 @@ test "simulated location: a recently simulated player is not served as an Echo; 
         }
     }
     try testing.expect(real_seen);
+}
+
+// --- Limited-time events (DESIGN.md section 18) ---------------------------------------------------------------
+//
+// The harness turns the real calendar off; these tests start events themselves (dev endpoint) or turn the
+// calendar on with the clock pinned to a known Wednesday, so nothing depends on what the real week holds.
+// `wednesday` is on a 2 h boundary, so every spawn window that starts at or after it is inside an event
+// started then.
+
+const gev = game.events;
+
+fn startEvent(h: *Harness, tok: []const u8, kind: []const u8, hours: i64) !void {
+    var r = try h.ok("/api/dev/event", tok, "{{\"type\":\"{s}\",\"hours\":{d}}}", .{ kind, hours });
+    r.deinit();
+}
+
+fn latestEventId(h: *Harness) !i64 {
+    return (try h.ctx.db.scalar("SELECT MAX(id) FROM world_events", .{})).?;
+}
+
+/// Put `n` contributions for a player into an event, as if they had been made in play.
+fn contribute(h: *Harness, event_id: i64, pid: i64, n: i64) !void {
+    try h.ctx.db.run(
+        "INSERT INTO world_event_player(event_id, player_id, district, n) VALUES(?,?,'dr5r',?) ON CONFLICT(event_id, player_id, district) DO UPDATE SET n = excluded.n",
+        .{ event_id, pid, n },
+    );
+}
+
+fn feedCount(h: *Harness, pid: i64, kind: []const u8) !i64 {
+    return (try h.ctx.db.scalar("SELECT COUNT(*) FROM events WHERE player_id = ? AND type = ?", .{ pid, kind })).?;
+}
+
+/// Win a PvE fight near the base spot (a heal before each try, a new window after a loss).
+fn winSomething(h: *Harness, tok: []const u8) !Res {
+    for (0..12) |_| {
+        const en = findEnemy(h.ctx.seed, h.ctx.now());
+        var w = try h.location(tok, en.lat, en.lon);
+        w.deinit();
+        var heal = try h.ok("/api/dev/heal", tok, "{{}}", .{});
+        heal.deinit();
+        var b = try h.ok("/api/engage", tok, "{{\"id\":\"{s}\"}}", .{en.id().str()});
+        if (std.mem.eql(u8, try b.str("winner"), "a")) return b;
+        b.deinit();
+        h.advance(spawns.enemy_window_ms);
+    }
+    return error.NoWin;
+}
+
+fn eventsList(h: *Harness, tok: []const u8) !Res {
+    return h.get("/api/events", tok);
+}
+
+fn listsId(w: *const Res, path: []const u8, id: []const u8) !bool {
+    for ((try w.at(path)).array.items) |e| {
+        if (std.mem.eql(u8, e.object.get("id").?.string, id)) return true;
+    }
+    return false;
+}
+
+test "events: the calendar makes one row per event, with a goal scaled to the active players" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    h.ctx.opts.events = true;
+    var tok: [64]u8 = undefined;
+    try h.player("Walker", "human", &tok);
+
+    const occ = gev.occurrenceAt(wednesday).?;
+    const def = game.data.eventDef(occ.type);
+    var a = try eventsList(&h, &tok);
+    defer a.deinit();
+    try testing.expectEqualStrings(@tagName(occ.type), try a.str("live.type"));
+    try testing.expectEqual(occ.starts_at, try a.int("live.starts_at"));
+    try testing.expectEqual(occ.ends_at, try a.int("live.ends_at"));
+    // One active player: the goal is the floor, and it is fixed for the event.
+    try testing.expectEqual(@as(i64, 1), try a.int("live.active_players"));
+    try testing.expectEqual(@as(i64, gev.target(def, 1)), try a.int("live.goal.target"));
+    try testing.expectEqual(false, (try a.at("live.admin")).bool);
+    var more: [64]u8 = undefined;
+    try h.player("Second", "zombie", &more);
+    var b = try eventsList(&h, &tok);
+    defer b.deinit();
+    try testing.expectEqual(try a.int("live.id"), try b.int("live.id"));
+    try testing.expectEqual(@as(i64, gev.target(def, 1)), try b.int("live.goal.target"));
+    try testing.expectEqual(@as(i64, 1), (try h.ctx.db.scalar("SELECT COUNT(*) FROM world_events", .{})).?);
+    // The upcoming list leaves out the running one and is in order.
+    try testing.expect(try b.len("upcoming") >= 3);
+    try testing.expect(try b.int("upcoming.0.starts_at") > wednesday);
+    try testing.expect(try b.int("upcoming.0.starts_at") <= try b.int("upcoming.1.starts_at"));
+    // The map poll carries the short form for the banner.
+    var w = try h.location(&tok, base_lat, base_lon);
+    defer w.deinit();
+    try testing.expectEqualStrings(@tagName(occ.type), try w.str("event.type"));
+    try testing.expectEqual(@as(i64, 0), try w.int("event.mine"));
+
+    // A stopped calendar event is not made again.
+    var stop = try h.ok("/api/dev/event_stop", &tok, "{{}}", .{});
+    defer stop.deinit();
+    try testing.expectEqual(@as(i64, 1), try stop.int("stopped"));
+    var c = try eventsList(&h, &tok);
+    defer c.deinit();
+    try testing.expect((try c.at("live")) == .null);
+    try testing.expectEqual(@as(i64, 1), (try h.ctx.db.scalar("SELECT COUNT(*) FROM world_events", .{})).?);
+
+    // The weekend belongs to the raids.
+    h.ctx.clock_ms = saturday;
+    var d = try eventsList(&h, &tok);
+    defer d.deinit();
+    try testing.expect((try d.at("live")) == .null);
+}
+
+test "events: an admin's event starts and stops, replaces the running one, and needs the dev switch" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var tok: [64]u8 = undefined;
+    try h.player("Caller", "human", &tok);
+    var none = try eventsList(&h, &tok);
+    defer none.deinit();
+    try testing.expect((try none.at("live")) == .null);
+
+    var bad = try h.post("/api/dev/event", &tok, "{\"type\":\"nope\"}");
+    defer bad.deinit();
+    try testing.expectEqual(@as(u16, 400), bad.status);
+    try startEvent(&h, &tok, "supply_run", 6);
+    var a = try eventsList(&h, &tok);
+    defer a.deinit();
+    try testing.expectEqualStrings("supply_run", try a.str("live.type"));
+    try testing.expectEqual(true, (try a.at("live.admin")).bool);
+    try testing.expectEqual(wednesday + 6 * 3600_000, try a.int("live.ends_at"));
+    // A second one ends the first.
+    try startEvent(&h, &tok, "echo_week", 2);
+    var b = try eventsList(&h, &tok);
+    defer b.deinit();
+    try testing.expectEqualStrings("echo_week", try b.str("live.type"));
+    try testing.expectEqual(@as(i64, 1), (try h.ctx.db.scalar("SELECT COUNT(*) FROM world_events WHERE ends_at = ?", .{wednesday})).?);
+    var stop = try h.ok("/api/dev/event_stop", &tok, "{{}}", .{});
+    stop.deinit();
+    var c = try eventsList(&h, &tok);
+    defer c.deinit();
+    try testing.expect((try c.at("live")) == .null);
+
+    // Without --dev the endpoints do not exist.
+    var prod: Harness = undefined;
+    try prod.init(.{});
+    defer prod.deinit();
+    var ptok: [64]u8 = undefined;
+    try prod.player("Plain", "human", &ptok);
+    var gone = try prod.post("/api/dev/event", &ptok, "{\"type\":\"horde\"}");
+    defer gone.deinit();
+    try testing.expectEqual(@as(u16, 404), gone.status);
+}
+
+test "events: Supply Run adds caches and a second airdrop, and pays airdrop salvage x1.5" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var tok: [64]u8 = undefined;
+    try h.player("Courier", "human", &tok);
+    try h.reachLevel(&tok, 8);
+    try startEvent(&h, &tok, "supply_run", 6);
+    const ev: spawns.Ev = .{ .type = .supply_run };
+    const seed = h.ctx.seed;
+
+    // The second drop of the base region exists only under the event; once it lands it is on the map.
+    const region = geo.encode(base_lat, base_lon, 5);
+    const aw = spawns.windowIndex(h.ctx.now(), spawns.airdrop_window_ms);
+    const drop = spawns.airdropN(seed, region, aw, 1);
+    try testing.expect(spawns.hasExtraAirdrop(aw, region, ev) and !spawns.hasExtraAirdrop(aw, region, null));
+    h.ctx.clock_ms = drop.starts_at + 60_000;
+    const id = drop.id();
+    var w = try h.location(&tok, drop.lat, drop.lon);
+    defer w.deinit();
+    try testing.expect(try listsId(&w, "caches", id.str()));
+
+    // A cache the ordinary rolls leave out is there under the event. (Three minutes on, so the
+    // last fix has expired and the next one is not a jump.)
+    h.advance(3 * 60_000);
+    var cell = geo.encode(base_lat, base_lon, 7);
+    const cw = spawns.windowIndex(h.ctx.now(), spawns.cache_window_ms);
+    while (spawns.cache(seed, cell, cw) != null or spawns.cacheWith(seed, cell, cw, ev) == null) cell = geo.neighbors(cell)[2].?;
+    const extra = spawns.cacheWith(seed, cell, cw, ev).?;
+    const cid = extra.id();
+    var w2 = try h.location(&tok, extra.lat, extra.lon);
+    defer w2.deinit();
+    try testing.expect(try listsId(&w2, "caches", cid.str()));
+
+    // Opening the airdrop: its salvage is the roll x1.5, and it counts for the goal.
+    h.advance(3 * 60_000);
+    var w3 = try h.location(&tok, drop.lat, drop.lon);
+    w3.deinit();
+    const pid = try h.playerId("Courier");
+    var lrng = game.rng.Rng.init(game.rng.hash(seed, .{ "open", pid, @as([]const u8, id.str()), h.ctx.now() }));
+    const rolled = game.loot.rollAirdrop(&lrng, 8, 1.0);
+    var opened = try h.ok("/api/open", &tok, "{{\"id\":\"{s}\"}}", .{id.str()});
+    defer opened.deinit();
+    try testing.expectEqual(@as(i64, @intFromFloat(@round(@as(f32, @floatFromInt(rolled.salvage)) * 1.5))), try opened.int("loot.salvage"));
+    var after = try eventsList(&h, &tok);
+    defer after.deinit();
+    try testing.expectEqual(@as(i64, 1), try after.int("live.goal.progress"));
+    try testing.expectEqual(@as(i64, 1), try after.int("live.mine.n"));
+}
+
+test "events: the second airdrop does not exist once the event is over" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var tok: [64]u8 = undefined;
+    try h.player("Late", "human", &tok);
+    try h.reachLevel(&tok, 8);
+    try startEvent(&h, &tok, "supply_run", 1);
+    const region = geo.encode(base_lat, base_lon, 5);
+    // Two hours on, in the next airdrop window, nobody started an event: no second drop, and its id is refused.
+    h.advance(2 * 3600_000);
+    const aw = spawns.windowIndex(h.ctx.now(), spawns.airdrop_window_ms);
+    const drop = spawns.airdropN(h.ctx.seed, region, aw, 1);
+    h.ctx.clock_ms = drop.starts_at + 60_000;
+    var w = try h.location(&tok, drop.lat, drop.lon);
+    defer w.deinit();
+    const id = drop.id();
+    try testing.expect(!(try listsId(&w, "caches", id.str())));
+    var open = try h.postf("/api/open", &tok, "{{\"id\":\"{s}\"}}", .{id.str()});
+    defer open.deinit();
+    try testing.expectEqual(@as(u16, 404), open.status);
+}
+
+test "events: Blood Moon surges elites at night and pays elite XP x1.5" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var tok: [64]u8 = undefined;
+    try h.player("Moonlit", "human", &tok);
+    try h.reachLevel(&tok, 8);
+    try startEvent(&h, &tok, "blood_moon", 6);
+    const seed = h.ctx.seed;
+    const ev: spawns.Ev = .{ .type = .blood_moon };
+    const window = spawns.windowIndex(h.ctx.now(), spawns.enemy_window_ms);
+
+    // 170 E at 12:00 UTC is 23:20 local. Find an enemy the event turns elite.
+    var cell = geo.encode(40.0, 170.0, 7);
+    var target: spawns.Enemy = undefined;
+    search: while (true) : (cell = geo.neighbors(cell)[2].?) {
+        var bb: [spawns.max_enemies_per_cell]spawns.Enemy = undefined;
+        var eb: [spawns.max_enemies_per_cell]spawns.Enemy = undefined;
+        const base = spawns.enemiesInCell(seed, cell, window, &bb);
+        const with = spawns.enemiesInCellWith(seed, cell, window, &eb, ev);
+        for (base, with) |b, e| {
+            if (e.elite and !b.elite) {
+                target = e;
+                break :search;
+            }
+        }
+    }
+    var w = try h.location(&tok, target.lat, target.lon);
+    defer w.deinit();
+    var seen_elite = false;
+    for ((try w.at("enemies")).array.items) |e| {
+        if (std.mem.eql(u8, e.object.get("id").?.string, target.id().str())) seen_elite = e.object.get("elite").?.bool;
+    }
+    try testing.expect(seen_elite);
+
+    var heal = try h.ok("/api/dev/heal", &tok, "{{}}", .{});
+    heal.deinit();
+    var b = try h.ok("/api/engage", &tok, "{{\"id\":\"{s}\"}}", .{target.id().str()});
+    defer b.deinit();
+    const lvl: u32 = @intCast(try b.int("b.level"));
+    const base_xp = game.progression.pveWinXp(lvl, .elite, game.data.archetype(target.archetype).reward_mult);
+    const win_xp: u32 = @intFromFloat(@round(@as(f32, @floatFromInt(base_xp)) * game.daynight.pveXpMult(.human, true) * 1.5));
+    const won = std.mem.eql(u8, try b.str("winner"), "a");
+    try testing.expectEqual(@as(i64, if (won) win_xp else game.progression.pveLossXp(win_xp)), try b.int("rewards.xp"));
+    var after = try eventsList(&h, &tok);
+    defer after.deinit();
+    try testing.expectEqual(@as(i64, @intFromBool(won)), try after.int("live.goal.progress"));
+}
+
+test "events: the swarm fills the map with one kind, and winning it counts for the goal" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var tok: [64]u8 = undefined;
+    try h.player("Hunter", "human", &tok);
+    try h.reachLevel(&tok, 12);
+    var r = try h.ok("/api/dev/event", &tok, "{{\"type\":\"horde\",\"hours\":6,\"kind\":\"brute\"}}", .{});
+    r.deinit();
+    const seed = h.ctx.seed;
+    const ev: spawns.Ev = .{ .type = .horde, .param = @intFromEnum(game.data.Archetype.brute) };
+    const window = spawns.windowIndex(h.ctx.now(), spawns.enemy_window_ms);
+
+    // Count the kind over a stretch of the map with and without the event.
+    var cell = geo.encode(base_lat, base_lon, 7);
+    var with_brutes: u32 = 0;
+    var base_brutes: u32 = 0;
+    var with_total: u32 = 0;
+    var base_total: u32 = 0;
+    var pick: ?spawns.Enemy = null;
+    for (0..400) |_| {
+        var bb: [spawns.max_enemies_per_cell]spawns.Enemy = undefined;
+        var eb: [spawns.max_enemies_per_cell]spawns.Enemy = undefined;
+        for (spawns.enemiesInCell(seed, cell, window, &bb)) |e| {
+            base_total += 1;
+            if (e.archetype == .brute) base_brutes += 1;
+        }
+        for (spawns.enemiesInCellWith(seed, cell, window, &eb, ev)) |e| {
+            with_total += 1;
+            if (e.archetype == .brute) with_brutes += 1;
+            if (pick == null and e.archetype == .brute and !e.elite) pick = e;
+        }
+        cell = geo.neighbors(cell)[2].?;
+    }
+    // About 12% brutes normally; with the swarm, 60% of the enemies are replaced by the kind.
+    try testing.expect(@as(f64, @floatFromInt(base_brutes)) / @as(f64, @floatFromInt(base_total)) < 0.2);
+    try testing.expect(@as(f64, @floatFromInt(with_brutes)) / @as(f64, @floatFromInt(with_total)) > 0.5);
+
+    var heal = try h.ok("/api/dev/heal", &tok, "{{}}", .{});
+    heal.deinit();
+    const e = pick.?;
+    var w = try h.location(&tok, e.lat, e.lon);
+    defer w.deinit();
+    var b = try h.ok("/api/engage", &tok, "{{\"id\":\"{s}\"}}", .{e.id().str()});
+    defer b.deinit();
+    var after = try eventsList(&h, &tok);
+    defer after.deinit();
+    const won = std.mem.eql(u8, try b.str("winner"), "a");
+    try testing.expectEqual(@as(i64, @intFromBool(won)), try after.int("live.goal.progress"));
+    try testing.expectEqualStrings("brute", try after.str("live.kind"));
+}
+
+test "events: Last Light counts war points double and they count for the goal" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var tok: [64]u8 = undefined;
+    try h.player("Dawn", "human", &tok);
+    try h.reachLevel(&tok, 12);
+    try startEvent(&h, &tok, "last_light", 12);
+    var b = try winSomething(&h, &tok);
+    defer b.deinit();
+    // A normal PvE win is 1 war point; the event doubles it.
+    try testing.expectEqual(@as(i64, 2), try b.int("rewards.war_points"));
+    var a = try eventsList(&h, &tok);
+    defer a.deinit();
+    try testing.expectEqual(@as(i64, 2), try a.int("live.goal.progress"));
+    try testing.expectEqual(@as(i64, 2), try a.int("live.mine.n"));
+    try testing.expect((try a.at("live.district")) != .null);
+    try testing.expectEqual(@as(i64, 2), try a.int("live.district.progress"));
+    var war = try h.get("/api/war", &tok);
+    defer war.deinit();
+    try testing.expectEqual(@as(i64, 2), try war.int("my_points"));
+}
+
+test "events: reaching the goal pays each participant once, at the end, with the cosmetic" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var tok: [64]u8 = undefined;
+    var idle: [64]u8 = undefined;
+    var small: [64]u8 = undefined;
+    try h.player("Giver", "human", &tok);
+    try h.reachLevel(&tok, 2); // the Store opens at 2
+    try h.player("Idler", "zombie", &idle);
+    try h.player("Drop_In", "human", &small);
+    try startEvent(&h, &tok, "echo_week", 4);
+    const id = try latestEventId(&h);
+    const giver = try h.playerId("Giver");
+    // Giver gave enough for silver (6 Echoes), Drop_In not enough for anything, Idler nothing.
+    try contribute(&h, id, giver, 7);
+    try contribute(&h, id, try h.playerId("Drop_In"), 1);
+    try h.ctx.db.run("UPDATE world_events SET progress = target WHERE id = ?", .{id});
+    var me0 = try h.get("/api/me", &tok);
+    defer me0.deinit();
+    const before = try me0.int("salvage");
+
+    // Nothing is paid while it runs.
+    var mid = try eventsList(&h, &tok);
+    mid.deinit();
+    try testing.expectEqual(@as(i64, 0), try feedCount(&h, giver, "event_reward"));
+
+    h.advance(5 * 3600_000);
+    var after = try eventsList(&h, &tok);
+    defer after.deinit();
+    try testing.expect((try after.at("live")) == .null);
+    try testing.expectEqual(@as(i64, 1), try feedCount(&h, giver, "event_reward"));
+    try testing.expectEqual(@as(i64, 0), try feedCount(&h, try h.playerId("Drop_In"), "event_reward"));
+    try testing.expectEqual(@as(i64, 0), try feedCount(&h, try h.playerId("Idler"), "event_reward"));
+
+    // Delivered through the poll with the rewards and the unlock.
+    var w = try h.location(&tok, base_lat, base_lon);
+    defer w.deinit();
+    var found: ?Value = null;
+    for ((try w.at("events")).array.items) |e| {
+        if (std.mem.eql(u8, e.object.get("type").?.string, "event_reward")) found = e;
+    }
+    const ev = found.?.object;
+    try testing.expectEqual(@as(i64, 700), ev.get("rewards").?.object.get("salvage").?.integer);
+    const unlock = ev.get("rewards").?.object.get("unlocks").?.array.items[0].object;
+    try testing.expectEqualStrings("frame_echo", unlock.get("id").?.string);
+    try testing.expectEqualStrings("frame", unlock.get("kind").?.string);
+    try testing.expectEqualStrings("Static", unlock.get("name").?.string);
+
+    var me1 = try h.get("/api/me", &tok);
+    defer me1.deinit();
+    try testing.expectEqual(before + 700, try me1.int("salvage"));
+    try testing.expect(try hasId(&me1, "cosmetics.owned", "frame_echo"));
+    var wear = try h.ok("/api/cosmetics/equip", &tok, "{{\"kind\":\"frame\",\"id\":\"frame_echo\"}}", .{});
+    defer wear.deinit();
+    try testing.expectEqualStrings("frame_echo", try wear.str("me.cosmetics.frame"));
+    // Not for sale, either.
+    var buy = try h.post("/api/store/buy", &tok, "{\"sku\":\"frame_echo\"}");
+    defer buy.deinit();
+    try testing.expectEqualStrings("not_for_sale", try buy.errorCode());
+
+    // Exactly once: another read, the minute tick, and a later request change nothing.
+    var again = try eventsList(&h, &tok);
+    again.deinit();
+    tick.runLocked(&h.ctx, h.ctx.now());
+    h.advance(61_000);
+    tick.runLocked(&h.ctx, h.ctx.now());
+    var me2 = try h.get("/api/me", &tok);
+    defer me2.deinit();
+    try testing.expectEqual(before + 700, try me2.int("salvage"));
+    try testing.expectEqual(@as(i64, 1), try feedCount(&h, giver, "event_reward"));
+    var d = try h.get("/api/me", &small);
+    defer d.deinit();
+    try testing.expect(!(try hasId(&d, "cosmetics.owned", "frame_echo")));
+}
+
+test "events: the minute tick pays an ended event too, and a missed goal pays half with no cosmetic" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var tok: [64]u8 = undefined;
+    try h.player("Tryer", "zombie", &tok);
+    try startEvent(&h, &tok, "blood_moon", 2);
+    const id = try latestEventId(&h);
+    const pid = try h.playerId("Tryer");
+    try contribute(&h, id, pid, 11); // silver by contribution, but the goal is not met
+    var me0 = try h.get("/api/me", &tok);
+    defer me0.deinit();
+    const before = try me0.int("salvage");
+    h.advance(3 * 3600_000);
+    tick.runLocked(&h.ctx, h.ctx.now());
+    try testing.expectEqual(@as(i64, 1), try feedCount(&h, pid, "event_reward"));
+    var me1 = try h.get("/api/me", &tok);
+    defer me1.deinit();
+    try testing.expectEqual(before + 350, try me1.int("salvage"));
+    try testing.expect(!(try hasId(&me1, "cosmetics.owned", "color_bloodmoon")));
+    // A goal reached in the player's own district counts for them even if the world's was missed.
+    try startEvent(&h, &tok, "blood_moon", 2);
+    const id2 = try latestEventId(&h);
+    try contribute(&h, id2, pid, 11);
+    try h.ctx.db.run("INSERT INTO world_event_district(event_id, district, active_players, target, progress) VALUES(?,'dr5r',1,10,10)", .{id2});
+    h.advance(3 * 3600_000);
+    tick.runLocked(&h.ctx, h.ctx.now());
+    var me2 = try h.get("/api/me", &tok);
+    defer me2.deinit();
+    try testing.expectEqual(before + 350 + 700, try me2.int("salvage"));
+    try testing.expect(try hasId(&me2, "cosmetics.owned", "color_bloodmoon"));
+}
+
+test "events: the monthly event pays a yearly title once, and a Rare or better item at gold" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var tok: [64]u8 = undefined;
+    try h.player("Veteran", "zombie", &tok);
+    const pid = try h.playerId("Veteran");
+    var items_before: usize = 0;
+    for (0..2) |round| {
+        try startEvent(&h, &tok, "day_zero", 2);
+        const id = try latestEventId(&h);
+        try contribute(&h, id, pid, 250);
+        try h.ctx.db.run("UPDATE world_events SET progress = target WHERE id = ?", .{id});
+        h.advance(3 * 3600_000);
+        var l = try eventsList(&h, &tok);
+        l.deinit();
+        var me = try h.get("/api/me", &tok);
+        defer me.deinit();
+        // The same year's title is not issued twice.
+        try testing.expectEqual(@as(usize, 1), try me.len("titles_extra"));
+        try testing.expectEqualStrings("Of the Turning 2026", try me.str("titles_extra.0"));
+        try testing.expect(try hasId(&me, "cosmetics.owned", "frame_dayzero"));
+        try testing.expectEqual(@as(i64, @intCast(round + 1)), try feedCount(&h, pid, "event_reward"));
+        // Gold pays an item every time (the starter kit is three).
+        const n_items = try me.len("items");
+        if (round == 0) try testing.expect(n_items >= 4) else try testing.expect(n_items > items_before);
+        items_before = n_items;
+    }
+    var human: [64]u8 = undefined;
+    try h.player("Survivor", "human", &human);
+    try startEvent(&h, &human, "day_zero", 2);
+    try contribute(&h, try latestEventId(&h), try h.playerId("Survivor"), 250);
+    try h.ctx.db.run("UPDATE world_events SET progress = target WHERE id = ?", .{try latestEventId(&h)});
+    h.advance(3 * 3600_000);
+    var l = try eventsList(&h, &human);
+    l.deinit();
+    var hm = try h.get("/api/me", &human);
+    defer hm.deinit();
+    try testing.expectEqualStrings("Day Zero Survivor 2026", try hm.str("titles_extra.0"));
+}
+
+test "events: the Exchange is open only while an event is live, from level 10, with per-event limits" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var tok: [64]u8 = undefined;
+    try h.player("Trader", "human", &tok);
+    var gr = try h.ok("/api/dev/grant", &tok, "{{\"salvage\":40000}}", .{});
+    gr.deinit();
+    var closed = try h.post("/api/events/exchange", &tok, "{\"sku\":\"ex_crate\"}");
+    defer closed.deinit();
+    try testing.expectEqualStrings("no_event", try closed.errorCode());
+
+    try startEvent(&h, &tok, "supply_run", 6);
+    var low = try h.post("/api/events/exchange", &tok, "{\"sku\":\"ex_crate\"}");
+    defer low.deinit();
+    try testing.expectEqualStrings("locked", try low.errorCode());
+    try h.reachLevel(&tok, 12);
+
+    var list = try eventsList(&h, &tok);
+    defer list.deinit();
+    try testing.expectEqual(true, (try list.at("exchange.open")).bool);
+    try testing.expectEqual(game.data.event_exchange.len, try list.len("exchange.items"));
+    var unknown = try h.post("/api/events/exchange", &tok, "{\"sku\":\"heal_s\"}");
+    defer unknown.deinit();
+    try testing.expectEqual(@as(u16, 404), unknown.status);
+
+    var me0 = try h.get("/api/me", &tok);
+    defer me0.deinit();
+    const start_salvage = try me0.int("salvage");
+    // Priority Requisition: five a head, one item each, Uncommon or better.
+    for (0..5) |_| {
+        var r = try h.ok("/api/events/exchange", &tok, "{{\"sku\":\"ex_requisition\"}}", .{});
+        defer r.deinit();
+        try testing.expectEqual(@as(usize, 1), try r.len("rewards.items"));
+        try testing.expect(!std.mem.eql(u8, try r.str("rewards.items.0.rarity"), "common"));
+    }
+    var sold = try h.post("/api/events/exchange", &tok, "{\"sku\":\"ex_requisition\"}");
+    defer sold.deinit();
+    try testing.expectEqualStrings("sold_out", try sold.errorCode());
+    // The Event Crate: Rare or better, two consumables; two a head.
+    for (0..2) |_| {
+        var r = try h.ok("/api/events/exchange", &tok, "{{\"sku\":\"ex_crate\"}}", .{});
+        defer r.deinit();
+        const rarity = try r.str("rewards.items.0.rarity");
+        try testing.expect(std.mem.eql(u8, rarity, "rare") or std.mem.eql(u8, rarity, "legendary"));
+        var n: i64 = 0;
+        var it = (try r.at("rewards.consumables")).object.iterator();
+        while (it.next()) |kv| n += kv.value_ptr.integer;
+        try testing.expectEqual(@as(i64, 2), n);
+    }
+    var sold2 = try h.post("/api/events/exchange", &tok, "{\"sku\":\"ex_crate\"}");
+    defer sold2.deinit();
+    try testing.expectEqualStrings("sold_out", try sold2.errorCode());
+
+    // The cosmetic variants: bought here, never in the Store, owned once.
+    var store = try h.post("/api/store/buy", &tok, "{\"sku\":\"color_gilt\"}");
+    defer store.deinit();
+    try testing.expectEqualStrings("not_for_sale", try store.errorCode());
+    var gilt = try h.ok("/api/events/exchange", &tok, "{{\"sku\":\"color_gilt\"}}", .{});
+    defer gilt.deinit();
+    try testing.expectEqualStrings("color_gilt", try gilt.str("rewards.unlocks.0.id"));
+    try testing.expect(try hasId(&gilt, "me.cosmetics.owned", "color_gilt"));
+    var again = try h.post("/api/events/exchange", &tok, "{\"sku\":\"color_gilt\"}");
+    defer again.deinit();
+    try testing.expect(std.mem.eql(u8, try again.errorCode(), "sold_out") or std.mem.eql(u8, try again.errorCode(), "owned"));
+    var wear = try h.ok("/api/cosmetics/equip", &tok, "{{\"kind\":\"color\",\"id\":\"color_gilt\"}}", .{});
+    defer wear.deinit();
+    // Salvage went down by the prices (achievements may add a little back).
+    var me1 = try h.get("/api/me", &tok);
+    defer me1.deinit();
+    const spent = start_salvage - try me1.int("salvage");
+    try testing.expect(spent <= 5 * 1200 + 2 * 4000 + 6000 and spent > 5 * 1200 + 2 * 4000 + 6000 - 1500);
+
+    // Over: closed again, and the next event starts the limits afresh.
+    h.advance(7 * 3600_000);
+    var over = try h.post("/api/events/exchange", &tok, "{\"sku\":\"ex_crate\"}");
+    defer over.deinit();
+    try testing.expectEqualStrings("no_event", try over.errorCode());
+    try startEvent(&h, &tok, "horde", 6);
+    var fresh = try h.ok("/api/events/exchange", &tok, "{{\"sku\":\"ex_crate\"}}", .{});
+    fresh.deinit();
+}
+
+test "events: the catalog carries the events, their numbers and the Exchange" {
+    var h: Harness = undefined;
+    try h.init(.{});
+    defer h.deinit();
+    var cat = try h.get("/api/catalog", null);
+    defer cat.deinit();
+    try testing.expectEqual(game.data.events.len, try cat.len("events"));
+    try testing.expectEqualStrings("Blood Moon", try cat.str("events.0.names.human"));
+    try testing.expectEqualStrings("The Red Feast", try cat.str("events.0.names.zombie"));
+    try testing.expectEqual(@as(i64, 10), try cat.int("events.0.per_player"));
+    try testing.expectEqual(@as(usize, 3), try cat.len("events.0.tiers"));
+    try testing.expectEqual(game.data.event_exchange.len, try cat.len("event_exchange.items"));
+    try testing.expectEqual(@as(i64, 10), try cat.int("event_exchange.min_level"));
+    try testing.expect(try hasEntry(&cat, "cosmetics", "id", "color_gilt"));
 }
