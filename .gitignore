@@ -1,28 +1,24 @@
-# Zig build artifacts
-zig-out/
+# Zig
 .zig-cache/
+zig-out/
 zig-pkg/
-/outbreak.journal*
 
-# Local-only: design and governing documents. Not published.
-/OPENING.md
-/THE_RULESET.md
-/FRONTEND_RULESET.md
-/VISION.md
-/MVP.md
-/CURRENT.md
-/DESIGN_PHILOSOPHY.md
-/GAME_DESIGN.md
-/EXPERIENCE_DESIGN.md
-/ROADMAP.md
-*.docx
+# Node / client
+node_modules/
+client/dist/
+*.log
 
-# Local-only: reference material and scratch notes
-/multi_array_list.zig
-/Ast_extract_zig.txt
-/To_compile_zig
-/Zig_References
-/outbreak-prototype.html
-/outbreak-sonar-mock.html
-/outbreak-terminal-mock.html
-/BATTERY_MEASUREMENT.md
+# Server runtime data
+server/data/
+*.db
+*.db-wal
+*.db-shm
+
+# Local-only reference: superseded design notes from earlier iterations
+docs/archive/
+
+# Android signing
+*.keystore
+*.jks
+keystore.properties
+.claude/settings.local.json
