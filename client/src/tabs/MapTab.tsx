@@ -17,6 +17,7 @@ import { coachDone, recordCache } from '../state/record';
 import { enqueueLevelUp } from '../battle/session';
 import type { PlaceKind, Rewards, WorldEnemy, WorldLandmark } from '../api';
 import { clock } from '../shell/Vitals';
+import { PatrolButton } from '../patrol/PatrolButton';
 
 type Result = { kind: 'loot'; loot: Rewards } | { kind: 'note'; text: string };
 
@@ -179,6 +180,7 @@ export function MapTab() {
       <button class="map-fab" aria-pressed={follow.value} aria-label="Center on me" onClick={() => { follow.value = true; }}>
         <Icon name="gps" size={28} />
       </button>
+      {!obj && !result && <PatrolButton />}
       {obj && !result && <ObjectSheet key={obj.id} o={obj} onClose={() => { selectedId.value = null; }} onResult={setResult} />}
       {result && <ResultSheet result={result} onClose={() => { setResult(null); selectedId.value = null; }} />}
     </>

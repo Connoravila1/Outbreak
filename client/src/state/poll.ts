@@ -9,6 +9,8 @@ import { pushToast } from '../ui/kit';
 import { battleActive, enqueueBattle, enqueueLevelUp } from '../battle/session';
 import { showRewards } from '../ui/RewardsSheet';
 import { say } from '../ui/voice';
+import { recordBattle } from './record';
+import { addToReport, AWAY_MS } from '../patrol/PatrolReport';
 
 export const inSanctuary = signal(false);
 export const pollError = signal<string | null>(null);
@@ -31,7 +33,11 @@ async function tick() {
     pollError.value = null;
     // A contact interrupts everything; take it before the HP numbers move so the fight is not spoiled.
     for (const ev of w.events) {
-      if (ev.type === 'contact' && ev.battle) enqueueBattle(ev.battle, true);
+      if (w.now - ev.at > AWAY_MS) {
+        // Happened while the app was closed (Patrol): listed in "While you were patrolling" instead of taking over the screen.
+        if (ev.type === 'contact' && ev.battle) recordBattle(ev.battle, true);
+        addToReport([ev]);
+      } else if (ev.type === 'contact' && ev.battle) enqueueBattle(ev.battle, true);
       else if (ev.type === 'level_up' && ev.rewards?.level_up) {
         // Gained while walking (or from an item): same takeover as a fight, with the fresh Me.
         const up = ev.rewards.level_up;

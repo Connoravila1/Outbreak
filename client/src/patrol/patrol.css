@@ -1,0 +1,42 @@
+/* ----- Patrol control on the map ----- */
+.patrol-btn {
+  position: absolute; right: calc(var(--sa-right) + 12px); bottom: 82px; z-index: 8;
+  min-width: 96px; min-height: 44px; padding: 4px 14px; display: grid; justify-items: center; align-content: center; gap: 0;
+  font-weight: 800; font-size: var(--fs-14); letter-spacing: .1em; text-transform: uppercase; cursor: pointer;
+  color: var(--text); background: var(--surface); border: 2px solid var(--text); border-radius: 6px;
+}
+:root[data-lens='survey'] .patrol-btn {
+  color: var(--ink); border-color: var(--ink);
+  background: repeating-linear-gradient(-45deg, var(--hazard, #F2BE1A) 0 10px, var(--ink, #1F2326) 10px 20px);
+}
+:root[data-lens='survey'] .patrol-btn .pb-name,
+:root[data-lens='survey'] .patrol-btn .pb-left { background: var(--hazard, #F2BE1A); padding: 0 6px; border-radius: 2px; }
+:root[data-lens='heat'] .patrol-btn { text-transform: lowercase; letter-spacing: .12em; border-radius: 999px; border-color: var(--vein); box-shadow: 0 0 18px color-mix(in srgb, var(--warm) 40%, transparent); }
+.patrol-btn .pb-left { font-size: var(--fs-12); font-weight: 700; letter-spacing: .04em; }
+.patrol-btn.on { animation: patrol-pulse 1.8s ease-in-out infinite; }
+:root[data-lens='heat'] .patrol-btn.on { background: var(--accent); color: var(--accent-ink); }
+@keyframes patrol-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--hazard, #F2BE1A) 70%, transparent); }
+  50% { box-shadow: 0 0 0 10px color-mix(in srgb, var(--hazard, #F2BE1A) 0%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) { .patrol-btn.on { animation: none; outline: 3px solid var(--hazard, #F2BE1A); } }
+:root[data-motion='reduced'] .patrol-btn.on { animation: none; outline: 3px solid var(--hazard, #F2BE1A); }
+
+/* ----- Patrol sheet and report ----- */
+.pt-title { margin: 0 0 8px; font-size: var(--fs-24, 24px); }
+.pt-line { margin: 6px 0; font-size: var(--fs-16); }
+.pt-line.dim { color: var(--text-dim); font-size: var(--fs-14); }
+.pt-warn { margin: 10px 0; padding: 8px 12px; font-size: var(--fs-14); border: 1.5px solid var(--danger); border-radius: 6px; }
+.pt-ok { display: flex; gap: 6px; align-items: center; margin: 10px 0; font-weight: 700; }
+.pt-durs { display: flex; gap: 8px; margin: 14px 0 4px; }
+.pt-dur {
+  flex: 1; min-height: 44px; font-weight: 700; font-size: var(--fs-14); color: var(--text); background: var(--surface-2);
+  border: 2px solid var(--line); border-radius: 6px; cursor: pointer;
+}
+.pt-dur.on { border-color: var(--text); background: var(--accent); color: var(--accent-ink); }
+:root[data-lens='heat'] .pt-dur { border-radius: 999px; text-transform: lowercase; }
+.pt-list { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 8px; }
+.pt-item { display: flex; gap: 10px; align-items: center; justify-content: space-between; padding: 10px; background: var(--surface-2); border-radius: 6px; }
+.pt-item .pt-text { display: grid; min-width: 0; font-size: var(--fs-14); }
+.pt-item .pt-text small { color: var(--text-dim); font-size: var(--fs-12); }
+.pt-item .btn { flex: none; }

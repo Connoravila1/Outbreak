@@ -22,6 +22,8 @@ import { setUnauthorizedHandler, setToken } from './api';
 import { Icon } from './ui/Icon';
 import { ServerAddress } from './onboarding/ServerAddress';
 import { isNative } from './native/platform';
+import { PatrolSheet } from './patrol/PatrolSheet';
+import { PatrolReport } from './patrol/PatrolReport';
 import './shell/shell.css';
 
 const bootError = signal<string | null>(null);
@@ -59,6 +61,8 @@ function Shell() {
       <RewardsSheet />
       <BattleHost />
       <GuestNudge />
+      <PatrolSheet />
+      <PatrolReport />
     </div>
   );
 }

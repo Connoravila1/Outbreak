@@ -6,7 +6,7 @@ import { pollNow } from '../state/poll';
 
 /** One full-screen thing the player has to get through: a CONTACT + fight, a fight, or a level-up. */
 export type Session =
-  | { key: number; kind: 'battle'; battle: Battle; contact: boolean }
+  | { key: number; kind: 'battle'; battle: Battle; contact: boolean; replay: boolean }
   | { key: number; kind: 'levelup'; up: NonNullable<Rewards['level_up']>; me: Me };
 
 export const queue = signal<Session[]>([]);
@@ -15,8 +15,9 @@ let key = 1;
 
 export function battleActive(): boolean { return queue.peek().length > 0; }
 
-export function enqueueBattle(battle: Battle, contact = false) {
-  queue.value = [...queue.peek(), { key: key++, kind: 'battle', battle, contact }];
+/** `replay`: a fight already settled (a Patrol report entry); watching it changes nothing. */
+export function enqueueBattle(battle: Battle, contact = false, replay = false) {
+  queue.value = [...queue.peek(), { key: key++, kind: 'battle', battle, contact, replay }];
 }
 
 /** A level-up that did not come from a fight (mission claim, cache, store). */
@@ -29,7 +30,9 @@ export function finishBattle() {
   const s = queue.peek()[0];
   if (!s) return;
   const rest = queue.peek().slice(1);
-  if (s.kind === 'battle') {
+  if (s.kind === 'battle' && s.replay) {
+    queue.value = rest;
+  } else if (s.kind === 'battle') {
     applyMe(s.battle.me);
     recordBattle(s.battle, s.contact);
     const up = s.battle.rewards.level_up;

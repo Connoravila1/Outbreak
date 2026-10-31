@@ -1,6 +1,7 @@
 import { signal, computed, effect } from '@preact/signals';
 import { api, ApiError, getServerUrl, getToken, setToken, type Battle, type Catalog, type Faction, type GameEvent, type Me, type WorldView } from '../api';
 import { KEYS, storage, wipeLocal } from '../api/storage';
+import { stopPatrol } from '../native/patrol';
 import { isNative } from '../native/platform';
 
 export type Lens = 'neutral' | 'survey' | 'heat';
@@ -65,6 +66,7 @@ export async function boot() {
 
 /** Forget this device's session and per-player settings (the server address stays), then restart at first launch. */
 export function signOut() {
+  void stopPatrol();
   setToken(null);
   wipeLocal();
   me.value = null;

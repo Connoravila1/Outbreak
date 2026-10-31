@@ -1,4 +1,4 @@
-import { useState } from 'preact/hooks';
+import { useEffect, useState } from 'preact/hooks';
 import { api, errorMessage, getServerUrl, setServerUrl, KEYS } from '../api';
 import { soundOn, hapticsOn, reducedMotion, setSetting } from '../state/store';
 import { simActive, setSimActive, isDesktop } from '../location';
@@ -10,6 +10,8 @@ import { Account } from './Account';
 import { unlockAudio } from '../audio/fx';
 import { VolumeSliders } from '../audio/VolumeSliders';
 import { isNative } from '../native/platform';
+import { patrolStatus, refreshPatrol, stopPatrol } from '../native/patrol';
+import { patrolSheetOpen } from '../patrol/PatrolSheet';
 
 function Toggle({ label, hint, checked, onChange }: { label: string; hint?: string; checked: boolean; onChange: (v: boolean) => void }) {
   return (
@@ -17,6 +19,24 @@ function Toggle({ label, hint, checked, onChange }: { label: string; hint?: stri
       <span class="tg-text"><span>{label}</span>{hint && <small class="dim">{hint}</small>}</span>
       <input type="checkbox" checked={checked} onChange={(e) => onChange((e.target as HTMLInputElement).checked)} />
     </label>
+  );
+}
+
+/** Patrol on/off. Turning it on opens the same sheet as the map button (duration, permissions). */
+function PatrolToggle() {
+  useEffect(() => { void refreshPatrol(); }, []);
+  if (!isNative) {
+    return <p class="dim lab">{say('Patrol mode needs the phone app.', 'roaming needs the phone app.')}</p>;
+  }
+  void patrolSheetOpen.value; // re-render when the sheet closes, so a cancelled switch snaps back
+  const on = !!patrolStatus.value?.active;
+  return (
+    <Toggle
+      label={say('Patrol', 'roam')}
+      hint={say('Keep playing with the app closed. Results arrive as notifications. Uses some battery.', 'stay out there with the screen dark. you hear about it after.')}
+      checked={on}
+      onChange={(v) => { if (v) patrolSheetOpen.value = true; else void stopPatrol(); }}
+    />
   );
 }
 
@@ -55,6 +75,7 @@ export function Settings() {
       {soundOn.value && <VolumeSliders />}
       <Toggle label={say('Haptics', 'touch')} checked={hapticsOn.value} onChange={(v) => setSetting(hapticsOn, KEYS.haptics, v)} />
       <Toggle label={say('Reduce motion', 'still')} hint={say('Overrides your device setting. No screen shake, no breathing.', 'no shaking. no breathing.')} checked={reducedMotion.value} onChange={(v) => setSetting(reducedMotion, KEYS.reducedMotion, v)} />
+      <PatrolToggle />
       {!isNative && <Toggle label={say('GPS simulator', 'fake steps')} hint={isDesktop() ? undefined : say('For testing without walking.', 'for testing.')} checked={simActive.value} onChange={setSimActive} />}
 
       <div class="set-actions">

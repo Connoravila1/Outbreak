@@ -6,6 +6,7 @@ import { phase } from '../state/store';
 import { handleBack } from '../ui/back';
 import { scheduleDailyReset, watchDowned } from './notify';
 import { isNative } from './platform';
+import { refreshPatrol } from './patrol';
 
 const quiet = (p: Promise<unknown>) => { void p.catch(() => undefined); };
 
@@ -28,5 +29,5 @@ export function initNative() {
 
   watchDowned();
   void scheduleDailyReset();
-  void App.addListener('resume', () => { void scheduleDailyReset(); });
+  void App.addListener('resume', () => { void scheduleDailyReset(); void refreshPatrol(); });
 }
