@@ -1,12 +1,18 @@
 import { useState } from 'preact/hooks';
 import { api, errorMessage } from '../api';
-import { applyMe, catalog, faction, me } from '../state/store';
+import { applyMe, catalog, faction, lens, me } from '../state/store';
 import { say } from '../ui/voice';
 import { Icon } from '../ui/Icon';
 import { Action, ErrorLine, pushToast, Section } from '../ui/kit';
 import { showRewards } from '../ui/RewardsSheet';
 import { enqueueLevelUp } from '../battle/session';
 import { purchase } from '../audio/fx';
+import { achievementsEarned } from '../collection/store';
+import { FramedAvatar } from '../avatar/Frame';
+import { colorHex } from '../ui/Callsign';
+import { wear } from './Wardrobe';
+import type { CatalogCosmetic } from '../api';
+import '../collection/collection.css';
 
 const STORE_LEVEL = 2;
 
@@ -24,7 +30,7 @@ export function Store() {
       applyMe(r.me);
       purchase();
       setPick(null);
-      if (r.rewards) { showRewards(name, r.rewards); enqueueLevelUp(r.rewards.level_up, r.me); }
+      if (r.rewards) { showRewards(name, r.rewards); enqueueLevelUp(r.rewards.level_up, r.me); achievementsEarned(r.rewards.achievements); }
       else pushToast(say(`Bought ${name}.`, `${name}. yours.`), 'good');
     } catch (e) { setErr(errorMessage(e)); } finally { setBusy(false); }
   };
@@ -65,7 +71,57 @@ export function Store() {
           );
         })}
       </ul>
+      <Looks buy={buy} pick={pick} setPick={setPick} busy={busy} />
       <ErrorLine text={err} />
     </Section>
+  );
+}
+
+/** Callsign colours and avatar frames for sale. Owned ones offer to be worn. */
+function Looks({ buy, pick, setPick, busy }: { buy: (sku: string, name: string) => void; pick: string | null; setPick: (s: string | null) => void; busy: boolean }) {
+  const m = me.value!;
+  const f = faction.value ?? 'human';
+  const sale = (catalog.value?.cosmetics ?? []).filter((c) => c.price > 0);
+  if (!sale.length) return null;
+  const owned = new Set(m.cosmetics?.owned ?? []);
+  const worn = (c: CatalogCosmetic) => (c.kind === 'color' ? m.cosmetics?.color : m.cosmetics?.frame) === c.id;
+  return (
+    <>
+      <h4 class="cos-sub">{say('Looks', 'looks')}</h4>
+      <ul class="store">
+        {sale.map((c) => {
+          const have = owned.has(c.id);
+          const reason = m.level < STORE_LEVEL ? say(`The Store opens at level ${STORE_LEVEL}.`, `opens at level ${STORE_LEVEL}.`)
+            : m.salvage < c.price ? say(`Need ${c.price - m.salvage} more salvage.`, `${c.price - m.salvage} more salvage.`) : null;
+          return (
+            <li class="card store-row cos-row" key={c.id}>
+              <span class="cos-ico">
+                {c.kind === 'color'
+                  ? <span class="cos-sample" style={{ color: colorHex(c.id) }}>{m.callsign ?? 'Callsign'}</span>
+                  : <FramedAvatar frame={c.id} spec={m.avatar} faction={f} level={m.level} lens={lens.value} size={56} />}
+              </span>
+              <div class="st-main"><b>{c.names[f]}</b><span class="dim">{c.text}</span></div>
+              {have ? (
+                worn(c)
+                  ? <span class="cos-owned">{say('Worn', 'worn')}</span>
+                  : <button class="btn" onClick={() => { void wear(c.kind, c.id); }}>{say('Wear', 'wear')}</button>
+              ) : pick === c.id ? (
+                <div class="st-confirm">
+                  <span class="st-ask">{say(`Spend ${c.price}?`, `pay ${c.price}?`)}</span>
+                  <div class="confirm-row">
+                    <button class="btn" onClick={() => setPick(null)}>{say('No', 'no')}</button>
+                    <button class="btn primary" disabled={busy} onClick={() => buy(c.id, c.names[f])}>{busy ? '…' : say('Buy', 'Buy')}</button>
+                  </div>
+                </div>
+              ) : (
+                <Action id={'why-' + c.id} reason={reason} onClick={() => setPick(c.id)}>
+                  Buy<span class="cost num"><Icon name="recycle" size={16} />{c.price}</span>
+                </Action>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </>
   );
 }

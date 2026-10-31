@@ -12,6 +12,7 @@ const missions = @import("../missions.zig");
 const events = @import("../events.zig");
 const echo_mod = @import("../echo.zig");
 const live = @import("../live.zig");
+const ach_db = @import("../achievements.zig");
 
 const data = game.data;
 const geo = game.geo;
@@ -479,6 +480,8 @@ fn engageEnemy(req: *Req, jw: *Stringify, p: *Player, pos: live.Pos, id: []const
         } else try acc.rollNote(req, p, if (en.elite) .elite else .pve, null, o.seed);
         acc.war_points = game.war.points(if (en.elite) .pve_elite else .pve_win);
         p.wins += 1;
+        try ach_db.bump(req, p.id, .pve_wins, 1);
+        if (en.elite) try ach_db.bump(req, p.id, .elites, 1);
         if (en.tutorial) {
             _ = req.ctx.live.tutorials.remove(p.id);
         } else try markDone(req, p.id, id, en.expires_at);
@@ -592,6 +595,7 @@ pub fn open(req: *Req, jw: *Stringify) HandlerError!void {
     try acc.addDrop(req, if (airdrop) loot.rollAirdrop(&lrng, p.level, mult) else loot.rollCache(&lrng, p.level, mult));
     try acc.rollNote(req, &p, if (airdrop) .airdrop else .cache, null, lrng.next());
     p.caches += 1;
+    if (airdrop) try ach_db.bump(req, p.id, .airdrops, 1);
     const rw = try rewards.apply(req, &p, &acc, try districtOf(req.arena, lat, lon));
     try missions.event(req, &p, .{ .kind = .cache_open });
     try jw.write(.{ .loot = rw, .me = try views.meFresh(req, p.id) });
@@ -618,6 +622,7 @@ fn openLandmark(req: *Req, jw: *Stringify, p: *Player, pos: live.Pos, id: []cons
     try acc.addDrop(req, loot.rollLandmark(&lrng, p.level, rewards.lootMult(p, req.now), data.placeKind(place.place.kind)));
     try acc.rollNote(req, p, .landmark, place.place.kind, lrng.next());
     p.caches += 1;
+    try ach_db.bump(req, p.id, .landmarks, 1);
     const rw = try rewards.apply(req, p, &acc, try districtOf(req.arena, place.place.lat, place.place.lon));
     try missions.event(req, p, .{ .kind = .cache_open });
     // Only a landmark that paid out counts against the limit.

@@ -5,6 +5,7 @@ import { say } from '../ui/voice';
 import { Icon } from '../ui/Icon';
 import { Action, ErrorLine, Meter } from '../ui/kit';
 import { enqueueLevelUp } from '../battle/session';
+import { achievementsEarned } from '../collection/store';
 import { showRewards } from '../ui/RewardsSheet';
 import { claim as claimSound } from '../audio/fx';
 
@@ -32,6 +33,7 @@ export function MissionCard({ m, weekly }: { m: Mission; weekly?: boolean }) {
       claimSound();
       showRewards(say('Mission done', 'taken'), r.rewards);
       enqueueLevelUp(r.rewards.level_up, r.me);
+      achievementsEarned(r.rewards.achievements);
     } catch (e) { setErr(errorMessage(e)); } finally { setBusy(false); }
   };
   return (

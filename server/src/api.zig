@@ -12,6 +12,7 @@ const war = @import("api/war.zig");
 const dev = @import("api/dev.zig");
 const auth = @import("api/auth.zig");
 const notes = @import("api/notes.zig");
+const collection = @import("api/collection.zig");
 
 const Ctx = ctx_mod.Ctx;
 const Req = ctx_mod.Req;
@@ -84,6 +85,10 @@ const routes = [_]Route{
 
     .{ .method = .get, .path = "/api/notes", .access = .faction, .handler = notes.list },
     .{ .method = .post, .path = "/api/notes/claim", .access = .faction, .handler = notes.claim },
+
+    .{ .method = .get, .path = "/api/achievements", .access = .faction, .handler = collection.achievements },
+    .{ .method = .get, .path = "/api/collection", .access = .faction, .handler = collection.collection },
+    .{ .method = .post, .path = "/api/cosmetics/equip", .access = .faction, .handler = collection.equipCosmetic },
 
     .{ .method = .get, .path = "/api/war", .access = .faction, .handler = war.war },
     .{ .method = .get, .path = "/api/leaderboard", .access = .faction, .handler = war.leaderboard },

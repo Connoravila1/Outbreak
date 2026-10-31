@@ -8,6 +8,7 @@ const model = @import("model.zig");
 const missions = @import("missions.zig");
 const warstate = @import("warstate.zig");
 const notes_db = @import("notes.zig");
+const ach_db = @import("achievements.zig");
 
 const data = game.data;
 const stats = game.stats;
@@ -103,6 +104,8 @@ pub const RewardsView = struct {
     auto_scrapped: u32 = 0,
     /// Notes found with this payout.
     notes: []const NoteRef = &.{},
+    /// Achievements this payout completed (their salvage is paid on top, not counted in `salvage`).
+    achievements: []const ach_db.EarnedView = &.{},
 };
 
 pub const EquippedView = struct { weapon: ?[]const u8, armor: ?[]const u8, utility: ?[]const u8 };
@@ -160,6 +163,12 @@ pub const RecordView = struct {
 /// Notes found, and how many this faction can find in all.
 pub const NotesTally = struct { found: u32, total: u32 };
 
+/// Cosmetics owned and which are worn. Colour and frame are ids from the catalog, null for none.
+pub const CosmeticsView = struct { owned: []const []const u8, color: ?[]const u8, frame: ?[]const u8 };
+
+/// Achievements earned, out of all of them.
+pub const AchievementTally = struct { earned: u32, total: u32 };
+
 pub const AccountView = struct { guest: bool, providers: []const []const u8, email: ?[]const u8 };
 
 pub const MeView = struct {
@@ -198,8 +207,10 @@ pub const MeView = struct {
     stance: data.Stance,
     bestiary: BestiaryMap,
     notes: NotesTally,
-    /// Cosmetic titles from completed note sets (the level title stays in `title`).
+    /// Cosmetic titles from completed note sets and achievements (the level title stays in `title`).
     titles_extra: []const []const u8,
+    cosmetics: CosmeticsView,
+    achievements: AchievementTally,
 };
 
 pub const MeLite = struct {
@@ -344,7 +355,9 @@ pub fn meView(req: *Req, p: *Player) HandlerError!MeView {
         .stance = p.stance,
         .bestiary = .{ .counts = p.bestiary },
         .notes = .{ .found = @intCast((try notes_db.foundSet(req, p.id)).count()), .total = game.notes.visibleTotal(p.fac()) },
-        .titles_extra = try notes_db.titles(req, p.id),
+        .titles_extra = try std.mem.concat(a, []const u8, &.{ try notes_db.titles(req, p.id), try ach_db.titles(req, p.id, p.fac()) }),
+        .cosmetics = .{ .owned = try ach_db.owned(req, p.id), .color = ach_db.optId(p.callsign_color), .frame = ach_db.optId(p.avatar_frame) },
+        .achievements = .{ .earned = @intCast((try ach_db.earnedSet(req, p.id)).count()), .total = game.achievements.list.len },
     };
 }
 

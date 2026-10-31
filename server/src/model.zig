@@ -6,6 +6,7 @@ const std = @import("std");
 const game = @import("game");
 const ctx_mod = @import("ctx.zig");
 const snapshot = @import("snapshot.zig");
+const achievements = @import("achievements.zig");
 
 const data = game.data;
 const stats = game.stats;
@@ -89,6 +90,9 @@ pub const Player = struct {
     stance: data.Stance = .careful,
     /// Fights per enemy archetype, in `data.Archetype` order.
     bestiary: [data.archetypes.len]u32 = [_]u32{0} ** data.archetypes.len,
+    /// Equipped cosmetics (cosmetics.zig ids); empty for none. Changed only through the equip endpoint.
+    callsign_color: []const u8 = "",
+    avatar_frame: []const u8 = "",
 
     items: []Owned = &.{},
     consumables: [consumable_count]u32 = [_]u32{0} ** consumable_count,
@@ -172,7 +176,8 @@ pub const select_player =
     \\SELECT id, callsign, faction, level, xp, hp, hp_at, downed_until, salvage, expansions, avatar,
     \\  abilities, last_seen, last_pvp_at, streak, last_claim_day, mday, mlevel, mweek, wlevel,
     \\  walk_day, walk_xp_today, wins, losses, contacts, echoes, caches, distance_m, clan_id, clan_role,
-    \\  stance, bestiary, contacts_won, contacts_lost, echoes_won
+    \\  stance, bestiary, contacts_won, contacts_lost, echoes_won,
+    \\  callsign_color, avatar_frame
     \\FROM players
 ;
 
@@ -220,6 +225,8 @@ pub fn load(req: *Req, id: i64) HandlerError!?Player {
         .contacts_won = @intCast(st.int(32)),
         .contacts_lost = @intCast(st.int(33)),
         .echoes_won = @intCast(st.int(34)),
+        .callsign_color = try st.dupe(a, 35),
+        .avatar_frame = try st.dupe(a, 36),
     };
     try loadCollections(req, &p);
     const now = req.now;
@@ -367,6 +374,7 @@ pub fn insertItem(req: *Req, pid: i64, item: stats.Item, equipped: bool) Handler
             @intFromEnum(item.perk_ids[1]), @intFromBool(equipped),
         },
     );
+    try achievements.discover(req, pid, item);
     return uid;
 }
 

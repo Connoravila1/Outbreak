@@ -6,6 +6,7 @@ const ctx_mod = @import("../ctx.zig");
 const events = @import("../events.zig");
 const warstate = @import("../warstate.zig");
 const model = @import("../model.zig");
+const ach_db = @import("../achievements.zig");
 
 const data = game.data;
 const progression = game.progression;
@@ -13,7 +14,7 @@ const Req = ctx_mod.Req;
 const HandlerError = ctx_mod.HandlerError;
 const Stringify = std.json.Stringify;
 
-const TopEntry = struct { callsign: []const u8, level: u8, title: []const u8, points: u32 };
+const TopEntry = struct { callsign: []const u8, callsign_color: ?[]const u8, level: u8, title: []const u8, points: u32 };
 const DistrictBar = struct { id: []const u8, human: u32, zombie: u32 };
 
 fn factionTotals(req: *Req, district: ?[]const u8) HandlerError![2]u32 {
@@ -45,13 +46,13 @@ pub fn war(req: *Req, jw: *Stringify) HandlerError!void {
     var top: std.ArrayList(TopEntry) = .empty;
     {
         var st = try req.ctx.db.query(
-            \\SELECT p.callsign, p.level, SUM(w.points) AS pts FROM war_player w JOIN players p ON p.id = w.player_id
+            \\SELECT p.callsign, p.level, SUM(w.points) AS pts, p.callsign_color FROM war_player w JOIN players p ON p.id = w.player_id
             \\WHERE w.week = ? AND p.faction = ? GROUP BY w.player_id ORDER BY pts DESC, p.id LIMIT 10
         , .{ week, p.fac() });
         defer st.finalize();
         while (try st.step()) {
             const level: u8 = @intCast(st.int(1));
-            try top.append(req.arena, .{ .callsign = try st.dupe(req.arena, 0), .level = level, .title = progression.title(p.fac(), level), .points = @intCast(st.int(2)) });
+            try top.append(req.arena, .{ .callsign = try st.dupe(req.arena, 0), .callsign_color = try ach_db.colorOf(req, &st, 3), .level = level, .title = progression.title(p.fac(), level), .points = @intCast(st.int(2)) });
         }
     }
     try jw.write(.{
@@ -64,7 +65,7 @@ pub fn war(req: *Req, jw: *Stringify) HandlerError!void {
     });
 }
 
-const BoardEntry = struct { rank: u32, callsign: []const u8, level: u8, title: []const u8, faction: data.Faction, value: u32, clan_tag: ?[]const u8 };
+const BoardEntry = struct { rank: u32, callsign: []const u8, callsign_color: ?[]const u8, level: u8, title: []const u8, faction: data.Faction, value: u32, clan_tag: ?[]const u8 };
 
 pub fn leaderboard(req: *Req, jw: *Stringify) HandlerError!void {
     const board = (try req.param("board")) orelse "weekly";
@@ -73,19 +74,19 @@ pub fn leaderboard(req: *Req, jw: *Stringify) HandlerError!void {
     if (!weekly and !contacts and !std.mem.eql(u8, board, "level")) return req.fail(400, "bad_request", "Board must be \"weekly\", \"contacts\" or \"level\".");
     var st = if (contacts)
         try req.ctx.db.query(
-            \\SELECT p.callsign, p.level, p.faction, w.wins AS v, c.tag FROM contact_week w
+            \\SELECT p.callsign, p.level, p.faction, w.wins AS v, c.tag, p.callsign_color FROM contact_week w
             \\JOIN players p ON p.id = w.player_id LEFT JOIN clans c ON c.id = p.clan_id
             \\WHERE w.week = ? AND w.wins > 0 AND p.faction IS NOT NULL ORDER BY v DESC, p.id LIMIT 50
         , .{warstate.week(req.now)})
     else if (weekly)
         try req.ctx.db.query(
-            \\SELECT p.callsign, p.level, p.faction, SUM(w.points) AS v, c.tag FROM war_player w
+            \\SELECT p.callsign, p.level, p.faction, SUM(w.points) AS v, c.tag, p.callsign_color FROM war_player w
             \\JOIN players p ON p.id = w.player_id LEFT JOIN clans c ON c.id = p.clan_id
             \\WHERE w.week = ? AND p.faction IS NOT NULL GROUP BY w.player_id ORDER BY v DESC, p.id LIMIT 50
         , .{warstate.week(req.now)})
     else
         try req.ctx.db.query(
-            \\SELECT p.callsign, p.level, p.faction, p.level AS v, c.tag FROM players p
+            \\SELECT p.callsign, p.level, p.faction, p.level AS v, c.tag, p.callsign_color FROM players p
             \\LEFT JOIN clans c ON c.id = p.clan_id WHERE p.faction IS NOT NULL
             \\ORDER BY p.level DESC, p.xp DESC, p.id LIMIT 50
         , .{});
@@ -97,6 +98,7 @@ pub fn leaderboard(req: *Req, jw: *Stringify) HandlerError!void {
         try list.append(req.arena, .{
             .rank = @intCast(list.items.len + 1),
             .callsign = try st.dupe(req.arena, 0),
+            .callsign_color = try ach_db.colorOf(req, &st, 5),
             .level = level,
             .title = progression.title(f, level),
             .faction = f,

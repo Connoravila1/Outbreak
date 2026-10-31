@@ -39,6 +39,8 @@ function rng(seed: number) {
 const names = (human: string, zombie: string) => ({ human, zombie });
 const CATALOG: Catalog = {
   version: 1,
+  achievements: MOCK_ACHIEVEMENTS,
+  cosmetics: MOCK_COSMETICS,
   items: [
     { id: 'bat', slot: 'weapon', req: 1, names: names('Baseball Bat', 'Rotten Teeth'), stats: { hp: 0, atk: 7, def: 0, spd: 0 } },
     { id: 'knife', slot: 'weapon', req: 1, names: names('Kitchen Knife', 'Broken Nails'), stats: { hp: 0, atk: 5, def: 0, spd: 3 } },
@@ -102,6 +104,7 @@ const CATALOG: Catalog = {
   ],
 };
 
+import { earnNew, freshCollection, MOCK_ACHIEVEMENTS, MOCK_COSMETICS, metricsOf, titlesFrom, type CollectionState } from './mock_collection';
 import { allVisibleIds, archiveFor, claimable, FIRST_BLOOD_NOTE, noteNamed, refOf, rollNote, titlesFor, visibleTotal, type Held } from './mock_notes';
 
 // ---------- database ----------
@@ -117,6 +120,7 @@ interface DB {
   rec: PlayerRecord;
   stance?: Stance; bestiary?: Record<string, number>;
   notes?: Held[]; noteClaims?: string[];
+  col?: CollectionState;
 }
 function fresh(): DB {
   return {
@@ -162,7 +166,25 @@ function makeItem(base: string, rarity: Rarity, upgrade = 0, unique: string | nu
   const c = CATALOG.items.find((i) => i.id === base)!;
   const perks = unique ? CATALOG.uniques.find((u) => u.id === unique)!.perks
     : rarity === 'rare' ? [PERKS[(db.n * 3) % PERKS.length]] : rarity === 'legendary' ? [PERKS[(db.n * 3) % PERKS.length], PERKS[(db.n * 5 + 1) % PERKS.length]] : [];
+  const col = collection();
+  if (!col.bases.includes(base)) col.bases.push(base);
+  if (unique && !col.uniques.includes(unique)) col.uniques.push(unique);
+  if (!col.rarities.includes(rarity)) col.rarities.push(rarity);
   return finishItem({ uid: 'it' + db.n++, base, slot: c.slot, rarity, upgrade, perks, unique, req: c.req, stats: { hp: 0, atk: 0, def: 0, spd: 0 }, power: 0, scrap_value: 0, upgrade_cost: 0 });
+}
+
+const collection = (): CollectionState => db.col ?? (db.col = freshCollection());
+
+/** Earn whatever is newly met: pays the salvage, lists it in `r`, and files it in the feed. */
+function checkAchievements(r?: Rewards): void {
+  const col = collection();
+  col.bestUp = Math.max(col.bestUp ?? 0, ...db.items.map((i) => i.upgrade));
+  const got = earnNew(col, db.faction ?? 'human', { distance_m: db.rec.distance_m, wins: db.rec.wins, contacts_won: db.rec.contacts_won ?? 0, echoes_won: db.rec.echoes_won ?? 0, caches: db.rec.caches, level: db.level, notes: (db.notes ?? []).length, sets: (db.noteClaims ?? []).length, bestUpgrade: col.bestUp }, Date.now());
+  for (const a of got) {
+    db.salvage += a.salvage;
+    pushFeed('achievement', `${a.name}: +${a.salvage} salvage`, { rewards: { ...emptyRewards(), salvage: a.salvage, achievements: [a] } });
+  }
+  if (r && got.length) r.achievements = [...(r.achievements ?? []), ...got];
 }
 
 function equipped(): Record<Slot, string | null> {
@@ -219,7 +241,9 @@ function buildMe(): Me {
     account: { guest: db.ids.length === 0, providers: db.ids.map((i) => i.provider), email: db.ids.find((i) => i.email)?.email ?? null },
     stance: db.stance ?? 'careful', bestiary: db.bestiary ?? {},
     notes: { found: (db.notes ?? []).length, total: visibleTotal(db.faction ?? 'human') },
-    titles_extra: titlesFor(db.noteClaims ?? []),
+    titles_extra: [...titlesFor(db.noteClaims ?? []), ...titlesFrom(collection(), db.faction ?? 'human')],
+    cosmetics: { owned: collection().owned, color: collection().color, frame: collection().frame },
+    achievements: { earned: collection().earned.length, total: MOCK_ACHIEVEMENTS.length },
   };
 }
 
@@ -404,6 +428,7 @@ function resolve(foe: Combatant, kind: Battle['kind'], xpBase: number, warPts: n
   if (win) db.rec.wins++; else db.rec.losses++;
   if (kind === 'echo') { db.rec.echoes++; if (win) db.rec.echoes_won = (db.rec.echoes_won ?? 0) + 1; }
   grantXp(rewards);
+  checkAchievements(rewards);
   save();
   return { id: 'b' + db.n, kind, a, b: foe, turns, winner: win ? 'a' : 'b', rewards, me: buildMe() };
 }
@@ -589,6 +614,7 @@ function route(method: string, path: string, body: any, authed: boolean): unknow
       b.stance = (body.stance as Stance | undefined) ?? 'careful';
       if (foe.archetype) { db.bestiary = { ...(db.bestiary ?? {}), [foe.archetype]: (db.bestiary?.[foe.archetype] ?? 0) + 1 }; b.me = buildMe(); }
       if (b.winner === 'a' && m) db.defeated.push(id);
+      if (b.winner === 'a' && m && foe.title === 'Elite') { collection().elites++; checkAchievements(b.rewards); b.me = buildMe(); }
       save();
       return b;
     }
@@ -606,7 +632,7 @@ function route(method: string, path: string, body: any, authed: boolean): unknow
       db.mprog[1]++;
       const loot = lootRewards(10 + 2 * db.level, 0.55);
       giveNote(loot, null, id.startsWith('a:') ? 0.35 : 0.12, true);
-      grantXp(loot); save();
+      grantXp(loot); checkAchievements(loot); save();
       return { loot, me: buildMe() };
     }
 
@@ -618,8 +644,33 @@ function route(method: string, path: string, body: any, authed: boolean): unknow
       const c = claimable(db.faction ?? 'human', db.notes ?? [], db.noteClaims ?? [], set);
       if (!c) throw new HttpError(409, 'set_incomplete', 'That set cannot be claimed.');
       (db.noteClaims = db.noteClaims ?? []).push(set);
-      db.salvage += c.salvage; save();
-      return { rewards: { ...emptyRewards(), salvage: c.salvage }, title: c.title, me: buildMe() };
+      db.salvage += c.salvage;
+      const nr = { ...emptyRewards(), salvage: c.salvage };
+      checkAchievements(nr); save();
+      return { rewards: nr, title: c.title, me: buildMe() };
+    }
+
+    // ----- achievements, collection, cosmetics -----
+    case 'GET /api/achievements': {
+      guard();
+      const col = collection();
+      checkAchievements(); save();
+      return { earned: col.earned, progress: metricsOf(col, { distance_m: db.rec.distance_m, wins: db.rec.wins, contacts_won: db.rec.contacts_won ?? 0, echoes_won: db.rec.echoes_won ?? 0, caches: db.rec.caches, level: db.level, notes: (db.notes ?? []).length, sets: (db.noteClaims ?? []).length, bestUpgrade: col.bestUp ?? 0 }) };
+    }
+    case 'GET /api/collection': guard(); return { bases: collection().bases, uniques: collection().uniques, rarities: collection().rarities };
+    case 'POST /api/cosmetics/equip': {
+      guard();
+      const kind = String(need(body, 'kind')) as 'color' | 'frame';
+      const id = body.id == null ? null : String(body.id);
+      if (kind !== 'color' && kind !== 'frame') throw new HttpError(400, 'bad_kind', 'Colour or frame.');
+      if (id) {
+        const c = MOCK_COSMETICS.find((x) => x.id === id);
+        if (!c) throw new HttpError(404, 'no_cosmetic', 'No such cosmetic.');
+        if (c.kind !== kind) throw new HttpError(400, 'bad_kind', 'Wrong kind.');
+        if (!collection().owned.includes(id)) throw new HttpError(409, 'not_owned', 'You do not own that.');
+      }
+      collection()[kind] = id; save();
+      return mine();
     }
 
     // ----- gear -----
@@ -650,7 +701,7 @@ function route(method: string, path: string, body: any, authed: boolean): unknow
       if (db.level < 4) throw new HttpError(400, 'locked', 'Upgrading unlocks at level 4.');
       if (it.upgrade_cost == null) throw new HttpError(400, 'maxed', 'Already at +10.');
       if (db.salvage < it.upgrade_cost) throw new HttpError(400, 'no_salvage', 'Not enough salvage.');
-      db.salvage -= it.upgrade_cost; it.upgrade++; finishItem(it); save();
+      db.salvage -= it.upgrade_cost; it.upgrade++; finishItem(it); checkAchievements(); save();
       return mine();
     }
     case 'POST /api/use': {
@@ -689,12 +740,20 @@ function route(method: string, path: string, body: any, authed: boolean): unknow
       if (id === 'w1') { db.wclaimed = true; const it = makeItem(CATALOG.items.filter((c) => c.req <= db.level)[0].id, 'rare'); db.items.push(it); r.items = [it]; }
       else db.mclaimed[['d1', 'd2', 'd3'].indexOf(id)] = true;
       if (db.mclaimed.every(Boolean)) { db.consumables.heal_m = (db.consumables.heal_m ?? 0) + 1; r.consumables = { heal_m: 1 }; }
-      grantXp(r); save();
+      grantXp(r); checkAchievements(r); save();
       return { rewards: r, me: buildMe() };
     }
     case 'POST /api/store/buy': {
       guard();
       const sku = String(need(body, 'sku'));
+      const cos = MOCK_COSMETICS.find((x) => x.id === sku);
+      if (cos) {
+        if (cos.price === 0) throw new HttpError(409, 'not_for_sale', 'That one is earned, not bought.');
+        if (collection().owned.includes(sku)) throw new HttpError(409, 'owned', 'You already own that.');
+        if (db.salvage < cos.price) throw new HttpError(409, 'not_enough_salvage', 'Not enough salvage.');
+        db.salvage -= cos.price; collection().owned.push(sku); save();
+        return mine();
+      }
       const s = CATALOG.store.find((x) => x.sku === sku);
       if (!s) throw new HttpError(404, 'no_sku', 'Not for sale.');
       if (db.level < 2) throw new HttpError(403, 'locked', 'The Store opens at level 2.');
@@ -703,8 +762,10 @@ function route(method: string, path: string, body: any, authed: boolean): unknow
       if (sku === 'supply') {
         const elig = CATALOG.items.filter((c) => c.req <= db.level);
         const it = makeItem(elig[Math.floor(Math.random() * elig.length)].id, Math.random() < 0.3 ? 'rare' : 'uncommon');
-        db.items.push(it); save();
-        return { rewards: { ...emptyRewards(), items: [it] }, me: buildMe() };
+        db.items.push(it);
+        const sr = { ...emptyRewards(), items: [it] };
+        checkAchievements(sr); save();
+        return { rewards: sr, me: buildMe() };
       }
       if (CATALOG.consumables.some((c) => c.id === sku)) db.consumables[sku] = (db.consumables[sku] ?? 0) + 1;
       save();

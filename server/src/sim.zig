@@ -74,6 +74,8 @@ const Player = struct {
     hp: f64 = 100,
     gear: [3]?Item = .{ null, null, null },
     salvage: u32 = 0,
+    /// Every salvage ever gained (spending does not take it away): for the economy report.
+    earned: u64 = 0,
     cons: [9]u32 = [_]u32{0} ** 9,
     comp: stats.Computed = undefined,
     abilities: std.EnumSet(data.Ability) = .initEmpty(),
@@ -100,6 +102,7 @@ const Player = struct {
     xp_by: [max_lvl + 1][5]f64 = [_][5]f64{.{ 0, 0, 0, 0, 0 }} ** (max_lvl + 1),
     reach_h: [max_lvl + 1]f64 = [_]f64{std.math.inf(f64)} ** (max_lvl + 1),
     reach_salvage: [max_lvl + 1]u32 = [_]u32{0} ** (max_lvl + 1),
+    reach_earned: [max_lvl + 1]u64 = [_]u64{0} ** (max_lvl + 1),
     reach_ratio: [max_lvl + 1][4]f32 = [_][4]f32{.{ 0, 0, 0, 0 }} ** (max_lvl + 1),
     fights: [max_lvl + 1]u32 = [_]u32{0} ** (max_lvl + 1),
     wins: [max_lvl + 1]u32 = [_]u32{0} ** (max_lvl + 1),
@@ -248,6 +251,7 @@ const Player = struct {
         while (l <= r.level) : (l += 1) {
             p.reach_h[l] = p.t / 3600.0;
             p.reach_salvage[l] = p.salvage;
+            p.reach_earned[l] = p.earned;
         }
         p.level = r.level;
         p.recompute();
@@ -289,19 +293,24 @@ const Player = struct {
         const idx = @intFromEnum(item.slot());
         if (p.gear[idx]) |cur| {
             if (@as(f32, @floatFromInt(stats.itemPower(item))) <= 1.05 * @as(f32, @floatFromInt(stats.itemPower(cur)))) {
-                p.salvage += loot.scrapValue(item);
+                p.earn(loot.scrapValue(item));
                 if (emit) p.missionEvent(.{ .kind = .item_scrap, .amount = 1 });
                 return;
             }
-            p.salvage += loot.scrapValue(cur);
+            p.earn(loot.scrapValue(cur));
             if (emit) p.missionEvent(.{ .kind = .item_scrap, .amount = 1 });
         }
         p.gear[idx] = item;
         p.recompute();
     }
 
+    fn earn(p: *Player, n: u32) void {
+        p.salvage += n;
+        p.earned += n;
+    }
+
     fn takeDrop(p: *Player, d: loot.Drop) void {
-        p.salvage += d.salvage;
+        p.earn(d.salvage);
         for (d.consumableSlice()) |c| p.cons[@intFromEnum(c)] += 1;
         for (d.itemSlice()) |it| p.handleItem(it, true);
     }
@@ -330,7 +339,7 @@ const Player = struct {
                 if (p.weekly_prog >= w.target) {
                     p.weekly_claimed = true;
                     const r = missions.reward(w, p.level, 0);
-                    p.salvage += r.salvage;
+                    p.earn(r.salvage);
                     p.handleItem(loot.rollItem(&p.rng, .{ .level = p.level, .min_rarity = r.item_min_rarity.? }), false);
                     p.gainXp(.mission, r.xp);
                 }
@@ -343,7 +352,7 @@ const Player = struct {
         p.streak = missions.streakAfterClaim(p.streak, p.last_claim_day, p.day);
         p.last_claim_day = p.day;
         const r = missions.reward(p.daily[i], p.level, p.streak);
-        p.salvage += r.salvage;
+        p.earn(r.salvage);
         if (p.daily_claimed[0] and p.daily_claimed[1] and p.daily_claimed[2]) {
             p.cons[@intFromEnum(missions.all_dailies_bonus)] += 1;
         }
@@ -681,6 +690,29 @@ fn reportPlayers(w: *std.Io.Writer, gpa: std.mem.Allocator, players: []const Pla
                 break :blk if (hours > 0) fights / hours else 0;
             },
         });
+    }
+
+    // Salvage income (drops, scrapped spares, missions; achievements and spending are not in it),
+    // so prices and achievement rewards can be set against what a player actually collects.
+    try w.print("\nSALVAGE INCOME (median; total earned on reaching a level, and per active hour since the row above)\n", .{});
+    try w.print("{s:>3} {s:>10} {s:>8}\n", .{ "Lvl", "total", "per_h" });
+    var prev_level: u8 = 1;
+    for (report_levels) |l| {
+        const earned = try gpa.alloc(f64, cfg.players);
+        defer gpa.free(earned);
+        const rate = try gpa.alloc(f64, cfg.players);
+        defer gpa.free(rate);
+        var n: usize = 0;
+        for (players) |p| {
+            if (p.reach_h[l] >= max_hours) continue;
+            const t0: f64 = if (prev_level == 1) 0 else p.reach_h[prev_level];
+            const e0: f64 = if (prev_level == 1) 0 else @floatFromInt(p.reach_earned[prev_level]);
+            earned[n] = @floatFromInt(p.reach_earned[l]);
+            rate[n] = (earned[n] - e0) / @max(0.01, p.reach_h[l] - t0);
+            n += 1;
+        }
+        if (n > 0) try w.print("{d:>3} {d:>10.0} {d:>8.1}\n", .{ l, median(earned[0..n]), median(rate[0..n]) });
+        prev_level = l;
     }
 
     try w.print("\nPOWER: median total stats of sim players on reaching a level, relative to base + reference gear\n", .{});

@@ -487,6 +487,45 @@ const migrations = [_][:0]const u8{
     \\  PRIMARY KEY (player_id, set_id)
     \\);
     ,
+    // Achievements, the collection log and cosmetics. `counters` holds the running totals that
+    // achievements count and nothing else keeps; `discoveries` is what a player has ever held
+    // (kind 0 base item, 1 legendary unique, 2 rarity; idx indexes the game tables). Players
+    // already in the game are credited from what they hold and have done.
+    \\ALTER TABLE players ADD COLUMN callsign_color TEXT NOT NULL DEFAULT '';
+    \\ALTER TABLE players ADD COLUMN avatar_frame TEXT NOT NULL DEFAULT '';
+    \\CREATE TABLE counters (
+    \\  player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    \\  key TEXT NOT NULL,
+    \\  n INTEGER NOT NULL DEFAULT 0,
+    \\  PRIMARY KEY (player_id, key)
+    \\);
+    \\CREATE TABLE achievements (
+    \\  player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    \\  ach_id TEXT NOT NULL,
+    \\  earned_at INTEGER NOT NULL,
+    \\  PRIMARY KEY (player_id, ach_id)
+    \\);
+    \\CREATE TABLE cosmetics (
+    \\  player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    \\  cosmetic_id TEXT NOT NULL,
+    \\  acquired_at INTEGER NOT NULL,
+    \\  PRIMARY KEY (player_id, cosmetic_id)
+    \\);
+    \\CREATE TABLE discoveries (
+    \\  player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    \\  kind INTEGER NOT NULL,
+    \\  idx INTEGER NOT NULL,
+    \\  first_at INTEGER NOT NULL DEFAULT 0,
+    \\  PRIMARY KEY (player_id, kind, idx)
+    \\);
+    \\INSERT OR IGNORE INTO discoveries(player_id, kind, idx) SELECT DISTINCT player_id, 0, base FROM items;
+    \\INSERT OR IGNORE INTO discoveries(player_id, kind, idx) SELECT DISTINCT player_id, 1, uniq FROM items WHERE uniq >= 0;
+    \\INSERT OR IGNORE INTO discoveries(player_id, kind, idx) SELECT DISTINCT player_id, 2, rarity FROM items;
+    \\INSERT INTO counters(player_id, key, n) SELECT player_id, 'war_points', SUM(points) FROM war_player GROUP BY player_id;
+    \\INSERT INTO counters(player_id, key, n) SELECT player_id, 'best_upgrade', MAX(upgrade) FROM items WHERE upgrade > 0 GROUP BY player_id;
+    \\INSERT INTO counters(player_id, key, n) SELECT id, 'pve_wins', wins - contacts_won - echoes_won FROM players WHERE wins - contacts_won - echoes_won > 0;
+    \\INSERT INTO counters(player_id, key, n) SELECT id, 'best_streak', streak FROM players WHERE streak > 0;
+    ,
 };
 
 // --- Tests -------------------------------------------------------------------------------------------

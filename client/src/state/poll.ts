@@ -12,6 +12,7 @@ import { say } from '../ui/voice';
 import { recordBattle } from './record';
 import { addToReport, AWAY_MS } from '../patrol/PatrolReport';
 import { notesFound } from '../notes/store';
+import { achievementsEarned } from '../collection/store';
 
 export const inSanctuary = signal(false);
 export const pollError = signal<string | null>(null);
@@ -39,6 +40,7 @@ async function tick() {
         if (ev.type === 'contact' && ev.battle) recordBattle(ev.battle, true);
         addToReport([ev]);
       } else if (ev.type === 'contact' && ev.battle) enqueueBattle(ev.battle, true);
+      else if (ev.type === 'achievement') achievementsEarned(ev.rewards?.achievements);
       else if (ev.type === 'level_up' && ev.rewards?.level_up) {
         // Gained while walking (or from an item): same takeover as a fight, with the fresh Me.
         const up = ev.rewards.level_up;

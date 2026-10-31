@@ -2,6 +2,7 @@ import { faction, lens, me, world } from './../state/store';
 import { Avatar } from '../avatar/Avatar';
 import { say } from '../ui/voice';
 import { Icon } from '../ui/Icon';
+import { Callsign } from '../ui/Callsign';
 import './shell.css';
 
 const C = 2 * Math.PI * 18;
@@ -51,7 +52,7 @@ export function TopBar() {
       <div class="id-plate">
         <LevelRing level={m.level} xp={m.xp} next={m.xp_next} avatar={m.avatar} />
         <div class="id-text">
-          <span class="callsign display">{m.callsign ?? ""}</span>
+          <span class="callsign display"><Callsign name={m.callsign ?? ''} color={m.cosmetics?.color} /></span>
           <span class="title">{m.title}</span>
         </div>
       </div>

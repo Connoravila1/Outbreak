@@ -109,6 +109,12 @@ export const api = {
   notes: () => get<T.NoteArchive>('/api/notes'),
   claimNotes: (set: T.NoteSetId) => post<{ rewards: T.Rewards; title: string; me: T.Me }>('/api/notes/claim', { set }),
 
+  // achievements, collection log, cosmetics
+  achievements: () => get<T.AchievementList>('/api/achievements'),
+  collection: () => get<T.Collection>('/api/collection'),
+  /** Wear an owned colour or frame; `id` null takes it off. */
+  equipCosmetic: (kind: T.CosmeticKind, id: string | null) => post<{ me: T.Me }>('/api/cosmetics/equip', { kind, id }),
+
   // social and war
   war: () => get<T.WarState>('/api/war'),
   leaderboard: (board: 'weekly' | 'contacts' | 'level') =>

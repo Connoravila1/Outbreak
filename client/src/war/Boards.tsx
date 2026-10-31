@@ -4,6 +4,7 @@ import { me } from '../state/store';
 import { say } from '../ui/voice';
 import { Icon } from '../ui/Icon';
 import { ErrorLine, Section, Seg } from '../ui/kit';
+import { Callsign } from '../ui/Callsign';
 
 type Board = 'weekly' | 'contacts' | 'level';
 
@@ -30,7 +31,7 @@ export function Leaderboard() {
             <li key={e.rank + e.callsign} class={'rank card' + (e.callsign === mine ? ' me' : '')}>
               <b class="rk num">{e.rank}</b>
               <span class="rk-main">
-                <b class="rk-name">{e.clan_tag && <span class="tag">[{e.clan_tag}]</span>} {e.callsign}{e.callsign === mine ? ` (${say('you', 'you')})` : ''}</b>
+                <b class="rk-name">{e.clan_tag && <span class="tag">[{e.clan_tag}]</span>} <Callsign name={e.callsign} color={e.callsign_color} />{e.callsign === mine ? ` (${say('you', 'you')})` : ''}</b>
                 <span class="dim">{say('Level', 'level')} {e.level} · {e.title} · <Icon name={e.faction === 'human' ? 'shield' : 'biohazard'} size={12} /> {e.faction === 'human' ? 'Human' : 'Zombie'}</span>
               </span>
               <span class="rk-val num">{e.value.toLocaleString()}<small>{board === 'weekly' ? ' pts' : board === 'contacts' ? say(' wins', ' kills') : ''}</small></span>

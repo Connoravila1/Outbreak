@@ -3,7 +3,8 @@ import { faction, lens, me } from '../state/store';
 import { record } from '../state/record';
 import { say } from '../ui/voice';
 import { Sheet } from '../ui/Sheet';
-import { Avatar } from '../avatar/Avatar';
+import { FramedAvatar } from '../avatar/Frame';
+import { Callsign } from '../ui/Callsign';
 import { Creator } from '../avatar/Creator';
 import { hasAvatar } from '../avatar/spec';
 import { Meter, Section } from '../ui/kit';
@@ -22,9 +23,9 @@ export function Profile() {
   return (
     <>
       <div class="id-card card">
-        <div class="avatar-frame"><Avatar spec={m.avatar} faction={f ?? 'human'} level={m.level} lens={lens.value} size={72} label={`${m.callsign} portrait`} /></div>
+        <FramedAvatar frame={m.cosmetics?.frame} spec={m.avatar} faction={f ?? 'human'} level={m.level} lens={lens.value} size={92} label={`${m.callsign} portrait`} />
         <div class="id-main">
-          <p class="display callsign-big">{m.callsign ?? ''}</p>
+          <p class="display callsign-big"><Callsign name={m.callsign ?? ''} color={m.cosmetics?.color} /></p>
           <p class="dim voice">{f === 'zombie' ? say('Zombie', 'infected') : say('Human', 'living')} </p>
           <button type="button" class="btn" onClick={() => setEditing(true)}>{hasAvatar(m.avatar) ? say('Edit', 'change') : say('Create avatar', 'make a face')}</button>
         </div>

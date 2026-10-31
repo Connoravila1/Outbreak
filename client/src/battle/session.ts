@@ -4,6 +4,7 @@ import { applyMe, setBattleHandler } from '../state/store';
 import { recordBattle } from '../state/record';
 import { pollNow } from '../state/poll';
 import { notesFound } from '../notes/store';
+import { achievementsEarned } from '../collection/store';
 
 /** One full-screen thing the player has to get through: a CONTACT + fight, a fight, or a level-up. */
 export type Session =
@@ -37,6 +38,7 @@ export function finishBattle() {
     applyMe(s.battle.me);
     recordBattle(s.battle, s.contact);
     notesFound(s.battle.rewards.notes);
+    achievementsEarned(s.battle.rewards.achievements);
     const up = s.battle.rewards.level_up;
     queue.value = up ? [{ key: key++, kind: 'levelup', up, me: s.battle.me }, ...rest] : rest;
   } else {
