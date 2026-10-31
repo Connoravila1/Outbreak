@@ -36,6 +36,12 @@ The server is authoritative over every outcome. The client renders state and sen
   start and stored in the DB. Combat = f(seed) and is reproducible from the stored seed.
 - **Config**: `--port` (8080), `--bind` (0.0.0.0), `--data` (./data), `--dev` (enables `/api/dev/*`
   and relaxed rate limits). Same as env vars `OUTBREAK_PORT`, etc.
+- **Additive wire details** (nothing above changed shape): `Rewards` may carry `auto_scrapped`
+  (items scrapped on pickup because the pack was full); `/api/catalog` items and abilities also
+  carry `lore_zombie`, `text_zombie`, `note`, `flavour`; `raids[].boss` is the boss's display name
+  for the viewer's faction; `/api/feed` events omit `battle` and `rewards` when there are none;
+  `/api/clan` with no clan answers 409 `no_clan`. Combat adds a per-fight "form" factor
+  (U(0.5,1.5) per side) on top of the per-hit spread; see DESIGN.md section 4.
 - **TLS**: terminated by Caddy in front (automatic HTTPS). Zig std has no TLS server.
 
 ## Client

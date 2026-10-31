@@ -1,0 +1,21 @@
+//! The server library; main.zig is the thin executable around it.
+
+pub const db = @import("db.zig");
+pub const live = @import("live.zig");
+pub const snapshot = @import("snapshot.zig");
+pub const ctx = @import("ctx.zig");
+pub const api = @import("api.zig");
+pub const tick = @import("tick.zig");
+pub const http = @import("http.zig");
+
+test {
+    _ = @import("api_tests.zig");
+    _ = @import("api/account.zig");
+    _ = @import("fight.zig");
+    _ = @import("raids.zig");
+    _ = @import("warstate.zig");
+}
+
+test {
+    @import("std").testing.refAllDecls(@This());
+}

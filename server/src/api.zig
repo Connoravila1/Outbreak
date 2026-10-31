@@ -1,0 +1,192 @@
+//! The API: routing, bearer-token auth, rate limits and error mapping, independent of any socket.
+//! `handle` is what http.zig calls and what tests call directly.
+
+const std = @import("std");
+const game = @import("game");
+const ctx_mod = @import("ctx.zig");
+const account = @import("api/account.zig");
+const world = @import("api/world.zig");
+const gear = @import("api/gear.zig");
+const social = @import("api/social.zig");
+const war = @import("api/war.zig");
+const dev = @import("api/dev.zig");
+
+const Ctx = ctx_mod.Ctx;
+const Req = ctx_mod.Req;
+const Method = ctx_mod.Method;
+const HandlerError = ctx_mod.HandlerError;
+const Stringify = std.json.Stringify;
+
+pub const max_body_bytes = 64 * 1024;
+
+pub const Response = struct {
+    status: u16,
+    json: []const u8,
+    /// True when `json` was allocated from the context's allocator.
+    owned: bool = true,
+
+    pub fn deinit(self: Response, gpa: std.mem.Allocator) void {
+        if (self.owned) gpa.free(self.json);
+    }
+};
+
+const Handler = *const fn (*Req, *Stringify) HandlerError!void;
+const Access = enum { public, player, faction };
+
+const Route = struct {
+    method: Method,
+    path: []const u8,
+    access: Access,
+    handler: Handler,
+    dev_only: bool = false,
+};
+
+const routes = [_]Route{
+    .{ .method = .get, .path = "/api/health", .access = .public, .handler = account.health },
+    .{ .method = .get, .path = "/api/catalog", .access = .public, .handler = account.catalog },
+    .{ .method = .get, .path = "/api/factions", .access = .public, .handler = account.factions },
+    .{ .method = .post, .path = "/api/register", .access = .public, .handler = account.register },
+    .{ .method = .post, .path = "/api/recover", .access = .public, .handler = account.recover },
+    .{ .method = .post, .path = "/api/faction", .access = .player, .handler = account.chooseFaction },
+    .{ .method = .get, .path = "/api/me", .access = .player, .handler = account.getMe },
+    .{ .method = .post, .path = "/api/avatar", .access = .player, .handler = account.setAvatar },
+
+    .{ .method = .post, .path = "/api/location", .access = .faction, .handler = world.location },
+    .{ .method = .post, .path = "/api/engage", .access = .faction, .handler = world.engage },
+    .{ .method = .post, .path = "/api/open", .access = .faction, .handler = world.open },
+
+    .{ .method = .post, .path = "/api/equip", .access = .faction, .handler = gear.equip },
+    .{ .method = .post, .path = "/api/unequip", .access = .faction, .handler = gear.unequip },
+    .{ .method = .post, .path = "/api/scrap", .access = .faction, .handler = gear.scrap },
+    .{ .method = .post, .path = "/api/upgrade", .access = .faction, .handler = gear.upgrade },
+    .{ .method = .post, .path = "/api/use", .access = .faction, .handler = gear.use },
+    .{ .method = .post, .path = "/api/abilities", .access = .faction, .handler = gear.abilities },
+    .{ .method = .post, .path = "/api/missions/claim", .access = .faction, .handler = gear.claimMission },
+    .{ .method = .post, .path = "/api/store/buy", .access = .faction, .handler = gear.buy },
+
+    .{ .method = .get, .path = "/api/war", .access = .faction, .handler = war.war },
+    .{ .method = .get, .path = "/api/leaderboard", .access = .faction, .handler = war.leaderboard },
+    .{ .method = .get, .path = "/api/feed", .access = .faction, .handler = war.feed },
+    .{ .method = .get, .path = "/api/clans", .access = .faction, .handler = social.clans },
+    .{ .method = .post, .path = "/api/clans", .access = .faction, .handler = social.createClan },
+    .{ .method = .post, .path = "/api/clans/join", .access = .faction, .handler = social.joinClan },
+    .{ .method = .post, .path = "/api/clans/leave", .access = .faction, .handler = social.leaveClan },
+    .{ .method = .get, .path = "/api/clan", .access = .faction, .handler = social.clan },
+    .{ .method = .get, .path = "/api/clan/chat", .access = .faction, .handler = social.chat },
+    .{ .method = .post, .path = "/api/clan/chat", .access = .faction, .handler = social.chat },
+    .{ .method = .post, .path = "/api/stronghold/claim", .access = .faction, .handler = social.claimStronghold },
+    .{ .method = .post, .path = "/api/raid/attack", .access = .faction, .handler = social.raidAttack },
+
+    .{ .method = .post, .path = "/api/dev/grant", .access = .faction, .handler = dev.grant, .dev_only = true },
+    .{ .method = .post, .path = "/api/dev/heal", .access = .faction, .handler = dev.heal, .dev_only = true },
+    .{ .method = .post, .path = "/api/dev/reset_cooldowns", .access = .faction, .handler = dev.resetCooldowns, .dev_only = true },
+    .{ .method = .post, .path = "/api/dev/bot_contact", .access = .faction, .handler = dev.botContact, .dev_only = true },
+};
+
+/// Per-token request budget: a burst, then a steady rate. Foreground play needs about one
+/// location call per 5 s plus taps.
+const player_burst = 40.0;
+const player_rate = 8.0;
+/// Registration and recovery share one global budget.
+const anon_burst = 30.0;
+const anon_rate = 5.0;
+
+const static_500 = Response{
+    .status = 500,
+    .json = "{\"error\":\"server_error\",\"message\":\"Something went wrong on the server.\"}",
+    .owned = false,
+};
+
+fn parseMethod(m: []const u8) Method {
+    if (std.mem.eql(u8, m, "GET")) return .get;
+    if (std.mem.eql(u8, m, "POST")) return .post;
+    if (std.mem.eql(u8, m, "OPTIONS")) return .options;
+    return .other;
+}
+
+fn errorResponse(gpa: std.mem.Allocator, status: u16, code: []const u8, message: []const u8) Response {
+    const json = Stringify.valueAlloc(gpa, .{ .@"error" = code, .message = message }, .{}) catch return static_500;
+    return .{ .status = status, .json = json };
+}
+
+/// Handle one request. `path` excludes the query string; `token` is the bearer token without the
+/// "Bearer " prefix. Thread-safe: takes the global lock.
+pub fn handle(ctx: *Ctx, method: []const u8, path: []const u8, query: []const u8, token: ?[]const u8, body: []const u8) Response {
+    ctx.lock();
+    defer ctx.unlock();
+    return handleLocked(ctx, method, path, query, token, body);
+}
+
+fn handleLocked(ctx: *Ctx, method_text: []const u8, path: []const u8, query: []const u8, token: ?[]const u8, body: []const u8) Response {
+    const gpa = ctx.gpa;
+    const m = parseMethod(method_text);
+    if (m == .options) return .{ .status = 204, .json = "", .owned = false };
+    if (body.len > max_body_bytes) return errorResponse(gpa, 413, "too_large", "The request body is too large.");
+
+    var path_known = false;
+    var route: ?Route = null;
+    for (routes) |r| {
+        if (!std.mem.eql(u8, r.path, path)) continue;
+        if (r.dev_only and !ctx.opts.dev) continue;
+        path_known = true;
+        if (r.method == m) route = r;
+    }
+    const rt = route orelse {
+        if (path_known) return errorResponse(gpa, 405, "method_not_allowed", "That method is not allowed here.");
+        return errorResponse(gpa, 404, "not_found", "No such endpoint.");
+    };
+
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const now = ctx.now();
+    var req = Req{ .ctx = ctx, .arena = arena.allocator(), .now = now, .method = m, .path = path, .query = query, .body = body };
+
+    const result = run(&req, rt, token) catch |e| {
+        if (e == error.Api) {
+            const f = req.failure.?;
+            return errorResponse(gpa, f.status, f.code, f.message);
+        }
+        std.log.err("{s} {s}: {s}", .{ method_text, path, @errorName(e) });
+        return static_500;
+    };
+    return .{ .status = 200, .json = gpa.dupe(u8, result) catch return static_500 };
+}
+
+const Who = struct { id: i64, has_faction: bool, last_seen: i64 };
+
+fn authenticate(req: *Req, token: []const u8) HandlerError!Who {
+    const hash = account.hashHex(token);
+    var st = try req.ctx.db.query("SELECT id, faction, last_seen FROM players WHERE token_hash = ?", .{@as([]const u8, &hash)});
+    defer st.finalize();
+    if (!try st.step()) return req.fail(401, "unauthorized", "Unknown token.");
+    return .{ .id = st.int(0), .has_faction = !st.isNull(1), .last_seen = st.int(2) };
+}
+
+/// Auth, rate limit, then the handler inside a transaction. Returns the JSON (arena memory).
+fn run(req: *Req, rt: Route, token: ?[]const u8) HandlerError![]const u8 {
+    const ctx = req.ctx;
+    var in_txn = false;
+    if (rt.access == .public) {
+        if (ctx.opts.limits and rt.method == .post) {
+            if (!try ctx.live.allow(-1, req.now, anon_burst, anon_rate)) return req.fail(429, "rate_limited", "Slow down.");
+        }
+    } else {
+        const tok = token orelse return req.fail(401, "unauthorized", "Missing token.");
+        const who = try authenticate(req, tok);
+        req.pid = who.id;
+        if (rt.access == .faction and !who.has_faction) return req.fail(409, "no_faction", "Choose a faction first.");
+        if (ctx.opts.limits and !ctx.opts.dev) {
+            if (!try ctx.live.allow(req.pid, req.now, player_burst, player_rate)) return req.fail(429, "rate_limited", "Slow down.");
+        }
+        try ctx.db.begin();
+        in_txn = true;
+        if (req.now - who.last_seen > 60_000) try ctx.db.run("UPDATE players SET last_seen = ? WHERE id = ?", .{ req.now, req.pid });
+    }
+    errdefer if (in_txn) ctx.db.rollback();
+
+    var aw: std.Io.Writer.Allocating = .init(req.arena);
+    var jw = Stringify{ .writer = &aw.writer, .options = .{} };
+    try rt.handler(req, &jw);
+    if (in_txn) try ctx.db.commit();
+    return aw.written();
+}

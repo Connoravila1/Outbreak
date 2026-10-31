@@ -81,14 +81,24 @@ const dot_ticks = 4;
 const extra_attack_chance = 0.20;
 const stand_atk = 0.30;
 const undying_fraction = 0.25;
-const crit_multiplier = 1.6;
-/// dmg = coefficient * ATK^2 / (ATK + DEF) * U(0.85, 1.15). Tuned so even fights last 5 to 8 rounds.
-pub const damage_coefficient = 2.2;
+pub const crit_multiplier = 1.7;
+/// Base dodge and crit chance before the speed difference is applied.
+pub const base_chance = 0.07;
+pub const spread_lo = 0.75;
+pub const spread_hi = 1.25;
+/// Each side also draws a "form" factor U(1 - form_spread, 1 + form_spread) once per fight and
+/// scales all its damage by it. Unlike the per-hit spread it does not average out over a fight,
+/// which is what lets a modest gear edge lose now and then.
+pub const form_spread = 0.5;
+/// dmg = coefficient * ATK^2 / (ATK + DEF) * U(0.75, 1.25) * form. Tuned so even fights last 5 to 8 rounds.
+pub const damage_coefficient = 2.4;
 
 const Fighter = struct {
     c: Combatant,
     hp: i32,
     max_hp: i32,
+    /// Fight-wide damage factor (see `form_spread`).
+    form: f64 = 1.0,
     healed: bool = false,
     survived: bool = false,
     stand: bool = false,
@@ -243,12 +253,12 @@ const Fight = struct {
         const s_me = me.spd();
         const s_foe = foe.spd();
         const diff = 0.5 * (s_foe - s_me) / (s_foe + s_me);
-        const dodge_p = std.math.clamp(0.05 + diff, 0.02, 0.30);
-        const crit_p = std.math.clamp(0.05 - diff, 0.02, 0.35) + me.c.mods.crit;
+        const dodge_p = std.math.clamp(base_chance + diff, 0.02, 0.30);
+        const crit_p = std.math.clamp(base_chance - diff, 0.02, 0.35) + me.c.mods.crit;
 
         const dodged = self.rng.float() < dodge_p;
         const rolled_crit = self.rng.float() < crit_p;
-        const spread = self.rng.range(0.85, 1.15);
+        const spread = self.rng.range(spread_lo, spread_hi);
         if (dodged) {
             self.emit(i, .dodge, via, 0, 0);
             return;
@@ -258,7 +268,7 @@ const Fight = struct {
         const is_crit = forced != null or rolled_crit;
         const a_atk = me.atk();
         const d_def: f64 = @floatFromInt(foe.c.stats.def);
-        var raw = damage_coefficient * a_atk * a_atk / (a_atk + d_def) * spread;
+        var raw = damage_coefficient * a_atk * a_atk / (a_atk + d_def) * spread * me.form;
         if (is_crit) raw *= crit_multiplier;
         if (foe.hasGuard() != null and self.round <= guard_rounds) raw *= 1.0 - guard_reduction;
         const dmg = @max(1, roundInt(raw));
@@ -318,11 +328,16 @@ fn roundInt(x: f64) i32 {
 /// Resolve a fight. Writes the turn log into `log` (use `max_log` entries to be safe; excess
 /// events are dropped) and returns the outcome. `a` is conventionally the player.
 pub fn fight(a: Combatant, b: Combatant, seed: u64, log: []Turn) Result {
+    return fightWith(a, b, seed, log, form_spread);
+}
+
+fn fightWith(a: Combatant, b: Combatant, seed: u64, log: []Turn, form: f64) Result {
     var fx = Fight{
         .f = .{ Fighter.init(a), Fighter.init(b) },
         .rng = rng_mod.Rng.init(seed),
         .log = log,
     };
+    for (&fx.f) |*x| x.form = fx.rng.range(1.0 - form, 1.0 + form);
 
     while (fx.round < max_turns and fx.bothAlive()) {
         fx.round += 1;
@@ -362,6 +377,11 @@ pub fn fight(a: Combatant, b: Combatant, seed: u64, log: []Turn) Result {
 
 const testing = std.testing;
 
+/// A fight without the per-fight form factor, so mechanics tests see plain damage numbers.
+fn flat(a: Combatant, b: Combatant, seed: u64, log: []Turn) Result {
+    return fightWith(a, b, seed, log, 0);
+}
+
 fn mk(atk: i32, def: i32, spd: i32, hp: i32) Combatant {
     return .{ .faction = .human, .stats = .{ .hp = hp, .atk = atk, .def = def, .spd = spd }, .hp = hp };
 }
@@ -385,13 +405,13 @@ test "same inputs give the same fight; different seeds differ" {
     var l2: [max_log]Turn = undefined;
     const a = mk(20, 10, 12, 120);
     const b = mk(18, 12, 10, 130);
-    const r1 = fight(a, b, 99, &l1);
-    const r2 = fight(a, b, 99, &l2);
+    const r1 = flat(a, b, 99, &l1);
+    const r2 = flat(a, b, 99, &l2);
     try testing.expectEqual(r1, r2);
     try testing.expectEqualSlices(Turn, l1[0..r1.len], l2[0..r2.len]);
     var differs = false;
     for (0..20) |s| {
-        const r3 = fight(a, b, 1000 + s, &l2);
+        const r3 = flat(a, b, 1000 + s, &l2);
         if (r3.len != r1.len or r3.hp_a != r1.hp_a) differs = true;
     }
     try testing.expect(differs);
@@ -402,7 +422,7 @@ test "log is consistent: hp tracks, ends with the winner, never exceeds bounds" 
     const a = mk(20, 10, 12, 120);
     const b = mk(18, 12, 10, 130);
     for (0..300) |s| {
-        const r = fight(a, b, s, &log);
+        const r = flat(a, b, s, &log);
         try testing.expect(r.len > 0 and r.len < max_log);
         const last = log[r.len - 1];
         try testing.expectEqual(r.hp_a, last.hp_a);
@@ -420,8 +440,8 @@ fn expectedDamage(atk: f64, def: f64) f64 {
     return damage_coefficient * atk * atk / (atk + def);
 }
 
-test "damage follows coefficient*ATK^2/(ATK+DEF) with +-15% spread and x1.6 crits" {
-    // 20 vs 10 at coefficient 2.2: 29.33 -> 24.93..33.73 -> 25..34; crit 39.9..54.0 -> 40..54
+test "damage follows coefficient*ATK^2/(ATK+DEF) with +-25% spread and x1.7 crits" {
+    // 20 vs 10 at coefficient 2.4: 32 -> 24..40; crit 40.8..68
     var log: [max_log]Turn = undefined;
     const a = mk(20, 10, 10, 100000);
     const b = mk(20, 10, 10, 100000);
@@ -432,7 +452,7 @@ test "damage follows coefficient*ATK^2/(ATK+DEF) with +-15% spread and x1.6 crit
     var sum: f64 = 0;
     var n: f64 = 0;
     for (0..100) |s| {
-        const r = fight(a, b, s, &log);
+        const r = flat(a, b, s, &log);
         for (log[0..r.len]) |t| switch (t.ev) {
             .hit => {
                 lo = @min(lo, t.dmg);
@@ -448,38 +468,38 @@ test "damage follows coefficient*ATK^2/(ATK+DEF) with +-15% spread and x1.6 crit
         };
     }
     const mean = expectedDamage(20, 10);
-    try testing.expectEqual(@as(i32, @intFromFloat(@round(mean * 0.85))), lo);
-    try testing.expectEqual(@as(i32, @intFromFloat(@round(mean * 1.15))), hi);
-    try testing.expect(crit_lo >= @as(i32, @intFromFloat(@round(mean * 0.85 * 1.6))));
-    try testing.expect(crit_hi <= @as(i32, @intFromFloat(@round(mean * 1.15 * 1.6))) and crit_hi >= 50);
+    try testing.expectEqual(@as(i32, @intFromFloat(@round(mean * spread_lo))), lo);
+    try testing.expectEqual(@as(i32, @intFromFloat(@round(mean * spread_hi))), hi);
+    try testing.expect(crit_lo >= @as(i32, @intFromFloat(@round(mean * spread_lo * crit_multiplier))));
+    try testing.expect(crit_hi <= @as(i32, @intFromFloat(@round(mean * spread_hi * crit_multiplier))) and crit_hi >= 60);
     try testing.expectApproxEqAbs(mean, sum / n, 0.3);
 }
 
 test "dodge rate follows the speed formula" {
-    // Defender SPD 20 vs attacker SPD 10: 0.05 + 0.5*10/30 = 0.2167. Attacks by a only count.
+    // Defender SPD 20 vs attacker SPD 10: 0.07 + 0.5*10/30 = 0.2367. Attacks by a only count.
     var log: [max_log]Turn = undefined;
     var dodges: f64 = 0;
     var attacks: f64 = 0;
     for (0..300) |s| {
-        const r = fight(mk(5, 100, 10, 100000), mk(5, 100, 20, 100000), s, &log);
+        const r = flat(mk(5, 100, 10, 100000), mk(5, 100, 20, 100000), s, &log);
         for (log[0..r.len]) |t| {
             if (t.actor != .a) continue;
             attacks += 1;
             if (t.ev == .dodge) dodges += 1;
         }
     }
-    try testing.expectApproxEqAbs(0.2167, dodges / attacks, 0.02);
+    try testing.expectApproxEqAbs(0.2367, dodges / attacks, 0.02);
 }
 
 test "the faster side acts first; ties are decided by the seed" {
     var log: [max_log]Turn = undefined;
     for (0..50) |s| {
-        _ = fight(mk(20, 10, 10, 100), mk(20, 10, 20, 100), s, &log);
+        _ = flat(mk(20, 10, 10, 100), mk(20, 10, 20, 100), s, &log);
         try testing.expectEqual(Side.b, log[0].actor);
     }
     var a_first: usize = 0;
     for (0..200) |s| {
-        _ = fight(mk(20, 10, 10, 100), mk(20, 10, 10, 100), s, &log);
+        _ = flat(mk(20, 10, 10, 100), mk(20, 10, 10, 100), s, &log);
         if (log[0].actor == .a) a_first += 1;
     }
     try testing.expect(a_first > 60 and a_first < 140);
@@ -487,16 +507,16 @@ test "the faster side acts first; ties are decided by the seed" {
 
 test "30 turn cap: higher HP fraction wins" {
     var log: [max_log]Turn = undefined;
-    const r = fight(mk(1, 1000, 10, 1000), mk(1, 1000, 10, 1000), 3, &log);
+    const r = flat(mk(1, 1000, 10, 1000), mk(1, 1000, 10, 1000), 3, &log);
     try testing.expectEqual(@as(u8, 30), r.rounds);
     // Fraction decides: a starts wounded
     var hurt = mk(1, 1000, 10, 1000);
     hurt.hp = 400;
-    const r2 = fight(hurt, mk(1, 1000, 10, 1000), 3, &log);
+    const r2 = flat(hurt, mk(1, 1000, 10, 1000), 3, &log);
     try testing.expectEqual(Side.b, r2.winner);
     var hurt_b = mk(1, 1000, 10, 1000);
     hurt_b.hp = 400;
-    const r3 = fight(mk(1, 1000, 10, 1000), hurt_b, 3, &log);
+    const r3 = flat(mk(1, 1000, 10, 1000), hurt_b, 3, &log);
     try testing.expectEqual(Side.a, r3.winner);
 }
 
@@ -507,7 +527,7 @@ test "Second Wind and Devour heal 30% once, below 35%" {
         a.hp = 80;
         var seen: usize = 0;
         for (0..40) |s| {
-            const r = fight(a, mk(15, 0, 10, 100000), s, &log);
+            const r = flat(a, mk(15, 0, 10, 100000), s, &log);
             const n = countEv(log[0..r.len], .heal, ab);
             try testing.expect(n <= 1);
             seen += n;
@@ -527,7 +547,7 @@ test "Aimed Shot and Pounce: first landed attack is a crit; Pounce acts first" {
     for ([_]Ability{ .aimed_shot, .pounce }) |ab| {
         for (0..100) |s| {
             const a = withAbility(mk(20, 10, 5, 100), ab);
-            const r = fight(a, mk(20, 10, 30, 100), s, &log);
+            const r = flat(a, mk(20, 10, 30, 100), s, &log);
             if (ab == .pounce) try testing.expectEqual(Side.a, log[0].actor);
             for (log[0..r.len]) |t| {
                 if (t.actor == .a and t.ev != .dodge) {
@@ -544,9 +564,9 @@ test "Barricade and Calcify cut damage by 35% for the first 3 rounds" {
     var log: [max_log]Turn = undefined;
     for ([_]Ability{ .barricade, .calcify }) |ab| {
         for (0..100) |s| {
-            // The foe (side a) hits 20 vs 10: plain 25..34, guarded at most round(33.73*0.65) = 22.
+            // The foe (side a) hits 20 vs 10: plain 24..40, guarded at most round(40*0.65) = 26.
             const guarded = withAbility(mk(20, 10, 10, 100000), ab);
-            const r = fight(mk(20, 10, 10, 100000), guarded, s, &log);
+            const r = flat(mk(20, 10, 10, 100000), guarded, s, &log);
             try testing.expectEqual(Ev.ability, log[0].ev);
             try testing.expectEqual(@as(?Ability, ab), log[0].ability);
             try testing.expectEqual(Side.b, log[0].actor);
@@ -555,7 +575,7 @@ test "Barricade and Calcify cut damage by 35% for the first 3 rounds" {
                 if (t.actor != .a) continue;
                 attacks += 1;
                 if (attacks > guard_rounds) break;
-                if (t.ev == .hit) try testing.expect(t.dmg <= 22);
+                if (t.ev == .hit) try testing.expect(t.dmg <= 26);
             }
         }
     }
@@ -565,11 +585,11 @@ test "Adrenaline announces once when HP drops under 50%" {
     var log: [max_log]Turn = undefined;
     var a = withAbility(mk(20, 10, 10, 100), .adrenaline);
     a.hp = 40;
-    const r = fight(a, mk(5, 100, 10, 100000), 4, &log);
+    const r = flat(a, mk(5, 100, 10, 100000), 4, &log);
     try testing.expectEqual(@as(usize, 1), countEv(log[0..r.len], .ability, .adrenaline));
     // Healthy at the start: the announcement only appears after the HP threshold is crossed.
     const fresh = withAbility(mk(20, 10, 10, 1000), .adrenaline);
-    const r2 = fight(fresh, mk(30, 0, 10, 100000), 4, &log);
+    const r2 = flat(fresh, mk(30, 0, 10, 100000), 4, &log);
     const idx = for (log[0..r2.len], 0..) |t, k| {
         if (t.ability == .adrenaline) break k;
     } else return error.NoAdrenaline;
@@ -583,8 +603,8 @@ test "Adrenaline lifts ATK while wounded" {
     a.hp = 40000;
     var sum: f64 = 0;
     var n: f64 = 0;
-    for (0..30) |s| {
-        const r = fight(a, mk(1, 100, 1, 100000), s, &log);
+    for (0..300) |s| {
+        const r = flat(a, mk(1, 100, 1, 100000), s, &log);
         for (log[0..r.len]) |t| {
             if (t.actor == .a and t.ev == .hit) {
                 sum += @floatFromInt(t.dmg);
@@ -592,32 +612,36 @@ test "Adrenaline lifts ATK while wounded" {
             }
         }
     }
-    try testing.expectApproxEqRel(expectedDamage(115, 100), sum / n, 0.01);
+    try testing.expectApproxEqRel(expectedDamage(115, 100), sum / n, 0.04);
 }
 
 test "Bloodlust stacks to +30% ATK" {
     var log: [max_log]Turn = undefined;
     const a = withAbility(mk(100, 100, 10, 100000), .bloodlust);
-    // Without it a non-crit hit is at most 127. At 5 stacks: 2.2 * 130^2 / 230 = 161.7 (137..186).
-    var late_min: i32 = 1000;
-    for (0..20) |s| {
-        const r = fight(a, mk(1, 100, 1, 100000), s, &log);
+    // At 5 stacks a plain hit averages 2.2 * 130^2 / 230 = 161.7; without them it would be 110.
+    var late_sum: f64 = 0;
+    var late_n: f64 = 0;
+    for (0..40) |s| {
+        const r = flat(a, mk(1, 100, 1, 100000), s, &log);
         try testing.expectEqual(@as(usize, 1), countEv(log[0..r.len], .ability, .bloodlust));
         var landed: usize = 0;
         for (log[0..r.len]) |t| {
             if (t.actor != .a or (t.ev != .hit and t.ev != .crit)) continue;
             landed += 1;
-            if (landed > 6 and t.ev == .hit) late_min = @min(late_min, t.dmg);
+            if (landed > 6 and t.ev == .hit) {
+                late_sum += @floatFromInt(t.dmg);
+                late_n += 1;
+            }
         }
     }
-    try testing.expect(late_min >= 137);
+    try testing.expectApproxEqRel(expectedDamage(130, 100), late_sum / late_n, 0.06);
 }
 
 test "Molotov and Infectious Bite: one burn of 4 ticks at 5% max HP" {
     var log: [max_log]Turn = undefined;
     for ([_]Ability{ .molotov, .infectious_bite }) |ab| {
         const a = withAbility(mk(5, 100, 10, 100000), ab);
-        const r = fight(a, mk(5, 100, 10, 1000), 8, &log);
+        const r = flat(a, mk(5, 100, 10, 1000), 8, &log);
         try testing.expectEqual(@as(usize, 1), countEv(log[0..r.len], .ability, ab));
         try testing.expectEqual(@as(usize, 4), countEv(log[0..r.len], .dot, ab));
         for (log[0..r.len]) |t| {
@@ -635,7 +659,7 @@ test "Overwatch and Swarm add extra attacks about 20% of rounds" {
         var extras: f64 = 0;
         var rounds: f64 = 0;
         for (0..100) |s| {
-            const r = fight(withAbility(mk(5, 100, 10, 100000), ab), mk(5, 100, 10, 100000), s, &log);
+            const r = flat(withAbility(mk(5, 100, 10, 100000), ab), mk(5, 100, 10, 100000), s, &log);
             for (log[0..r.len]) |t| {
                 if (t.ability == ab) extras += 1;
             }
@@ -650,7 +674,7 @@ test "Last Stand leaves 1 HP once and boosts ATK" {
     var a = withAbility(mk(1, 0, 10, 100), .last_stand);
     a.hp = 10;
     for (0..30) |s| {
-        const r = fight(a, mk(200, 0, 10, 100000), s, &log);
+        const r = flat(a, mk(200, 0, 10, 100000), s, &log);
         try testing.expectEqual(@as(usize, 1), countEv(log[0..r.len], .ability, .last_stand));
         for (log[0..r.len], 0..) |t, k| {
             if (t.ability == .last_stand) {
@@ -667,7 +691,7 @@ test "Undying raises at 25% HP once" {
     var a = withAbility(mk(1, 0, 10, 200), .undying);
     a.hp = 10;
     for (0..30) |s| {
-        const r = fight(a, mk(400, 0, 10, 100000), s, &log);
+        const r = flat(a, mk(400, 0, 10, 100000), s, &log);
         try testing.expectEqual(@as(usize, 1), countEv(log[0..r.len], .revive, .undying));
         for (log[0..r.len]) |t| {
             if (t.ev == .revive) {
@@ -683,7 +707,7 @@ test "Hunger and Leech heal a share of damage dealt; Thorns reflect" {
     var a = mk(30, 10, 10, 500);
     a.hp = 100;
     a.mods.leech = 0.15;
-    const r = fight(a, mk(1, 10, 10, 100000), 5, &log);
+    const r = flat(a, mk(1, 10, 10, 100000), 5, &log);
     var seen: usize = 0;
     for (log[0..r.len]) |t| {
         if (t.actor == .a and t.dmg > 0) {
@@ -697,7 +721,7 @@ test "Hunger and Leech heal a share of damage dealt; Thorns reflect" {
     // Thorns: b holds thorns 10%; every landed hit by a costs a about a tenth of its damage.
     var b = mk(1, 10, 1, 100000);
     b.mods.thorns = 0.10;
-    const r2 = fight(mk(30, 0, 100, 100000), b, 5, &log);
+    const r2 = flat(mk(30, 0, 100, 100000), b, 5, &log);
     var prev: i32 = 100000;
     var checked: usize = 0;
     for (log[0..r2.len]) |t| {
@@ -717,7 +741,25 @@ test "even level-1 fights run 5 to 8 rounds on average" {
     const base = stats_mod.baseStats(1);
     const c = Combatant{ .faction = .human, .stats = base, .hp = base.hp };
     var total: f64 = 0;
-    for (0..500) |s| total += @floatFromInt(fight(c, c, s, &log).rounds);
+    for (0..500) |s| total += @floatFromInt(flat(c, c, s, &log).rounds);
     const mean = total / 500.0;
     try testing.expect(mean > 4.0 and mean < 14.0);
+}
+
+test "form factor makes a modest gear edge lose now and then, and is deterministic per seed" {
+    var log: [max_log]Turn = undefined;
+    const weak = mk(20, 10, 10, 120);
+    const strong = mk(22, 11, 10, 130);
+    var strong_wins: f64 = 0;
+    for (0..2000) |s| {
+        if (fight(strong, weak, s, &log).winner == .a) strong_wins += 1;
+    }
+    try testing.expect(strong_wins / 2000 > 0.6 and strong_wins / 2000 < 0.93);
+    try testing.expectEqual(fight(strong, weak, 7, &log), fight(strong, weak, 7, &log));
+    // Without it the same edge would be close to a sure thing.
+    var flat_wins: f64 = 0;
+    for (0..500) |s| {
+        if (flat(strong, weak, s, &log).winner == .a) flat_wins += 1;
+    }
+    try testing.expect(flat_wins / 500 > strong_wins / 2000 + 0.03);
 }

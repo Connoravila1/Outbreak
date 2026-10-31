@@ -84,13 +84,17 @@ Combat is automatic and server-resolved, deterministic from a seed. A fight is a
 
 For each attack, attacker A vs defender D:
 
-    dodge = clamp(0.05 + 0.5*(D.SPD - A.SPD)/(D.SPD + A.SPD), 0.02, 0.30)
-    crit  = clamp(0.05 + 0.5*(A.SPD - D.SPD)/(A.SPD + D.SPD), 0.02, 0.35)  (+ perks)
-    dmg   = max(1, round(2.2 * A.ATK^2 / (A.ATK + D.DEF) * U(0.85, 1.15)))
-    crit hit: dmg *= 1.6
+    dodge = clamp(0.07 + 0.5*(D.SPD - A.SPD)/(D.SPD + A.SPD), 0.02, 0.30)
+    crit  = clamp(0.07 + 0.5*(A.SPD - D.SPD)/(A.SPD + D.SPD), 0.02, 0.35)  (+ perks)
+    dmg   = max(1, round(2.4 * A.ATK^2 / (A.ATK + D.DEF) * U(0.75, 1.25) * form_A))
+    crit hit: dmg *= 1.7
+
+`form` is a per-fight factor, drawn once per side from U(0.5, 1.5), that scales all of that side's
+damage in the fight. Unlike the per-hit spread it does not average out, so a fight is never a
+foregone conclusion: it is what makes a gear edge a strong tilt rather than a guarantee.
 
 A combatant at 0 HP loses. After 30 turns, higher HP fraction wins (a tie goes to the defender,
-side B). Expected: an even fight ends in 5–8 turns (the simulator measures 6–8 for equal kits). The client plays the turn log back as an animation (≈4–8 s), skippable.
+side B). Expected: an even fight ends in 5–8 turns (the simulator measures 5–7 for equal kits). Same level, standard kits: Uncommon beats Common ≈ 63–73% of the time, Rare beats Common ≈ 83–85%. The client plays the turn log back as an animation (≈4–8 s), skippable.
 
 ### Health, downed, recovery
 
@@ -319,8 +323,8 @@ base in each slot at that level, no upgrades or perks), then HP, ATK and DEF are
 `0.95 + 0.85 * L/50` (players out-grow Common gear with rarity and upgrades; this keeps enemies
 even). Speed is not scaled. Players with level-appropriate gear should win standard fights ~85%
 of the time and lose ~30–45% HP. The simulator measures the spawn-weighted mix at full HP, with
-the gear real players end up with: 94–98% wins and 33–43% HP lost at L10–30, 84–85% and 48% at
-L45+ (Brutes and Hordes are meant to be dangerous at parity).
+the gear real players end up with: 90–95% wins and 31–43% HP lost at L10–35, 84% and 48% at
+L45+ (79% at L5, where Brutes and Hordes bite hardest) (Brutes and Hordes are meant to be dangerous at parity).
 
 | Human sees | Zombie sees | HP | ATK | DEF | SPD | Notes |
 |---|---|---|---|---|---|---|
