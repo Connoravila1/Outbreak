@@ -1,4 +1,5 @@
-import { hapticsOn, soundOn } from '../state/store';
+import { soundOn } from '../state/store';
+import * as haptics from '../native/haptics';
 
 let ctx: AudioContext | null = null;
 
@@ -17,8 +18,7 @@ function ac(): AudioContext | null {
 export function unlockAudio() { ac(); }
 
 export function haptic(pattern: number | number[]) {
-  if (!hapticsOn.peek()) return;
-  try { navigator.vibrate?.(pattern); } catch { /* unsupported */ }
+  haptics.vibrate(pattern);
 }
 
 function thumpAt(c: AudioContext, t: number, freq: number, gain: number) {
@@ -166,7 +166,7 @@ export function hit() {
   if (!c) return;
   noiseBurst(c, c.currentTime, 0.12, 1400, 0.3);
   thumpAt(c, c.currentTime, 90, 0.35);
-  haptic(12);
+  haptics.hit();
 }
 
 export function crit() {
@@ -177,7 +177,7 @@ export function crit() {
     thumpAt(c, t, 60, 0.6);
     blip(c, t, 'sawtooth', 420, 110, 0.2, 0.12);
   }
-  haptic([40, 30, 60]);
+  haptics.crit();
 }
 
 export function dodge() {
@@ -221,7 +221,7 @@ export function levelUp() {
     [392, 494, 587, 784, 988].forEach((f, i) => blip(c, t + i * 0.09, 'square', f, f, 0.3, 0.05));
     thumpAt(c, t, 48, 0.55);
   }
-  haptic([60, 40, 60, 40, 200]);
+  haptics.levelUp();
 }
 
 /** Two-tone alarm for CONTACT, plus the strong vibration pattern. */
@@ -234,5 +234,5 @@ export function contactAlarm() {
       blip(c, t + i * 0.34 + 0.17, 'sawtooth', 620, 620, 0.15, 0.1);
     }
   }
-  haptic([300, 100, 300, 100, 300, 100, 600]);
+  haptics.contact();
 }

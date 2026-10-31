@@ -1,6 +1,8 @@
 // Tiny key/value store. All access is wrapped so private-mode / blocked storage never throws.
-// Swap `backend` for Capacitor Preferences later (it is async there; callers use the sync
-// facade backed by an in-memory cache that Capacitor can pre-fill at startup).
+// On native, Capacitor Preferences is async, so `hydrateStorage()` loads every key into memory
+// before the app renders and writes go through to Preferences (callers stay synchronous).
+import { Preferences } from '@capacitor/preferences';
+import { isNative } from '../native/platform';
 
 export interface StorageBackend {
   get(key: string): string | null;
@@ -31,6 +33,35 @@ const localBackend: StorageBackend = {
 
 let backend: StorageBackend = localBackend;
 export function setStorageBackend(b: StorageBackend) { backend = b; }
+
+/** Preferences-backed store: sync reads from a cache filled at startup, writes go through. */
+function preferencesBackend(cache: Map<string, string>): StorageBackend {
+  return {
+    get: (key) => cache.get(key) ?? null,
+    set(key, value) {
+      cache.set(key, value);
+      void Preferences.set({ key, value }).catch(() => undefined);
+    },
+    remove(key) {
+      cache.delete(key);
+      void Preferences.remove({ key }).catch(() => undefined);
+    },
+  };
+}
+
+/** Await before anything reads storage. A no-op in the browser. */
+export async function hydrateStorage(): Promise<void> {
+  if (!isNative) return;
+  const cache = new Map<string, string>();
+  try {
+    const { keys } = await Preferences.keys();
+    await Promise.all(keys.map(async (key) => {
+      const { value } = await Preferences.get({ key });
+      if (value != null) cache.set(key, value);
+    }));
+  } catch { /* start empty */ }
+  setStorageBackend(preferencesBackend(cache));
+}
 
 export const storage = {
   get: (k: string) => backend.get(k),

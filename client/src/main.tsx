@@ -10,12 +10,22 @@ import '@fontsource/permanent-marker/400';
 import './styles/tokens.css';
 import './styles/base.css';
 import './styles/layout.css';
-import { App } from './app';
-import { installMock, mockRequested } from './dev/mock';
+import { hydrateStorage } from './api/storage';
 
 // Neutral until a side is chosen; the store flips this once /api/me says who you are.
 document.documentElement.dataset.lens = 'neutral';
 
-if (mockRequested()) installMock();
-
-render(<App />, document.getElementById('app')!);
+// Storage must be hydrated (native Preferences) before any module reads a setting, so the
+// app and the store are imported only afterwards.
+async function main() {
+  await hydrateStorage();
+  const [{ App }, { installMock, mockRequested }, { initNative }] = await Promise.all([
+    import('./app'),
+    import('./dev/mock'),
+    import('./native/lifecycle'),
+  ]);
+  if (mockRequested()) installMock();
+  initNative();
+  render(<App />, document.getElementById('app')!);
+}
+void main();

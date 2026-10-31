@@ -1,4 +1,6 @@
 import { Emitter, type LocationSource } from './source';
+import { getOnceNative } from './native';
+import { isNative } from '../native/platform';
 
 export class RealSource extends Emitter implements LocationSource {
   readonly kind = 'real' as const;
@@ -22,6 +24,7 @@ export class RealSource extends Emitter implements LocationSource {
 
 /** One-shot fix, used by onboarding to centre the split lens and by the simulator panel. */
 export function getOnce(timeout = 12000): Promise<{ lat: number; lon: number; acc: number }> {
+  if (isNative) return getOnceNative(timeout);
   return new Promise((resolve, reject) => {
     if (!('geolocation' in navigator)) { reject(new Error('no geolocation')); return; }
     navigator.geolocation.getCurrentPosition(

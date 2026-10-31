@@ -7,6 +7,7 @@ import { Icon } from '../ui/Icon';
 import { Section } from '../ui/kit';
 import { Credits } from './Credits';
 import { unlockAudio } from '../audio/fx';
+import { isNative } from '../native/platform';
 
 function Toggle({ label, hint, checked, onChange }: { label: string; hint?: string; checked: boolean; onChange: (v: boolean) => void }) {
   return (
@@ -52,7 +53,7 @@ export function Settings() {
       <Toggle label={say('Sound', 'sound')} checked={soundOn.value} onChange={(v) => { setSetting(soundOn, KEYS.sound, v); if (v) unlockAudio(); }} />
       <Toggle label={say('Haptics', 'touch')} checked={hapticsOn.value} onChange={(v) => setSetting(hapticsOn, KEYS.haptics, v)} />
       <Toggle label={say('Reduce motion', 'still')} hint={say('Overrides your device setting. No screen shake, no breathing.', 'no shaking. no breathing.')} checked={reducedMotion.value} onChange={(v) => setSetting(reducedMotion, KEYS.reducedMotion, v)} />
-      <Toggle label={say('GPS simulator', 'fake steps')} hint={isDesktop() ? undefined : say('For testing without walking.', 'for testing.')} checked={simActive.value} onChange={setSimActive} />
+      {!isNative && <Toggle label={say('GPS simulator', 'fake steps')} hint={isDesktop() ? undefined : say('For testing without walking.', 'for testing.')} checked={simActive.value} onChange={setSimActive} />}
 
       <div class="kv code-kv">
         <span>{say('Recovery code', 'recovery code')}</span>

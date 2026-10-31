@@ -19,11 +19,13 @@ import { Toasts } from './ui/kit';
 import { RewardsSheet } from './ui/RewardsSheet';
 import { setUnauthorizedHandler, setToken } from './api';
 import { Icon } from './ui/Icon';
+import { ServerAddress } from './onboarding/ServerAddress';
+import { isNative } from './native/platform';
 import './shell/shell.css';
 
 const bootError = signal<string | null>(null);
 const desktop = signal(isDesktop());
-if (typeof matchMedia === 'function') {
+if (typeof matchMedia === 'function' && !isNative) {
   matchMedia('(min-width: 900px) and (pointer: fine)').addEventListener('change', (e) => { desktop.value = e.matches; });
 }
 
@@ -89,6 +91,7 @@ export function App() {
     <div class="stage">
       <main class={'phone' + (desktop.value ? ' framed' : '')}>
         {p === 'boot' && <Boot />}
+        {p === 'server' && <ServerAddress onDone={() => { phase.value = 'boot'; void start(); }} />}
         {p === 'onboarding' && <Onboarding />}
         {p === 'app' && <Shell />}
       </main>

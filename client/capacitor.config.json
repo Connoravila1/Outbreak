@@ -1,0 +1,24 @@
+{
+  "appId": "com.outbreak.game",
+  "appName": "Outbreak",
+  "webDir": "dist",
+  "backgroundColor": "#0B0C0E",
+  "plugins": {
+    "SplashScreen": {
+      "launchAutoHide": false,
+      "backgroundColor": "#0B0C0E",
+      "showSpinner": false
+    },
+    "StatusBar": {
+      "overlaysWebView": true,
+      "style": "DARK"
+    },
+    "CapacitorHttp": {
+      "enabled": true
+    },
+    "LocalNotifications": {
+      "smallIcon": "ic_notify",
+      "iconColor": "#E2342D"
+    }
+  }
+}

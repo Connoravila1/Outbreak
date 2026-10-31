@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'preact/hooks';
-import { locationError, position, setSimActive, simActive, startLocation, isDesktop } from '../location';
+import { locationError, position, setSimActive, simActive, startLocation, isDesktop, requestLocationPermission } from '../location';
 import { unlockAudio } from '../audio/fx';
+import { isNative } from '../native/platform';
 
 /** Location permission, with the honest framing. */
 export function Locate({ onDone }: { onDone: () => void }) {
@@ -11,7 +12,12 @@ export function Locate({ onDone }: { onDone: () => void }) {
   useEffect(() => { if (have && asked) onDone(); }, [have, asked]);
   useEffect(() => { if (simActive.value) startLocation(); }, []);
 
-  const ask = () => { unlockAudio(); setAsked(true); startLocation(); };
+  const ask = async () => {
+    unlockAudio();
+    setAsked(true);
+    if (!(await requestLocationPermission())) { locationError.value = 'Location permission was denied. Turn it on in Settings, then try again.'; return; }
+    startLocation();
+  };
 
   return (
     <div class="ob-screen locate">
@@ -28,7 +34,7 @@ export function Locate({ onDone }: { onDone: () => void }) {
         {err && <p class="ob-error" role="alert">{err}</p>}
         <div class="ob-actions">
           <button class="btn primary block" onClick={ask}>{err ? 'Try again' : asked ? 'Waiting…' : 'Allow location'}</button>
-          {(err || isDesktop()) && (
+          {!isNative && (err || isDesktop()) && (
             <button class="btn block" onClick={() => { setSimActive(true); setAsked(true); }}>Use the desktop simulator</button>
           )}
         </div>

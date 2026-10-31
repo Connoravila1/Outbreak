@@ -2,23 +2,27 @@ import { signal } from '@preact/signals';
 import { KEYS, storage } from '../api/storage';
 import { RealSource } from './real';
 import { SimSource } from './sim';
+import { NativeSource, requestNativeLocationPermission } from './native';
+import { isNative } from '../native/platform';
 import type { Fix } from './geo';
 import type { LocationSource } from './source';
 
 export * from './geo';
 export { PRESETS, WALK_SPEED, RUN_SPEED } from './sim';
 export { getOnce } from './real';
+export { requestNativeLocationPermission } from './native';
 
 /** Wide pointer-driven viewports get the simulator by default; phones use real GPS. */
 export function isDesktop(): boolean {
+  if (isNative) return false;
   return window.matchMedia('(min-width: 900px) and (pointer: fine)').matches;
 }
 
 export const sim = new SimSource();
-export const real = new RealSource();
+export const real = isNative ? new NativeSource() : new RealSource();
 
 const stored = storage.get(KEYS.simActive);
-export const simActive = signal<boolean>(stored == null ? isDesktop() : stored === '1');
+export const simActive = signal<boolean>(isNative ? false : stored == null ? isDesktop() : stored === '1');
 /** Latest fix from the active source. */
 export const position = signal<Fix | null>(null);
 export const locationError = signal<string | null>(null);
@@ -43,7 +47,14 @@ export function startLocation() {
   active.start();
 }
 
+/** Native builds never simulate. Browsers prompt on first watch; native asks explicitly first. */
+export async function requestLocationPermission(): Promise<boolean> {
+  if (!isNative) return true;
+  return (await requestNativeLocationPermission()) === 'granted';
+}
+
 export function setSimActive(on: boolean) {
+  if (isNative) return;
   simActive.value = on;
   storage.set(KEYS.simActive, on ? '1' : '0');
   position.value = null;

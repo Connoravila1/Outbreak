@@ -1,6 +1,7 @@
 import { signal, computed, effect } from '@preact/signals';
-import { api, ApiError, getToken, setToken, type Battle, type Catalog, type Faction, type GameEvent, type Me, type WorldView } from '../api';
+import { api, ApiError, getServerUrl, getToken, setToken, type Battle, type Catalog, type Faction, type GameEvent, type Me, type WorldView } from '../api';
 import { KEYS, storage } from '../api/storage';
+import { isNative } from '../native/platform';
 
 export type Lens = 'neutral' | 'survey' | 'heat';
 export type TabId = 'map' | 'gear' | 'tasks' | 'war' | 'you';
@@ -9,8 +10,8 @@ export const me = signal<Me | null>(null);
 export const catalog = signal<Catalog | null>(null);
 export const world = signal<WorldView | null>(null);
 export const tab = signal<TabId>('map');
-/** boot: checking the token. onboarding: no account / no faction. app: ready. */
-export const phase = signal<'boot' | 'onboarding' | 'app'>('boot');
+/** boot: checking the token. server: native build with no server address yet. onboarding: no account / no faction. app: ready. */
+export const phase = signal<'boot' | 'server' | 'onboarding' | 'app'>('boot');
 export const lensOverride = signal<Lens | null>(null);
 export const faction = computed<Faction | null>(() => me.value?.faction ?? null);
 export const lens = computed<Lens>(() => lensOverride.value ?? (faction.value === 'human' ? 'survey' : faction.value === 'zombie' ? 'heat' : 'neutral'));
@@ -44,6 +45,8 @@ export async function loadCatalog() {
 
 /** Decide where to land at launch. */
 export async function boot() {
+  // Same-origin means nothing inside a native shell; ask where the server is.
+  if (isNative && !getServerUrl()) { phase.value = 'server'; return; }
   const token = getToken();
   if (!token) { phase.value = 'onboarding'; return; }
   try {

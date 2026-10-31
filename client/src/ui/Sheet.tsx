@@ -1,6 +1,7 @@
 import type { ComponentChildren } from 'preact';
 import { useEffect, useRef } from 'preact/hooks';
 import { createPortal } from 'preact/compat';
+import { pushBack } from './back';
 import './sheet.css';
 
 interface Props {
@@ -19,7 +20,8 @@ export function Sheet({ title, onClose, children, tall }: Props) {
     ref.current?.focus();
     const key = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', key);
-    return () => { window.removeEventListener('keydown', key); prev?.focus?.(); };
+    const unback = pushBack(onClose);
+    return () => { unback(); window.removeEventListener('keydown', key); prev?.focus?.(); };
   }, []);
   const node = (
     <div class="sheet-root">
