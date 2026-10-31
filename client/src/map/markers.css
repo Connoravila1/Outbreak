@@ -23,6 +23,13 @@
 .mk-survey.mk-cache .grease, .mk-survey.mk-airdrop .grease { stroke: var(--survey-brown); }
 .mk-survey.mk-echo .grease { stroke: var(--survey-blue); stroke-dasharray: 2 5; }
 .mk-survey.mk-stronghold .grease, .mk-survey.mk-raid .grease { stroke: var(--ink); }
+.mk-note.mk-note-off { opacity: 0; }
+.mk-note { transition: opacity .15s; }
+.mk-first { position: absolute; left: 50%; top: 50%; width: 56px; height: 56px; translate: -50% -50%; border-radius: 50%; pointer-events: none; z-index: 1; animation: first-pulse 1.4s ease-out infinite; }
+.mk-survey .mk-first { border: 3px solid var(--hazard); box-shadow: 0 0 0 2px var(--ink); }
+.mk-heat .mk-first { border: 2px solid var(--white-hot); box-shadow: 0 0 16px var(--white-hot), inset 0 0 12px var(--white-hot); }
+@keyframes first-pulse { 0% { scale: .9; opacity: 1; } 100% { scale: 1.9; opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .mk-first { animation: none; } }
 .mk-survey .mk-note { color: var(--grease); text-shadow: 0 0 3px var(--paper), 0 0 3px var(--paper), 0 0 2px var(--paper); }
 .mk-survey.mk-cache .mk-note, .mk-survey.mk-airdrop .mk-note { color: var(--survey-brown); }
 .mk-survey.mk-echo .mk-note { color: var(--survey-blue); }

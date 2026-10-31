@@ -45,6 +45,9 @@ export function GameMap() {
     ring.current = el.querySelector('.you-ring');
     youMk.current = new maplibregl.Marker({ element: el, pitchAlignment: 'map' }).setLngLat([p.lon, p.lat]).addTo(map);
     map.on('zoom', sizeRing);
+    const tidy = () => layer.current?.declutter(position.peek(), selectedId.peek());
+    map.on('zoomend', tidy);
+    map.on('moveend', tidy);
     map.on('dragstart', () => { follow.value = false; });
     map.on('click', (e) => {
       selectedId.value = null;
@@ -105,6 +108,7 @@ export function GameMap() {
     const lvl = me.value?.level ?? 1;
     if (!layer.current) return;
     layer.current.sync(w && f ? objectsFrom(w, f) : [], { lens: l, myLevel: lvl, selectedId: sel, onSelect: select });
+    layer.current.declutter(position.peek(), sel);
   });
 
   useEffect(() => () => {

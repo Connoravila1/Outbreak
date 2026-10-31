@@ -17,7 +17,13 @@ function bump(f: (r: Record_) => void) {
   storage.setJSON(KEY, r);
 }
 
+const COACH_KEY = 'outbreak.coach.first';
+/** The one-time "your first one" hint over the map; gone after the first PvE win. */
+export const coachDone = signal<boolean>(storage.get(COACH_KEY) === '1');
+function endCoach() { if (!coachDone.peek()) { coachDone.value = true; storage.set(COACH_KEY, '1'); } }
+
 export function recordBattle(b: Battle, contact: boolean) {
+  if (b.winner === 'a' && b.kind === 'pve') endCoach();
   bump((r) => {
     if (b.winner === 'a') r.wins++; else r.losses++;
     if (contact || b.kind === 'pvp') r.contacts++;

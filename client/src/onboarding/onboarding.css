@@ -20,7 +20,8 @@
 :root[data-lens='neutral'] .ob-error { color: #ff7b75; }
 .ob-hint { font-size: var(--fs-14); color: var(--text-dim); }
 .field.big { font-size: var(--fs-20); min-height: 56px; }
-.code { font-family: var(--f-display); font-weight: 800; font-size: 30px; letter-spacing: .1em; padding: 14px; text-align: center; border: 2px dashed var(--text); user-select: all; word-break: break-all; }
+.code { font-family: var(--f-display); font-weight: 800; font-size: clamp(16px, 5.3vw, 30px); letter-spacing: .06em; padding: 14px 8px; text-align: center; border: 2px dashed var(--text); user-select: all; overflow-wrap: normal; word-break: keep-all; }
+.code .grp { white-space: nowrap; }
 :root[data-lens='heat'] .code { font-family: var(--f-body); letter-spacing: .12em; border-color: var(--hot); color: var(--white-hot); }
 
 /* ----- broadcast ----- */

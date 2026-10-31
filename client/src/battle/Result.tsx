@@ -92,7 +92,7 @@ export function Result({ battle, onContinue }: { battle: Battle; onContinue: () 
   useEffect(() => {
     if (step >= final) return;
     const nextLegendary = step >= 3 && step < 3 + n && r.items[step - 3].rarity === 'legendary';
-    const d = step === 0 ? 800 : step === 1 ? 1100 : step === 2 ? 800 : step < 3 + n ? (nextLegendary ? 1500 : 650) : 600;
+    const d = step === 0 ? 650 : step === 1 ? 950 : step === 2 ? 650 : step < 3 + n ? (nextLegendary ? 1500 : 600) : 450;
     const t = window.setTimeout(() => setStep(step + 1), d);
     return () => clearTimeout(t);
   }, [step]);
@@ -114,7 +114,7 @@ export function Result({ battle, onContinue }: { battle: Battle; onContinue: () 
   const f = faction.value;
   return (
     <div class={'result ' + (won ? 'won' : 'lost')} data-faction={f}>
-      <div class="res-scroll scroll">
+      <div class="res-scroll scroll" onClick={() => { if (step < final) skip(); }}>
         <p class="eyebrow dim voice">{foeLabel(battle)} · {say('level', 'level')} {battle.b.level}</p>
         <h1 class="res-word display">{outcomeWord(won)}</h1>
         <p class="res-line-1">{outcomeLine(won, dmg)}</p>

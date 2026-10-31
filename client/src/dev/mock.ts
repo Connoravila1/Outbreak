@@ -6,7 +6,7 @@
  */
 import { setFetcher } from '../api/client';
 import type {
-  Battle, Catalog, ClanMessage, Combatant, Faction, GameEvent, Item, LeaderboardEntry, Me, Mission, Rarity, Rewards, Slot, Stats, Turn, WorldView,
+  Battle, Catalog, ClanMessage, Combatant, Faction, GameEvent, Item, LeaderboardEntry, Me, Mission, PlayerRecord, Rarity, Rewards, Slot, Stats, Turn, WorldView,
 } from '../api/types';
 
 const KEY = 'outbreak.mock.db';
@@ -74,10 +74,10 @@ const CATALOG: Catalog = {
     { id: 'molotov', level: 25, names: names('Molotov', 'Infectious Bite'), text: 'Your first hit burns: 5% of max HP per turn for 4 turns' },
   ],
   enemies: [
-    { id: 'shambler', names: names('Shambler', 'Scavenger'), text: 'Slow and common.' },
-    { id: 'runner', names: names('Runner', 'Scout'), text: 'Fast and fragile.' },
-    { id: 'bloater', names: names('Bloater', 'Barricader'), text: 'Tanky.' },
-    { id: 'brute', names: names('Brute', 'Soldier'), text: 'Hits hard.' },
+    { id: 'shambler', names: names('Shambler', 'Scavenger'), text: 'Slow, stupid, relentless. It falls apart and keeps coming.', text_zombie: 'Picks through the ruins for tins and boots. Wary, thin, armed with a pipe.', note: 'Common' },
+    { id: 'runner', names: names('Runner', 'Scout'), text: 'Fast, loud and starving. You hear it before you see it.', text_zombie: 'Moves ahead of the group, watching the rooftops. Quick on its feet.', note: 'Fast' },
+    { id: 'bloater', names: names('Bloater', 'Barricader'), text: 'Swollen and slow, a wall of rotten meat. Do not pop it.', text_zombie: 'Hides behind doors and bedsprings lashed to a shopping trolley.', note: 'Tanky' },
+    { id: 'brute', names: names('Brute', 'Soldier'), text: 'Big, angry and hard to put down.', text_zombie: 'Armoured and drilled. Does not scare easily.', note: 'Strong' },
   ],
   levels: {
     xp_to_next: Array.from({ length: 50 }, (_, i) => Math.round((40 * Math.pow(i + 1, 1.55) + 30) / 10) * 10),
@@ -108,12 +108,14 @@ interface DB {
   defeated: string[]; n: number; mprog: number[]; mclaimed: boolean[]; wprog: number; wclaimed: boolean; streak: number;
   clan: { id: string; role: string } | null; chat: ClanMessage[]; warPoints: number; feed: GameEvent[]; contactPending: boolean;
   userClans: Clan[];
+  rec: PlayerRecord;
 }
 function fresh(): DB {
   return {
     callsign: null, faction: null, level: 1, xp: 0, hp: 100, salvage: 0, items: [], eq: { weapon: null, armor: null, utility: null },
     consumables: {}, abil: [], buffs: [], defeated: [], n: 1, mprog: [1, 0, 240], mclaimed: [false, false, false], wprog: 0, wclaimed: false,
     streak: 2, clan: null, chat: [], warPoints: 0, feed: [], contactPending: false, userClans: [],
+    rec: { wins: 0, losses: 0, contacts: 0, echoes: 0, caches: 0, distance_m: 0 },
   };
 }
 function load(): DB {
@@ -197,6 +199,7 @@ function buildMe(): Me {
     missions: { daily: missionList(), weekly: weeklyMission(), streak: db.streak, resets_at: Date.now() + 6 * 3600e3 + 1500e3 },
     clan: db.clan && myClan ? { id: myClan.id, name: myClan.name, tag: myClan.tag, role: db.clan.role } : null,
     avatar: null, pvp_protected: db.level < 5, underdog_bonus: 0.15, war_points_week: db.warPoints,
+    record: db.rec,
   };
 }
 
@@ -232,7 +235,7 @@ function world(lat: number, lon: number): WorldView {
   for (let i = ci - R; i <= ci + R; i++) for (let j = cj - R; j <= cj + R; j++) {
     for (const e of enemiesIn(i, j, w10, lat)) {
       if (db.defeated.includes(e.id)) continue;
-      v.enemies.push({ id: e.id, archetype: e.archetype, level: Math.max(1, db.level + (e.elite ? 3 : e.off)), elite: e.elite, lat: e.lat, lon: e.lon, expires_at: (w10 + 1) * 600e3 });
+      v.enemies.push({ id: e.id, archetype: e.archetype, level: Math.max(1, db.level + (e.elite ? 3 : e.off)), elite: e.elite, tutorial: db.rec.wins === 0 && v.enemies.length === 0, lat: e.lat, lon: e.lon, expires_at: (w10 + 1) * 600e3 });
     }
     const c = cacheIn(i, j, w30, lat);
     if (c && !db.defeated.includes(c.id)) v.caches.push({ id: c.id, kind: 'cache', lat: c.lat, lon: c.lon, expires_at: (w30 + 1) * 1800e3 });
@@ -331,6 +334,9 @@ function resolve(foe: Combatant, kind: Battle['kind'], xpBase: number, warPts: n
   db.hp = Math.max(1, last ? last.hp_a : db.hp);
   const rewards = win ? lootRewards(xpBase, 0.4, bias) : lootRewards(Math.round(xpBase * 0.25), 0);
   if (win) { rewards.war_points = warPts; db.warPoints += warPts; db.mprog[0]++; if (kind !== 'pve') db.wprog++; }
+  if (kind === 'pvp') db.rec.contacts++;
+  if (win) db.rec.wins++; else db.rec.losses++;
+  if (kind === 'echo') db.rec.echoes++;
   grantXp(rewards);
   save();
   return { id: 'b' + db.n, kind, a, b: foe, turns, winner: win ? 'a' : 'b', rewards, me: buildMe() };
@@ -419,10 +425,12 @@ function route(method: string, path: string, body: any, authed: boolean): unknow
       const v = world(need(body, 'lat'), need(body, 'lon'));
       v.me.hp = buildMe().hp;
       db.mprog[2] += 18;
+      db.rec.distance_m += 18;
       if (body.sanctuary) { v.enemies = []; v.caches = []; v.echoes = []; v.hostiles_near = false; }
       else if (db.contactPending && db.level >= 5) {
         db.contactPending = false;
         const b = contactBattle();
+        db.rec.contacts++;
         v.events.push(pushFeed('contact', `A ${b.b.faction === 'zombie' ? 'Zombie' : 'Human'} found you. ${b.winner === 'a' ? 'You held.' : 'You fell.'}`, { battle: b }));
         v.events.push(pushFeed('echo_report', 'Your echo held against a ' + (db.faction === 'human' ? 'Zombie' : 'Human') + ' (+15 XP).'));
         v.me = { ...v.me, hp: b.me.hp, level: b.me.level, xp: b.me.xp, xp_next: b.me.xp_next, salvage: b.me.salvage };
@@ -458,6 +466,7 @@ function route(method: string, path: string, body: any, authed: boolean): unknow
       const id = String(need(body, 'id'));
       if (db.defeated.includes(id)) throw new HttpError(404, 'gone', 'Already opened.');
       db.defeated.push(id);
+      db.rec.caches++;
       db.mprog[1]++;
       const loot = lootRewards(10 + 2 * db.level, 0.55);
       grantXp(loot); save();

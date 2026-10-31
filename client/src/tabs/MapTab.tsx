@@ -10,7 +10,7 @@ import { Sheet } from '../ui/Sheet';
 import { Icon } from '../ui/Icon';
 import { say } from '../ui/voice';
 import { RewardLines } from '../ui/RewardLines';
-import { recordCache } from '../state/record';
+import { coachDone, recordCache } from '../state/record';
 import { enqueueLevelUp } from '../battle/session';
 import type { Rewards } from '../api';
 import { clock } from '../shell/Vitals';
@@ -105,8 +105,10 @@ function ObjectSheet({ o, onClose }: { o: GameObject; onClose: () => void }) {
           <p class="obj-sub">{KIND_LINE[o.kind][isHeat ? 1 : 0]}{o.detail ? ` ${o.detail}.` : ''}</p>
         </div>
       </div>
+      {o.lore && <p class="obj-lore">{o.lore}</p>}
       <div class="pill-row">
         {o.elite && o.kind === 'enemy' && <span class="pill t-deadly">{say('Elite', 'elite')}</span>}
+        {o.note && <span class="pill">{o.note}</span>}
         {threat && <span class={'pill t-' + threat}>{isHeat ? THREAT_WORD_HEAT[threat] : THREAT_WORD[threat]}</span>}
         <span class={'pill ' + (inRange ? 'in-range' : 'far')}>{inRange ? say('In range', 'in reach') : say(`Move closer · ${formatDistance(dist)}`, `${formatDistance(dist)} away`)}</span>
         {eta != null && eta > 0 && <span class="pill far">{say('Gone in', 'fades in')} {clock(eta)}</span>}
@@ -127,6 +129,7 @@ export function MapTab() {
   const f = faction.value;
   const sel = selectedId.value;
   const obj = w && f && sel ? objectsFrom(w, f).find((o) => o.id === sel) : undefined;
+  const coach = !coachDone.value && !obj && !!w?.enemies.some((e) => e.tutorial);
   const nothing = w && w.enemies.length + w.caches.length + w.echoes.length === 0;
   return (
     <>
@@ -136,6 +139,12 @@ export function MapTab() {
       {!inSanctuary.value && pollError.value && <p class="map-banner err" role="alert">{pollError.value}</p>}
       {nothing && !inSanctuary.value && (
         <p class="map-note">{say('Nothing within 450 m. Walk a block and it changes every 10 minutes.', 'nothing warm within 450 m. walk. it shifts every 10 minutes.')}</p>
+      )}
+      {coach && (
+        <p class="coach" role="status">
+          <Icon name="crossed-swords" size={20} />
+          <span>{say('Your first one. Tap it, then Engage.', 'the first one. close. take it.')}</span>
+        </p>
       )}
       <button class="map-fab" aria-pressed={follow.value} aria-label="Center on me" onClick={() => { follow.value = true; }}>
         <Icon name="gps" size={28} />

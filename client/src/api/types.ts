@@ -44,6 +44,8 @@ export interface Buff { kind: string; until: number }
 
 export interface ClanRef { id: string; name: string; tag: string; role: string }
 
+export interface PlayerRecord { wins: number; losses: number; contacts: number; echoes: number; caches: number; distance_m: number }
+
 export interface Me {
   id: string;
   callsign: string;
@@ -70,6 +72,7 @@ export interface Me {
   pvp_protected: boolean;
   underdog_bonus: number;
   war_points_week: number;
+  record: PlayerRecord;
 }
 
 export interface MeLite {
@@ -83,7 +86,7 @@ export interface MeLite {
 }
 
 export interface WorldEnemy {
-  id: string; archetype: string; level: number; elite: boolean;
+  id: string; archetype: string; level: number; elite: boolean; tutorial?: boolean;
   lat: number; lon: number; expires_at: number;
 }
 export interface WorldCache {
@@ -174,7 +177,7 @@ export interface CatalogConsumable {
 export interface CatalogAbility {
   id: string; level: number; names: Record<Faction, string>; text: string;
 }
-export interface CatalogEnemy { id: string; names: Record<Faction, string>; text: string }
+export interface CatalogEnemy { id: string; names: Record<Faction, string>; text: string; text_zombie?: string; note?: string }
 export interface CatalogStoreEntry { sku: string; name: string; price: number; text: string }
 export interface Catalog {
   version: number | string;

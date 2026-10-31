@@ -39,7 +39,7 @@ export function WarTab() {
             <FactionBar human={war.global.human} zombie={war.global.zombie} label="Global" />
             {war.district ? (
               <>
-                <p class="dim bar-cap">{say('Your district', 'your ground')} · {war.district.id}</p>
+                <p class="dim bar-cap">{say('Your district', 'your district')}</p>
                 <FactionBar human={war.district.human} zombie={war.district.zombie} label="District" />
               </>
             ) : <p class="dim bar-cap">{say('No district data here yet.', 'no ground counted here yet.')}</p>}

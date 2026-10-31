@@ -31,14 +31,16 @@
 :root[data-lens='heat'] .title { text-transform: lowercase; letter-spacing: .14em; }
 
 .hostiles {
-  margin-left: auto; flex: 0 1 auto; min-height: 36px; padding: 0 14px; display: flex; align-items: center; gap: 6px;
+  margin-left: auto; flex: none; white-space: nowrap; min-height: 36px; padding: 0 14px; display: flex; align-items: center; gap: 6px;
   font-family: var(--f-display); font-weight: 900; letter-spacing: .12em; text-transform: uppercase; font-size: 14px;
   color: var(--ink); border: 2px solid var(--ink); border-radius: 3px; animation: flash 1.6s steps(2) infinite;
 }
 :root[data-lens='heat'] .hostiles { border: 1px solid var(--hot); border-radius: 999px; color: var(--white-hot); background: color-mix(in srgb, var(--hot) 24%, var(--void)); box-shadow: 0 0 18px var(--hot); font-family: var(--f-body); font-weight: 600; text-transform: lowercase; letter-spacing: .14em; animation: breathe-glow 2.4s ease-in-out infinite; }
 @keyframes flash { 50% { filter: brightness(.82); } }
 @keyframes breathe-glow { 50% { box-shadow: 0 0 6px var(--hot); } }
-.hostiles.hazard-tape { color: var(--ink); text-shadow: 0 0 4px var(--hazard), 0 0 4px var(--hazard); }
+.hostiles.hazard-tape { color: var(--ink); flex: none; white-space: nowrap; }
+:root[data-lens='survey'] .hostiles.hazard-tape > span { background: var(--hazard); padding: 2px 6px 0; }
+.hostiles.hazard-tape { padding: 0 8px; }
 :root[data-lens='neutral'] .hostiles { display: none; }
 
 /* ----- vitals ----- */
@@ -92,6 +94,16 @@
 }
 .map-banner.err { border-color: var(--danger); }
 
+/* first-enemy coach mark */
+.coach {
+  position: absolute; left: 12px; right: 84px; bottom: 14px; z-index: 8; display: flex; gap: 10px; align-items: center;
+  padding: 10px 14px; font-size: var(--fs-16); font-weight: 600; margin: 0;
+  background: var(--accent); color: var(--accent-ink); border: 2px solid var(--text); border-radius: 6px;
+  box-shadow: 0 3px 0 var(--text); animation: rise .4s var(--ease) both;
+}
+:root[data-lens='heat'] .coach { border-radius: 14px; border-color: var(--white-hot); box-shadow: 0 0 22px color-mix(in srgb, var(--hot) 60%, transparent); text-transform: lowercase; letter-spacing: .06em; }
+.coach .icon { flex: none; }
+
 /* ----- object sheet ----- */
 .obj-head { display: flex; gap: 14px; align-items: center; }
 .obj-icon { width: 56px; height: 56px; display: grid; place-items: center; border: 2px solid var(--text); border-radius: 50%; flex: none; }
@@ -99,6 +111,8 @@
 :root[data-lens='heat'] .obj-icon { border: 0; background: radial-gradient(circle, var(--white-hot) 0, var(--hot) 35%, transparent 72%); color: var(--void); }
 .obj-title { font-size: var(--fs-28); }
 .obj-sub { color: var(--text-dim); }
+.obj-lore { margin: 12px 0 0; font-size: var(--fs-16); line-height: 1.35; font-style: italic; border-left: 3px solid var(--accent); padding-left: 12px; }
+:root[data-lens='heat'] .obj-lore { text-transform: lowercase; letter-spacing: .04em; font-style: normal; color: var(--white-hot); }
 .pill-row { display: flex; gap: 8px; flex-wrap: wrap; margin: 14px 0; }
 .pill { font-size: var(--fs-14); font-weight: 700; padding: 4px 12px; border-radius: 3px; border: 2px solid currentColor; }
 :root[data-lens='heat'] .pill { border-radius: 999px; }
@@ -142,3 +156,5 @@
 /* ----- contact / pending fight overlay ----- */
 .overlay { position: absolute; inset: 0; z-index: 40; background: rgba(0, 0, 0, .86); display: grid; place-items: center; padding: 24px; }
 .overlay .card { max-width: 360px; width: 100%; }
+:root[data-lens='heat'] .callsign { letter-spacing: .04em; }
+:root[data-lens='heat'] .hostiles { letter-spacing: .08em; padding: 0 12px; }

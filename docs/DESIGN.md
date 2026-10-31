@@ -142,7 +142,8 @@ automatically in combat. Pairs are mirrored in power, different in flavour.
 
 Levels 1–50. XP to go from level L to L+1:
 
-    xpToNext(L) = round_to_10(5.1 * L^2.65 + 440)
+    xpToNext(L) = round_to_10(5.1 * L^2.65 + 440)      for L ≥ 5
+    xpToNext(1..4) = 100, 430, 700, 780                  (a first level-up within ~3 fights)
 
 Pacing targets (active play time, verified by the balance simulator): **L5 ≈ 1 h, L10 ≈ 5 h,
 L20 ≈ 25 h, L30 ≈ 70 h, L50 ≈ 300 h.** Tune `xpToNext` and the XP sources against these.

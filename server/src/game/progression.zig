@@ -13,7 +13,12 @@ pub const curve_power = 2.65;
 pub const curve_offset = 440.0;
 
 /// XP needed to go from level `level` to `level + 1`.
+/// The first four levels come quickly so a new player levels within a few fights; their sum
+/// matches what the curve alone would ask, so later pacing is unchanged.
+const early_xp = [_]u32{ 100, 430, 700, 780 };
+
 pub fn xpToNext(level: u32) u32 {
+    if (level >= 1 and level <= early_xp.len) return early_xp[level - 1];
     const l: f64 = @floatFromInt(level);
     const raw = curve_scale * std.math.pow(f64, l, curve_power) + curve_offset;
     return @intFromFloat(@round(raw / 10.0) * 10.0);
@@ -216,7 +221,7 @@ test "xp curve is monotonic, rounded to 10, and matches hand values" {
         try std.testing.expectEqual(@as(u32, 0), x % 10);
         prev = x;
     }
-    try std.testing.expectEqual(@as(u32, 450), xpToNext(1)); // round10(5.1 * 1 + 440)
+    try std.testing.expectEqual(@as(u32, 100), xpToNext(1));
 }
 
 test "multi-level xp and the cap" {

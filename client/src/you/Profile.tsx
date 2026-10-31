@@ -10,7 +10,9 @@ export function Profile() {
   const m = me.value;
   if (!m) return null;
   const f = faction.value;
-  const rec = record.value;
+  const server = m.record;
+  const rec = server ?? record.value;
+  const km = server ? (server.distance_m / 1000).toFixed(1) : null;
   return (
     <>
       <div class="id-card card">
@@ -47,11 +49,12 @@ export function Profile() {
         </div>
       </Section>
 
-      <Section title={say('Record', 'record')} aside={say('this device', 'this device')}>
+      <Section title={say('Record', 'record')} aside={server ? undefined : say('this device', 'this device')}>
         <dl class="record">
           {([['wins', say('Wins', 'fed')], ['losses', say('Losses', 'starved')], ['contacts', say('Contacts', 'contacts')], ['echoes', say('Echoes', 'echoes')], ['caches', say('Caches', 'caches')]] as const).map(([k, label]) => (
             <div class="card rec" key={k}><dd class="num">{rec[k]}</dd><dt>{label}</dt></div>
           ))}
+          {km != null && <div class="card rec"><dd class="num">{km}<small> km</small></dd><dt>{say('Walked', 'walked')}</dt></div>}
         </dl>
       </Section>
     </>

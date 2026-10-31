@@ -20,6 +20,7 @@
 .rec { padding: 8px; text-align: center; background: var(--surface-2); display: flex; flex-direction: column-reverse; }
 .rec dd { margin: 0; font-size: var(--fs-28); font-family: var(--f-display); font-weight: 800; }
 :root[data-lens='heat'] .rec dd { font-family: var(--f-body); font-weight: 600; }
+.rec dd small { font-size: var(--fs-14); font-weight: 600; }
 .rec dt { font-size: var(--fs-12); text-transform: uppercase; letter-spacing: .08em; color: var(--text-dim); }
 
 .feed, .store { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }

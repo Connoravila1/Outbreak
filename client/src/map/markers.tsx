@@ -55,6 +55,7 @@ function View({ o, c }: { o: GameObject; c: MarkerCtx }) {
     <>
       {heat ? <Bloom threat={threat ?? 'even'} elite={o.elite} /> : <Grease elite={o.elite} />}
       <Icon name={o.icon} size={26} class="mk-icon" />
+      {o.tutorial && <span class="mk-first" />}
       <span class={'mk-note ' + (heat ? 'voice' : 'hand')}>{note(o, c.lens)}</span>
     </>
   );
@@ -89,13 +90,39 @@ export class MarkerLayer {
       }
       e.el.dataset.id = o.id;
       const threat = o.level != null ? threatOf(o.level, c.myLevel) : 'even';
-      setClasses(e.el, `mk mk-${o.kind} mk-${c.lens} threat-${threat}${o.elite ? ' elite' : ''}${c.selectedId === o.id ? ' selected' : ''}`);
+      setClasses(e.el, `mk mk-${o.kind} mk-${c.lens} threat-${threat}${o.elite ? ' elite' : ''}${o.tutorial ? ' tutorial' : ''}${c.selectedId === o.id ? ' selected' : ''}`);
       e.el.setAttribute('aria-label', `${o.name}${o.level != null ? ', level ' + o.level : ''}`);
       e.m.setLngLat([o.lon, o.lat]);
       render(<View o={o} c={c} />, e.el);
     }
     for (const [id, e] of this.live) {
       if (!seen.has(id)) { render(null, e.el); e.m.remove(); this.live.delete(id); }
+    }
+  }
+
+  /**
+   * Hand labels get crowded. Hidden below zoom 16; otherwise placed greedily, nearest to `me` first,
+   * and a label whose box overlaps one already placed is skipped (the icon stays).
+   */
+  declutter(me: { lat: number; lon: number } | null, selectedId: string | null) {
+    const zoom = this.map.getZoom();
+    const notes: { el: HTMLElement; d: number }[] = [];
+    const origin = me ? this.map.project([me.lon, me.lat]) : null;
+    for (const [id, e] of this.live) {
+      const el = e.el.querySelector<HTMLElement>('.mk-note');
+      if (!el) continue;
+      el.classList.remove('mk-note-off');
+      if (zoom < 16) { el.classList.add('mk-note-off'); continue; }
+      const p = this.map.project(e.m.getLngLat());
+      const d = id === selectedId ? -1 : origin ? Math.hypot(p.x - origin.x, p.y - origin.y) : 0;
+      notes.push({ el, d });
+    }
+    notes.sort((a, b) => a.d - b.d);
+    const placed: DOMRect[] = [];
+    for (const n of notes) {
+      const r = n.el.getBoundingClientRect();
+      const hit = placed.some((q) => r.left < q.right + 2 && r.right > q.left - 2 && r.top < q.bottom + 1 && r.bottom > q.top - 1);
+      if (hit) n.el.classList.add('mk-note-off'); else placed.push(r);
     }
   }
 

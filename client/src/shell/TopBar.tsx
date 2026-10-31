@@ -34,7 +34,7 @@ export function TopBar() {
       {hostile && (
         <div class="hostiles hazard-tape" role="status">
           <Icon name="radar-sweep" size={18} />
-          <span>{say('Hostiles in the area', 'something hunts nearby')}</span>
+          <span>{say('Hostiles near', 'something hunts')}</span>
         </div>
       )}
     </header>
