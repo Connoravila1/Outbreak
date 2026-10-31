@@ -4,6 +4,7 @@
 const std = @import("std");
 const game = @import("game");
 const ctx_mod = @import("ctx.zig");
+const ach_db = @import("achievements.zig");
 
 const data = game.data;
 const geo = game.geo;
@@ -29,6 +30,7 @@ pub fn addPoints(req: *Req, pid: i64, faction: data.Faction, district: []const u
         "INSERT INTO war_player(week, player_id, district, points) VALUES(?,?,?,?) ON CONFLICT(week, player_id, district) DO UPDATE SET points = points + excluded.points",
         .{ w, pid, district, pts },
     );
+    try ach_db.bump(req, pid, .war_points, pts);
 }
 
 /// One more Contact win this week (the `contacts` leaderboard).

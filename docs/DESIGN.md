@@ -552,7 +552,7 @@ deferred, cosmetic-only if ever added).
 | Supply Requisition (random item of your level, Uncommon+) | 150 |
 | Inventory +10 slots | 400, then +200 each |
 | XP Boost (+50% for 1 h) | 200 |
-| Cosmetics: map themes, callsign colours, avatar frames | 250–1000 |
+| Cosmetics: callsign colours 250–400, avatar frames 400–1000 (section 17) | 250–1000 |
 
 ## 14. Identity and avatar
 
@@ -600,3 +600,68 @@ first; push (FCM/APNs) when there is a hosted server.
 
 Real-money store, ads, season pass, AR mode, Patrol mode being proven on iOS (Android first), push
 via FCM/APNs, email/social login. The design leaves room for each.
+
+## 17. Achievements, the collection log and cosmetics
+
+**Achievements.** Forty milestones, tiered where it is natural (walk 1 / 10 / 100 km, win 1 / 25 / 250
+fights, levels 5 / 10 / 25 / 50). The server counts everything and checks after every payout; each pays
+salvage once, and some also grant a title (shown with note-set titles in the profile) or unlock a
+cosmetic. Named for the player's own faction. Total pay is about 5,100 salvage over a whole career.
+
+| Group | Achievements (salvage) |
+|---|---|
+| On foot | walk 1 km 20, 10 km 60, 100 km 250 (title Wayfarer / Drifter) |
+| The fight | first win 10, 25 wins 40, 250 wins 200; elite 30, 25 elites 150 (title Giant-Killer / Marrow Cracker); strike a raid boss 40; help kill one 150 (title Horde-Breaker / Warlord's End) |
+| Contact | first Contact win 40, 10 wins 120, 50 wins 300 (title Close Quarters / Close Hunt); first Echo 25, 25 Echoes 100 |
+| Out in the world | 25 caches 50, 150 caches 200; an airdrop 30; a real place 30, 25 places 120 |
+| What was left | 10 notes 50; a claimed set 100; four sets 300 (title Archivist / Page-Eater, frame Kessler Bloom) |
+| Standing | level 5 20, 10 50, 25 200, 50 800 (frame Laurels / Thorn Crown) |
+| Gear | a Rare 30; a Legendary 100; a named Legendary 200 (title Heirloom Bearer / Trophy Taker, colour Gold); 20 kinds of gear 120; +5 upgrade 50; +10 upgrade 200 (title Tinkerer / Stitcher) |
+| Duty | 25 missions 100; a 7-day streak 100; 100 war points 40, 2,000 war points 250 (title Frontliner / Spearhead) |
+| Time | 7 days 30, 30 days 100, 100 days 300 (title Old Hand / Old Bones) |
+
+Each earned achievement is an `achievement` event, so it toasts in the app and sits in the feed.
+Players who already had progress get the ones they have met in a burst on their first payout after the
+update. Counters that nothing else kept (fight wins vs Contacts, elites, raid hits and kills, airdrops,
+places, missions, best streak, war points, best upgrade) start from what the old tables imply; the
+fight-win count is approximate for old players.
+
+**Collection log.** One screen from the You tab. Bestiary: every enemy kind, with how often you have
+fought it, and "???" until met. Gear: every item base and every named Legendary, seen or not (an item
+counts as seen the moment you hold it, even if you scrap it later). Achievements: the list above with
+progress. A link goes to the existing notes archive, which is not duplicated.
+
+**Cosmetics.** Bought with salvage in the Store, owned forever, worn from the You tab (one colour, one
+frame). Never shown in a real-world fight: opponents stay anonymous, so no colour or frame appears in a
+Contact or battle payload. Colours show on your profile, the boards and your clan; frames ring the
+portrait on the profile. Each colour has two inks, one for paper (Survey) and one for thermal (Heat).
+
+| Colour (Human / Zombie) | Price | Frame (Human / Zombie) | Price |
+|---|---|---|---|
+| Hazard Amber / Fever Amber | 250 | Grease Pencil / Scorch Ring | 400 |
+| Survey Blue / Cold Blue | 250 | Hazard Tape / Bandage Wrap | 500 |
+| Moss / Mould | 300 | Stitched / Sutured | 600 |
+| Oxblood / Arterial | 300 | Crosshair / Prey Sight | 800 |
+| Violet Ink / Bruise | 400 | Barbed Wire / Bramble | 1,000 |
+| Verdigris / Gill | 400 | Kessler Bloom / The Bloom: earned (four sets) | - |
+| Heirloom Gold / Trophy Gold: earned (named Legendary) | - | Laurels / Thorn Crown: earned (level 50) | - |
+
+Map themes were left out on purpose: each lens owns its map palette, and a purchasable map colour
+would blur which side you are looking through.
+
+**Economy check** (`zig build sim -- --players 60`, two active hours a day). Median salvage earned in
+total, and per active hour since the previous row:
+
+| Level | Total earned | Per active hour |
+|---|---|---|
+| 5 | 399 | about 420 |
+| 10 | 1,754 | about 390 |
+| 20 | 13,045 | about 700 |
+| 30 | 51,148 | about 1,010 |
+| 50 | 319,590 | about 1,140 |
+
+Early on that is roughly 400 salvage an hour, so a 250 colour is about 40 minutes of play and a 1,000
+frame about two and a half hours; achievements add about a fifth to the first five hours and about
+1.6% of a whole career. Later the same prices are trivial, since the late game has few salvage sinks
+beyond upgrades. That is fine for cosmetics (the point is choice, not a grind), and it means the
+earned-only items are the long-term flex.

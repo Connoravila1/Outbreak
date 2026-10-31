@@ -1,0 +1,29 @@
+/* Avatar frames: SVG rings drawn around the round portrait. --fa is the frame's main ink, --fb its
+   second ink. Survey frames are print on paper (grease, hazard yellow over black); Heat frames are
+   heat (hot orange, white-hot). The art is the same in both lenses, only the inks change. */
+
+.portrait { position: relative; flex: none; display: grid; place-items: center; }
+.portrait .avatar-frame { grid-area: 1 / 1; }
+.frame-ring { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+
+:root[data-lens='survey'] .portrait { --fa: var(--ink); --fb: color-mix(in srgb, var(--ink) 55%, transparent); }
+:root[data-lens='survey'] .portrait.frame-grease { --fa: var(--grease); }
+:root[data-lens='survey'] .portrait.frame-tape { --fa: var(--hazard); --fb: var(--ink); }
+:root[data-lens='survey'] .portrait.frame-stitch { --fa: var(--survey-brown); --fb: color-mix(in srgb, var(--survey-brown) 45%, transparent); }
+:root[data-lens='survey'] .portrait.frame-reticle { --fa: var(--survey-blue); }
+:root[data-lens='survey'] .portrait.frame-barbed { --fa: var(--ink); --fb: var(--survey-brown); }
+:root[data-lens='survey'] .portrait.frame-bloom { --fa: #5E7F3A; --fb: color-mix(in srgb, var(--ink) 40%, transparent); }
+:root[data-lens='survey'] .portrait.frame-wreath { --fa: #A9780A; --fb: var(--survey-brown); }
+
+:root[data-lens='heat'] .portrait { --fa: var(--hot); --fb: color-mix(in srgb, var(--vein) 80%, transparent); }
+:root[data-lens='heat'] .portrait.frame-grease { --fa: var(--hot); }
+:root[data-lens='heat'] .portrait.frame-tape { --fa: var(--hot); --fb: var(--cold); }
+:root[data-lens='heat'] .portrait.frame-stitch { --fa: var(--flesh); --fb: color-mix(in srgb, var(--vein) 90%, transparent); }
+:root[data-lens='heat'] .portrait.frame-reticle { --fa: var(--white-hot); }
+:root[data-lens='heat'] .portrait.frame-barbed { --fa: var(--warm); --fb: var(--vein); }
+:root[data-lens='heat'] .portrait.frame-bloom { --fa: var(--white-hot); --fb: var(--vein); }
+:root[data-lens='heat'] .portrait.frame-wreath { --fa: var(--white-hot); --fb: var(--hot); }
+:root[data-lens='heat'] .portrait.framed .frame-ring { filter: drop-shadow(0 0 3px color-mix(in srgb, var(--hot) 70%, transparent)); }
+
+/* In a frame the plate loses its own glow so the ring is the one bright thing. */
+:root[data-lens='heat'] .portrait.framed .avatar-frame { box-shadow: none; }

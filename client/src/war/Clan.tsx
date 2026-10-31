@@ -7,6 +7,7 @@ import { Action, ErrorLine, pushToast, Section } from '../ui/kit';
 import { ago, usePoll } from '../ui/hooks';
 import { ReportButton } from '../ui/ReportSheet';
 import { hiddenChat, openReport, showAllChat } from '../state/moderation';
+import { Callsign } from '../ui/Callsign';
 
 const CLAN_LEVEL = 10;
 const CREATE_COST = 500;
@@ -126,7 +127,7 @@ function Chat() {
         {shown.length === 0 && <li class="empty dim">{say('Quiet. Say something.', 'quiet.')}</li>}
         {shown.map((m) => (
           <li key={m.id} class={'msg' + (m.callsign === mine ? ' mine' : '')}>
-            <span class="msg-h"><b>{m.callsign}</b> <span class="dim">{ago(m.at)}</span>
+            <span class="msg-h"><b><Callsign name={m.callsign} color={m.callsign_color} /></b> <span class="dim">{ago(m.at)}</span>
               {m.callsign !== mine && m.callsign !== '[deleted]' && <ReportButton label={`message from ${m.callsign}`} onClick={() => openReport({ kind: 'message', id: m.id, label: m.callsign, callsign: m.callsign })} />}
             </span>
             <span class="msg-t">{m.text}</span>
@@ -182,7 +183,7 @@ function Page() {
           {clan.members.map((mb) => (
             <li key={mb.callsign} class={'card member' + (mb.callsign === mine ? ' me' : '')}>
               <span class="rk-main">
-                <b class="rk-name">{mb.callsign}{mb.callsign === mine ? ` (${say('you', 'you')})` : ''}</b>
+                <b class="rk-name"><Callsign name={mb.callsign} color={mb.callsign_color} />{mb.callsign === mine ? ` (${say('you', 'you')})` : ''}</b>
                 <span class="dim">{say('Level', 'level')} {mb.level} · {mb.title}</span>
               </span>
               <span class="role label-tape">{mb.role}</span>

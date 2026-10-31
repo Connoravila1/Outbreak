@@ -19,6 +19,7 @@ import type { PlaceKind, Rewards, WorldEnemy, WorldLandmark } from '../api';
 import { clock } from '../shell/Vitals';
 import { PatrolButton } from '../patrol/PatrolButton';
 import { notesFound } from '../notes/store';
+import { achievementsEarned } from '../collection/store';
 
 type Result = { kind: 'loot'; loot: Rewards } | { kind: 'note'; text: string };
 
@@ -102,6 +103,7 @@ function ObjectSheet({ o, onClose, onResult }: { o: GameObject; onClose: () => v
         applyMe(r.me);
         recordCache();
         notesFound(r.loot.notes, true);
+        achievementsEarned(r.loot.achievements);
         onResult({ kind: 'loot', loot: r.loot });
         enqueueLevelUp(r.loot.level_up, r.me);
       } else if (o.kind === 'stronghold') {

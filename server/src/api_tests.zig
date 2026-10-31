@@ -661,13 +661,14 @@ test "gear: equip, scrap, upgrade, consumables, abilities" {
     var sc = try h.ok("/api/scrap", &tok, "{{\"uids\":[\"{s}\",\"{s}\"]}}", .{ bat, bat });
     defer sc.deinit();
     try testing.expectEqual(@as(i64, 3), try sc.int("salvage_gained"));
-    try testing.expectEqual(@as(i64, 503), try sc.int("me.salvage"));
+    // 500 granted, the bat's 3, 20 for level 5 and 30 for the first Rare (achievements).
+    try testing.expectEqual(@as(i64, 553), try sc.int("me.salvage"));
     try testing.expectEqual(@as(usize, 3), try sc.len("me.items"));
 
     const cost = try sc.int("me.items.2.upgrade_cost");
     var up = try h.ok("/api/upgrade", &tok, "{{\"uid\":\"{s}\"}}", .{machete});
     defer up.deinit();
-    try testing.expectEqual(@as(i64, 503) - cost, try up.int("me.salvage"));
+    try testing.expectEqual(@as(i64, 553) - cost, try up.int("me.salvage"));
     try testing.expectEqual(@as(i64, 1), try up.int("me.items.2.upgrade"));
 
     // Heals: refused at full health, work when hurt, and level-5 abilities are auto-equipped.
@@ -814,6 +815,13 @@ test "missions: progress, claim once, streak, reset by day" {
     }
 }
 
+/// The salvage the achievements listed at `path` paid.
+fn achievementPay(r: *const Res, path: []const u8) !i64 {
+    var total: i64 = 0;
+    for ((try r.at(path)).array.items) |e| total += e.object.get("salvage").?.integer;
+    return total;
+}
+
 test "store: levels, prices, requisitions, inventory expansion" {
     var h: Harness = undefined;
     try h.init(.{ .dev = true, .limits = false });
@@ -841,13 +849,15 @@ test "store: levels, prices, requisitions, inventory expansion" {
     try testing.expectEqual(@as(i64, 1), try heal.int("rewards.consumables.heal_s"));
     var req = try h.ok("/api/store/buy", &tok, "{{\"sku\":\"requisition\"}}", .{});
     defer req.deinit();
-    try testing.expectEqual(@as(i64, 830), try req.int("me.salvage"));
+    // The requisition may turn up a Rare, which is an achievement and pays on top.
+    const pay = try achievementPay(&req, "rewards.achievements");
+    try testing.expectEqual(@as(i64, 830) + pay, try req.int("me.salvage"));
     try testing.expectEqual(@as(usize, 1), try req.len("rewards.items"));
     try testing.expect(!std.mem.eql(u8, "common", try req.str("rewards.items.0.rarity")));
     try testing.expectEqual(@as(usize, 4), try req.len("me.items"));
     var inv = try h.ok("/api/store/buy", &tok, "{{\"sku\":\"inventory\"}}", .{});
     defer inv.deinit();
-    try testing.expectEqual(@as(i64, 430), try inv.int("me.salvage"));
+    try testing.expectEqual(@as(i64, 430) + pay, try inv.int("me.salvage"));
     try testing.expectEqual(@as(i64, 42), try inv.int("me.inventory_cap"));
     var boost = try h.ok("/api/store/buy", &tok, "{{\"sku\":\"xp_boost\"}}", .{});
     defer boost.deinit();
@@ -882,7 +892,8 @@ test "clans: found, join by code, chat with rate limit, leave and succession" {
     defer made.deinit();
     try testing.expectEqualStrings("LL", try made.str("clan.tag"));
     try testing.expectEqualStrings("leader", try made.str("me.clan.role"));
-    try testing.expectEqual(@as(i64, 0), try made.int("me.salvage"));
+    // What is left of the level 5 and 10 achievements (20 + 50) after the 500 salvage fee.
+    try testing.expectEqual(@as(i64, 70), try made.int("me.salvage"));
     const code = try testing.allocator.dupe(u8, try made.str("clan.code"));
     defer testing.allocator.free(code);
     try testing.expectEqual(@as(usize, 8), code.len);
@@ -2633,7 +2644,8 @@ test "notes: a completed set is claimed once for salvage and a title" {
     defer c.deinit();
     const want: i64 = game.notes.setReward(.starlite);
     try testing.expectEqual(want, try c.int("rewards.salvage"));
-    try testing.expectEqual(salvage0 + want, try c.int("me.salvage"));
+    // The set pays its notes' worth, and the first claim is an achievement worth 100 more.
+    try testing.expectEqual(salvage0 + want + 100, try c.int("me.salvage"));
     try testing.expectEqualStrings("Archivist of the Starlite", try c.str("title"));
     try testing.expectEqualStrings("Archivist of the Starlite", try c.str("me.titles_extra.0"));
     var twice = try h.post("/api/notes/claim", &tok, "{\"set\":\"starlite\"}");
@@ -2684,6 +2696,338 @@ test "notes: landmark caches can drop one, never twice; deleting the account tak
     defer del.deinit();
     try testing.expectEqual(@as(u16, 200), del.status);
     try testing.expectEqual(@as(?i64, 0), try h.ctx.db.scalar("SELECT COUNT(*) FROM player_notes", .{}));
+}
+
+// --- Achievements, the collection log and cosmetics ------------------------------------------------
+
+/// Whether the array at `path` has an object whose `field` equals `want`.
+fn hasEntry(r: *const Res, path: []const u8, field: []const u8, want: []const u8) !bool {
+    for ((try r.at(path)).array.items) |e| {
+        if (std.mem.eql(u8, e.object.get(field).?.string, want)) return true;
+    }
+    return false;
+}
+
+fn hasId(r: *const Res, path: []const u8, want: []const u8) !bool {
+    for ((try r.at(path)).array.items) |e| {
+        if (std.mem.eql(u8, e.string, want)) return true;
+    }
+    return false;
+}
+
+test "achievements: the catalog lists them, an earned one pays once and reaches the player" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var tok: [64]u8 = undefined;
+    try h.player("Gleaner", "human", &tok);
+
+    var cat = try h.get("/api/catalog", null);
+    defer cat.deinit();
+    try testing.expectEqual(game.achievements.list.len, try cat.len("achievements"));
+    try testing.expectEqual(game.cosmetics.list.len, try cat.len("cosmetics"));
+    try testing.expectEqualStrings("First Steps", try cat.str("achievements.0.names.human"));
+    try testing.expectEqualStrings("First Shamble", try cat.str("achievements.0.names.zombie"));
+    try testing.expect(try hasEntry(&cat, "cosmetics", "id", "frame_wreath"));
+
+    var none = try h.get("/api/achievements", &tok);
+    defer none.deinit();
+    try testing.expectEqual(@as(usize, 0), try none.len("earned"));
+    try testing.expectEqual(@as(i64, 1), try none.int("progress.best_rarity"));
+    var me0 = try h.get("/api/me", &tok);
+    defer me0.deinit();
+    const salvage0 = try me0.int("salvage");
+    try testing.expectEqual(@as(i64, 0), try me0.int("achievements.earned"));
+    try testing.expectEqual(@as(i64, game.achievements.list.len), try me0.int("achievements.total"));
+
+    // A Rare item turns up: "Something Good" pays 30 once, however many Rares follow.
+    var g = try h.ok("/api/dev/grant", &tok, "{{\"item\":{{\"base\":\"machete\",\"rarity\":\"rare\"}}}}", .{});
+    defer g.deinit();
+    try testing.expectEqual(salvage0 + 30, try g.int("me.salvage"));
+    try testing.expectEqual(@as(i64, 1), try g.int("me.achievements.earned"));
+    var g2 = try h.ok("/api/dev/grant", &tok, "{{\"item\":{{\"base\":\"fire_axe\",\"rarity\":\"rare\"}}}}", .{});
+    defer g2.deinit();
+    try testing.expectEqual(salvage0 + 30, try g2.int("me.salvage"));
+
+    var list = try h.get("/api/achievements", &tok);
+    defer list.deinit();
+    try testing.expectEqual(@as(usize, 1), try list.len("earned"));
+    try testing.expectEqualStrings("rare_1", try list.str("earned.0.id"));
+    try testing.expectEqual(@as(i64, 3), try list.int("progress.best_rarity"));
+    try testing.expect(try list.int("progress.bases_found") >= 5);
+
+    // The player hears about it with their next poll, named for their side, once.
+    var w = try h.location(&tok, base_lat, base_lon);
+    defer w.deinit();
+    const ev = (try eventOfType(&w, "achievement")) orelse return error.NoAchievementEvent;
+    const first = ev.object.get("rewards").?.object.get("achievements").?.array.items[0].object;
+    try testing.expectEqualStrings("rare_1", first.get("id").?.string);
+    try testing.expectEqualStrings("Something Good", first.get("name").?.string);
+    var w2 = try h.location(&tok, base_lat, base_lon);
+    defer w2.deinit();
+    try testing.expect((try eventOfType(&w2, "achievement")) == null);
+}
+
+test "achievements: a fight win reports its milestone in the same response, a zombie sees zombie names" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var tok: [64]u8 = undefined;
+    try h.player("Hungry", "zombie", &tok);
+    try h.reachLevel(&tok, 12);
+    const en = findEnemy(h.ctx.seed, h.ctx.now());
+    var w = try h.location(&tok, en.lat, en.lon);
+    w.deinit();
+    var b = try h.ok("/api/engage", &tok, "{{\"id\":\"{s}\"}}", .{en.id().str()});
+    defer b.deinit();
+    const pve_wins = try h.ctx.db.scalar("SELECT n FROM counters WHERE key = 'pve_wins'", .{});
+    if (std.mem.eql(u8, try b.str("winner"), "a")) {
+        try testing.expectEqual(@as(?i64, 1), pve_wins);
+        try testing.expect(try hasEntry(&b, "rewards.achievements", "id", "wins_1"));
+        try testing.expect(try hasEntry(&b, "rewards.achievements", "name", "First Taste"));
+    } else {
+        try testing.expectEqual(@as(?i64, null), pve_wins);
+        try testing.expect(!(try hasEntry(&b, "rewards.achievements", "id", "wins_1")));
+    }
+}
+
+test "achievements: levels, titles, cosmetic unlocks and days survived" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var tok: [64]u8 = undefined;
+    try h.player("Lifer", "human", &tok);
+    var me0 = try h.get("/api/me", &tok);
+    defer me0.deinit();
+    const salvage0 = try me0.int("salvage");
+
+    // Level 10 earns the level 5 and 10 milestones: 20 + 50 salvage.
+    try h.reachLevel(&tok, 10);
+    var me1 = try h.get("/api/me", &tok);
+    defer me1.deinit();
+    try testing.expectEqual(salvage0 + 70, try me1.int("salvage"));
+    try testing.expectEqual(@as(i64, 2), try me1.int("achievements.earned"));
+    try testing.expectEqual(@as(usize, 0), try me1.len("cosmetics.owned"));
+
+    // A hundred days later the day counts are credited on the next look, with their titles.
+    h.advance(100 * game.war.day_ms);
+    var list = try h.get("/api/achievements", &tok);
+    defer list.deinit();
+    try testing.expectEqual(@as(usize, 5), try list.len("earned"));
+    try testing.expect(try list.int("progress.days") >= 100);
+    var me2 = try h.get("/api/me", &tok);
+    defer me2.deinit();
+    try testing.expectEqualStrings("Old Hand", try me2.str("titles_extra.0"));
+    try testing.expectEqual(salvage0 + 70 + 30 + 100 + 300, try me2.int("salvage"));
+
+    // Level 50 unlocks the Laurels frame, owned and not bought.
+    try h.reachLevel(&tok, 50);
+    var me3 = try h.get("/api/me", &tok);
+    defer me3.deinit();
+    try testing.expect(try hasId(&me3, "cosmetics.owned", "frame_wreath"));
+    var wear = try h.ok("/api/cosmetics/equip", &tok, "{{\"kind\":\"frame\",\"id\":\"frame_wreath\"}}", .{});
+    defer wear.deinit();
+    try testing.expectEqualStrings("frame_wreath", try wear.str("me.cosmetics.frame"));
+}
+
+test "cosmetics: buy with salvage, own forever, equip and take off; refusals" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var tok: [64]u8 = undefined;
+    try h.player("Dapper", "human", &tok);
+    try h.reachLevel(&tok, 2);
+    var me0 = try h.get("/api/me", &tok);
+    defer me0.deinit();
+    const base = try me0.int("salvage");
+
+    var poor = try h.post("/api/store/buy", &tok, "{\"sku\":\"color_amber\"}");
+    defer poor.deinit();
+    try testing.expectEqual(@as(u16, 409), poor.status);
+    try testing.expectEqualStrings("not_enough_salvage", try poor.errorCode());
+
+    var gr = try h.ok("/api/dev/grant", &tok, "{{\"salvage\":700}}", .{});
+    gr.deinit();
+    var bought = try h.ok("/api/store/buy", &tok, "{{\"sku\":\"color_amber\"}}", .{});
+    defer bought.deinit();
+    try testing.expectEqual(base + 700 - 250, try bought.int("me.salvage"));
+    try testing.expect(try hasId(&bought, "me.cosmetics.owned", "color_amber"));
+    // Bought is not worn.
+    try testing.expect((try bought.at("me.cosmetics.color")) == .null);
+
+    var again = try h.post("/api/store/buy", &tok, "{\"sku\":\"color_amber\"}");
+    defer again.deinit();
+    try testing.expectEqualStrings("owned", try again.errorCode());
+    var earned_only = try h.post("/api/store/buy", &tok, "{\"sku\":\"color_gold\"}");
+    defer earned_only.deinit();
+    try testing.expectEqualStrings("not_for_sale", try earned_only.errorCode());
+    // 450 left: a 500 salvage frame is out of reach, and the failed buy takes nothing.
+    var short = try h.post("/api/store/buy", &tok, "{\"sku\":\"frame_tape\"}");
+    defer short.deinit();
+    try testing.expectEqualStrings("not_enough_salvage", try short.errorCode());
+    var me1 = try h.get("/api/me", &tok);
+    defer me1.deinit();
+    try testing.expectEqual(base + 450, try me1.int("salvage"));
+
+    var unowned = try h.post("/api/cosmetics/equip", &tok, "{\"kind\":\"frame\",\"id\":\"frame_tape\"}");
+    defer unowned.deinit();
+    try testing.expectEqualStrings("not_owned", try unowned.errorCode());
+    var wrong = try h.post("/api/cosmetics/equip", &tok, "{\"kind\":\"frame\",\"id\":\"color_amber\"}");
+    defer wrong.deinit();
+    try testing.expectEqual(@as(u16, 400), wrong.status);
+    var nope = try h.post("/api/cosmetics/equip", &tok, "{\"kind\":\"color\",\"id\":\"color_nope\"}");
+    defer nope.deinit();
+    try testing.expectEqual(@as(u16, 404), nope.status);
+
+    var wear = try h.ok("/api/cosmetics/equip", &tok, "{{\"kind\":\"color\",\"id\":\"color_amber\"}}", .{});
+    defer wear.deinit();
+    try testing.expectEqualStrings("color_amber", try wear.str("me.cosmetics.color"));
+    // It shows where callsigns show: boards, the war page and the clan page.
+    var board = try h.get("/api/leaderboard?board=level", &tok);
+    defer board.deinit();
+    try testing.expectEqualStrings("color_amber", try board.str("entries.0.callsign_color"));
+    var off = try h.ok("/api/cosmetics/equip", &tok, "{{\"kind\":\"color\",\"id\":null}}", .{});
+    defer off.deinit();
+    try testing.expect((try off.at("me.cosmetics.color")) == .null);
+    try testing.expect(try hasId(&off, "me.cosmetics.owned", "color_amber"));
+    var board2 = try h.get("/api/leaderboard?board=level", &tok);
+    defer board2.deinit();
+    try testing.expect((try board2.at("entries.0.callsign_color")) == .null);
+}
+
+test "cosmetics: a callsign colour never appears in a Contact or in any battle" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var a: [64]u8 = undefined;
+    var z: [64]u8 = undefined;
+    try h.player("Hank", "human", &a);
+    try h.player("Zed", "zombie", &z);
+    try h.reachLevel(&a, 6);
+    try h.reachLevel(&z, 7);
+    // Each wears a different colour, so a leak across the fight can be told apart from one's own.
+    const colors = [_][]const u8{ "color_oxblood", "color_amber" };
+    for ([_]*[64]u8{ &a, &z }, colors) |t, color| {
+        var g = try h.ok("/api/dev/grant", t, "{{\"salvage\":500}}", .{});
+        g.deinit();
+        var b = try h.ok("/api/store/buy", t, "{{\"sku\":\"{s}\"}}", .{color});
+        b.deinit();
+        var e = try h.ok("/api/cosmetics/equip", t, "{{\"kind\":\"color\",\"id\":\"{s}\"}}", .{color});
+        e.deinit();
+    }
+
+    try placePair(&h, &a, &z, 30);
+    tick.runLocked(&h.ctx, h.ctx.now());
+    var wa = try h.location(&a, base_lat, base_lon);
+    defer wa.deinit();
+    var wz = try h.location(&z, base_lat + 30.0 / 111_320.0, base_lon);
+    defer wz.deinit();
+    const ea = (try eventOfType(&wa, "contact")) orelse return error.NoContactEvent;
+    const ez = (try eventOfType(&wz, "contact")) orelse return error.NoContactEvent;
+    // Neither side's event holds the other's colour anywhere, and the combatants and the turn log
+    // hold no colour at all. (`battle.me` is the player's own profile, which has their own.)
+    const other = [_][]const u8{ "amber", "oxblood" };
+    for ([_]Value{ ea, ez }, other) |ev, foreign| {
+        const text = try std.json.Stringify.valueAlloc(testing.allocator, ev, .{});
+        defer testing.allocator.free(text);
+        try testing.expect(std.mem.indexOf(u8, text, foreign) == null);
+        const battle = ev.object.get("battle").?.object;
+        for ([_][]const u8{ "a", "b", "turns", "rewards" }) |key| {
+            const part = try std.json.Stringify.valueAlloc(testing.allocator, battle.get(key).?, .{});
+            defer testing.allocator.free(part);
+            try testing.expect(std.mem.indexOf(u8, part, "color") == null);
+        }
+    }
+    try testing.expectEqualStrings("A Zombie", ea.object.get("battle").?.object.get("b").?.object.get("name").?.string);
+    try testing.expectEqualStrings("A Human", ez.object.get("battle").?.object.get("b").?.object.get("name").?.string);
+
+    // A staged Contact and a fight against an enemy carry none either (the real fight may have downed a).
+    var heal0 = try h.ok("/api/dev/heal", &a, "{{}}", .{});
+    heal0.deinit();
+    var bot = try h.ok("/api/dev/bot_contact", &a, "{{}}", .{});
+    bot.deinit();
+    var w3 = try h.location(&a, base_lat, base_lon);
+    defer w3.deinit();
+    try testing.expect(std.mem.indexOf(u8, w3.raw.json, "callsign_color") == null);
+    h.advance(30 * 60 * 1000); // far enough apart in time to walk to the enemy
+    const en = findEnemy(h.ctx.seed, h.ctx.now());
+    var w4 = try h.location(&a, en.lat, en.lon);
+    w4.deinit();
+    var heal = try h.ok("/api/dev/heal", &a, "{{}}", .{});
+    heal.deinit();
+    var b = try h.ok("/api/engage", &a, "{{\"id\":\"{s}\"}}", .{en.id().str()});
+    defer b.deinit();
+    // The Battle's `me` is the player's own profile (their colour is theirs to see); the two
+    // combatants and the turn log hold none.
+    const battle = b.root().object;
+    for ([_][]const u8{ "a", "b", "turns" }) |key| {
+        const text = try std.json.Stringify.valueAlloc(testing.allocator, battle.get(key).?, .{});
+        defer testing.allocator.free(text);
+        try testing.expect(std.mem.indexOf(u8, text, "color") == null);
+    }
+}
+
+test "collection: items seen are recorded once, and stay seen after scrapping" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var tok: [64]u8 = undefined;
+    try h.player("Hoarder", "human", &tok);
+
+    var c0 = try h.get("/api/collection", &tok);
+    defer c0.deinit();
+    // The starter kit: a bat, a hoodie, a flashlight, all Common.
+    try testing.expectEqual(@as(usize, 3), try c0.len("bases"));
+    try testing.expect(try hasId(&c0, "bases", "baseball_bat"));
+    try testing.expectEqual(@as(usize, 0), try c0.len("uniques"));
+    try testing.expectEqual(@as(usize, 1), try c0.len("rarities"));
+
+    var g = try h.ok("/api/dev/grant", &tok, "{{\"item\":{{\"base\":\"katana\",\"rarity\":\"legendary\"}}}}", .{});
+    g.deinit();
+    var g2 = try h.ok("/api/dev/grant", &tok, "{{\"item\":{{\"base\":\"katana\",\"rarity\":\"legendary\"}}}}", .{});
+    g2.deinit();
+    var c1 = try h.get("/api/collection", &tok);
+    defer c1.deinit();
+    try testing.expectEqual(@as(usize, 4), try c1.len("bases"));
+    try testing.expect(try hasId(&c1, "rarities", "legendary"));
+
+    // Scrapping gives nothing back: it was seen, and stays seen.
+    var me = try h.get("/api/me", &tok);
+    defer me.deinit();
+    var uid: []const u8 = "";
+    for ((try me.at("items")).array.items) |it| {
+        if (std.mem.eql(u8, it.object.get("base").?.string, "katana")) uid = it.object.get("uid").?.string;
+    }
+    var sc = try h.ok("/api/scrap", &tok, "{{\"uids\":[\"{s}\"]}}", .{uid});
+    sc.deinit();
+    var c2 = try h.get("/api/collection", &tok);
+    defer c2.deinit();
+    try testing.expect(try hasId(&c2, "bases", "katana"));
+    // The Rare and Legendary milestones came with the legendary.
+    var list = try h.get("/api/achievements", &tok);
+    defer list.deinit();
+    try testing.expect(try hasEntry(&list, "earned", "id", "legendary_1"));
+    try testing.expect(try hasEntry(&list, "earned", "id", "rare_1"));
+    try testing.expectEqual(@as(i64, 4), try list.int("progress.best_rarity"));
+}
+
+test "achievements and cosmetics are removed with the account" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var tok: [64]u8 = undefined;
+    try h.player("Goner", "zombie", &tok);
+    try h.reachLevel(&tok, 2);
+    var g = try h.ok("/api/dev/grant", &tok, "{{\"salvage\":300,\"item\":{{\"base\":\"machete\",\"rarity\":\"rare\"}}}}", .{});
+    g.deinit();
+    var b = try h.ok("/api/store/buy", &tok, "{{\"sku\":\"color_amber\"}}", .{});
+    b.deinit();
+    try testing.expect((try h.ctx.db.scalar("SELECT COUNT(*) FROM achievements", .{})).? > 0);
+    var del = try h.call("DELETE", "/api/account", &tok, "");
+    defer del.deinit();
+    inline for (.{ "achievements", "cosmetics", "counters", "discoveries" }) |t| {
+        try testing.expectEqual(@as(?i64, 0), try h.ctx.db.scalar("SELECT COUNT(*) FROM " ++ t, .{}));
+    }
 }
 
 // --- Moderation ------------------------------------------------------------------------------------------------

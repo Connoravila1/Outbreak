@@ -28,6 +28,7 @@ The server is authoritative over every outcome. The client renders state and sen
     DESIGN.md), `stats.zig`, `combat.zig`, `loot.zig`, `progression.zig`, `geo.zig` (geohash,
     haversine), `spawns.zig` (deterministic world content), `missions.zig`, `war.zig`, `rng.zig`, `stance.zig` (stance, counters), `daynight.zig` (solar phase), `landmarks.zig` (place validation, windows, rate limit), `notes.zig` + `notes_data.zig` (found notes: the 60 texts, drop rules, set rewards; see LORE.md).
   - `src/notes.zig` — what a player holds (`player_notes`), set claims (`note_claims`), titles. `src/api/notes.zig` — the archive endpoints.
+  - `src/achievements.zig` + `src/api/collection.zig` + `src/game/achievements.zig` + `src/game/cosmetics.zig` — achievements (pure definitions; counters, earned rows, discoveries, cosmetics owned; the check run inside `rewards.apply`), the collection log and cosmetic equip. See DESIGN.md section 17.
   - `src/live.zig` — in-memory state: latest position per player (never persisted, expires in
     2 min, or 4 min when it came from a Patrol check-in), active echoes, rate limits, and reported landmarks per geohash-6 area (12 h TTL, capped, never persisted).
   - `src/tick.zig` — every 5 s: PvP contact matching, raid/war housekeeping.
@@ -142,6 +143,15 @@ fight it missed and never notifies about one it already showed. The latest schem
 | POST | `/api/missions/claim` | `{id}` | `{rewards, me}` |
 | POST | `/api/store/buy` | `{sku}` | `{rewards?, me}` |
 
+### Achievements, collection and cosmetics (DESIGN.md section 17)
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| GET | `/api/achievements` | | `{earned:[{id, at}], progress:{metric: n}, fresh?:[Earned]}` — runs the check first |
+| GET | `/api/collection` | | `{bases:[ids], uniques:[ids], rarities:[...]}` — everything ever held, scrapped or not |
+| POST | `/api/cosmetics/equip` | `{kind:"color"|"frame", id|null}` | `{me}` — 400 `bad_request` (kind, or the id is another kind), 404 `not_found`, 409 `not_owned` |
+
+Cosmetics are bought with `POST /api/store/buy {sku: <cosmetic id>}` (`{me}`; 409 `owned`, 409 `not_for_sale` for earned-only ones, 409 `not_enough_salvage`). Achievements are checked inside every payout; each new one pays its salvage, may unlock a cosmetic, and is pushed as an `achievement` event (`rewards.achievements`), so `/api/location` toasts it and `/api/feed` keeps it. `callsign_color` (a cosmetic id or null) rides on leaderboard entries, `war.top`, clan members and chat messages, never on a Contact, battle or opponent. Schema 7 adds `players.callsign_color`, `players.avatar_frame` and the tables `counters`, `achievements`, `cosmetics`, `discoveries` (all cascade on account deletion); it backfills discoveries from held items and the counters from older tables.
+
 ### Notes (docs/LORE.md)
 | Method | Path | Body | Returns |
 |---|---|---|---|
@@ -229,7 +239,8 @@ Me = { id, callsign: string|null, must_rename: boolean, faction: Faction|null, l
        contact_rank: { name, tier: 0..5, wins, next_at: number|null, next_name: string|null }, // lifetime Contact wins
        account: { guest: boolean, providers: ("google"|"apple"|"dev")[], email: string|null },
        notes: { found: number, total: number /* notes this faction can find */ },
-       titles_extra: string[] /* cosmetic titles from claimed note sets */ }
+       titles_extra: string[] /* cosmetic titles from claimed note sets and achievements */,
+       cosmetics: {owned:[ids], color:id|null, frame:id|null}, achievements: {earned, total} }
 
 Mission = { id, kind, text, target, progress, rewards: Rewards, claimed: boolean }
 
@@ -274,7 +285,9 @@ Event = { id, at, type: "contact"|"echo_report"|"level_up"|"raid"|"war_result"|"
 uniques:[{id, base, names, lore, perks}], rarities, perks:[{id, name, text}],
 consumables:[{id, names, text, price}], abilities:[{id, level, names, text}],
 enemies:[{id, names, text}], levels:{xp_to_next:[...], titles:{human:[], zombie:[]},
-unlocks:[{level, key, text}]}, store:[{sku, name, price, text}]}`.
+unlocks:[{level, key, text}]}, store:[{sku, name, price, text}],
+achievements:[{id, group, names, text, metric, need, salvage, title:{human,zombie}|null, cosmetic:id|null}],
+cosmetics:[{id, kind:"color"|"frame", names, text, price, survey, heat, unlock:achievementId|null}]}`.
 
 `levels.unlocks` is the one unlock table (`data.unlocks`): `key` is a stable name (`store`, `contact`, `raids`, ...), `text` is
 what the level-up screen lists. Several rows can share a level (level 5 has three). The client keys its first-time

@@ -7,7 +7,7 @@ import { ErrorLine, Section } from '../ui/kit';
 import { ago } from '../ui/hooks';
 
 const ICON: Record<GameEvent['type'], IconName> = {
-  contact: 'radar-sweep', echo_report: 'ghost', level_up: 'laurels', raid: 'skull-crack', war_result: 'crossed-swords', clan: 'three-friends',
+  contact: 'radar-sweep', echo_report: 'ghost', level_up: 'laurels', raid: 'skull-crack', war_result: 'crossed-swords', clan: 'three-friends', achievement: 'trophy',
 };
 
 export function Feed() {

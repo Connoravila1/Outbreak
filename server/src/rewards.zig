@@ -9,6 +9,7 @@ const model = @import("model.zig");
 const views = @import("views.zig");
 const warstate = @import("warstate.zig");
 const notes_db = @import("notes.zig");
+const ach_db = @import("achievements.zig");
 
 const data = game.data;
 const stats = game.stats;
@@ -119,6 +120,7 @@ pub fn apply(req: *Req, p: *Player, acc: *Acc, district: ?[]const u8) HandlerErr
             const v = loot.scrapValue(it);
             salvage += v;
             out.auto_scrapped += v;
+            try ach_db.discover(req, p.id, it);
         }
     }
     out.items = item_views[0..kept];
@@ -147,6 +149,9 @@ pub fn apply(req: *Req, p: *Player, acc: *Acc, district: ?[]const u8) HandlerErr
             out.war_points = acc.war_points;
         }
     }
+
+    // Milestones last: they count what this payout just changed. Their salvage lands in `p` here.
+    out.achievements = try ach_db.check(req, p, acc.deliver_level_up);
 
     try model.save(req, p);
     if (lr.levels_gained > 0) {

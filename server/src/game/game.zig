@@ -14,6 +14,8 @@ pub const daynight = @import("daynight.zig");
 pub const stance = @import("stance.zig");
 pub const landmarks = @import("landmarks.zig");
 pub const notes = @import("notes.zig");
+pub const achievements = @import("achievements.zig");
+pub const cosmetics = @import("cosmetics.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());

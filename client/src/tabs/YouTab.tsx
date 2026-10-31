@@ -2,6 +2,8 @@ import { me } from '../state/store';
 import { Profile } from '../you/Profile';
 import { Feed } from '../you/Feed';
 import { Archive } from '../notes/Archive';
+import { CollectionEntry } from '../collection/Collection';
+import { Wardrobe } from '../you/Wardrobe';
 import { Store } from '../you/Store';
 import { FieldManual } from '../guide/Guide';
 import { Settings } from '../you/Settings';
@@ -15,7 +17,9 @@ export function YouTab() {
     <div class="panel scroll you-tab">
       <GuestNote />
       <Profile />
-      <Archive />
+      <CollectionEntry />
+      <Wardrobe />
+      <div id="archive"><Archive /></div>
       <Feed />
       <Store />
       <FieldManual />

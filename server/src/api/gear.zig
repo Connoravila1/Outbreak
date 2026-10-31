@@ -9,6 +9,7 @@ const views = @import("../views.zig");
 const rewards = @import("../rewards.zig");
 const missions = @import("../missions.zig");
 const warstate = @import("../warstate.zig");
+const ach_db = @import("../achievements.zig");
 
 const data = game.data;
 const stats = game.stats;
@@ -96,6 +97,8 @@ pub fn upgrade(req: *Req, jw: *Stringify) HandlerError!void {
     if (p.salvage < cost) return req.fail(409, "not_enough_salvage", "Not enough salvage.");
     p.salvage -= cost;
     try req.ctx.db.run("UPDATE items SET upgrade = upgrade + 1 WHERE id = ?", .{o.id});
+    try ach_db.bump(req, p.id, .best_upgrade, @as(u64, o.item.upgrade) + 1);
+    _ = try ach_db.check(req, &p, true);
     try model.save(req, &p);
     try missions.event(req, &p, .{ .kind = .item_upgrade });
     var fresh = try loadP(req);
@@ -172,6 +175,7 @@ pub fn claimMission(req: *Req, jw: *Stringify) HandlerError!void {
     if (!e.m.weekly) {
         p.streak = streak;
         p.last_claim_day = day;
+        try ach_db.bump(req, p.id, .best_streak, streak);
         // The third daily of the day pays a bonus consumable.
         var claimed: u32 = 0;
         const t = try missions.today(req, &p);
@@ -180,16 +184,29 @@ pub fn claimMission(req: *Req, jw: *Stringify) HandlerError!void {
         }
         if (claimed == game.missions.daily_count) acc.addConsumable(game.missions.all_dailies_bonus, 1);
     }
+    try ach_db.bump(req, p.id, .missions, 1);
     const rw = try rewards.apply(req, &p, &acc, null);
     try jw.write(.{ .rewards = rw, .me = try views.meFresh(req, p.id) });
 }
 
 // --- Store -------------------------------------------------------------------------------------------------
 
+/// A callsign colour or avatar frame: bought once with salvage, owned forever. Not worn until equipped.
+fn buyCosmetic(req: *Req, jw: *Stringify, p: *Player, c: game.cosmetics.Cosmetic) HandlerError!void {
+    if (c.price == 0) return req.fail(409, "not_for_sale", "That one is earned, not bought.");
+    if (try ach_db.owns(req, p.id, c.id)) return req.fail(409, "owned", "You already own that.");
+    if (p.salvage < c.price) return req.fail(409, "not_enough_salvage", "Not enough salvage.");
+    p.salvage -= c.price;
+    try ach_db.grantCosmetic(req, p.id, c.id);
+    try model.save(req, p);
+    try jw.write(.{ .me = try views.meFresh(req, p.id) });
+}
+
 pub fn buy(req: *Req, jw: *Stringify) HandlerError!void {
     const body = try req.json(struct { sku: []const u8 });
     var p = try loadP(req);
     if (p.level < store_min_level) return req.fail(409, "locked", "The Store unlocks at level 2.");
+    if (game.cosmetics.find(body.sku)) |ci| return buyCosmetic(req, jw, &p, game.cosmetics.list[ci]);
     const idx = data.findSku(body.sku) orelse return req.fail(404, "not_found", "No such item for sale.");
     const sku = data.store[idx];
 
@@ -216,7 +233,7 @@ pub fn buy(req: *Req, jw: *Stringify) HandlerError!void {
         const uid = try req.arena.dupe(u8, &(try model.insertItem(req, p.id, item, false)));
         const list = try req.arena.alloc(views.ItemView, 1);
         list[0] = try views.itemView(req.arena, uid, item);
-        out_rewards = .{ .items = list };
+        out_rewards = .{ .items = list, .achievements = try ach_db.check(req, &p, false) };
     } else if (is_expansion) {
         p.salvage -= price;
         p.expansions += 1;

@@ -7,6 +7,7 @@ const ctx_mod = @import("ctx.zig");
 const model = @import("model.zig");
 const rewards = @import("rewards.zig");
 const fight = @import("fight.zig");
+const ach_db = @import("achievements.zig");
 
 const data = game.data;
 const geo = game.geo;
@@ -102,6 +103,7 @@ pub fn settle(req: *Req, raid_id: []const u8, killed: bool) HandlerError!void {
         }
         // Everyone who helped takes a note from the wreckage.
         try acc.rollNote(req, &pl, .raid, null, game.rng.hash(req.ctx.seed, .{ "raidnote", raid_id, c.pid }));
+        try ach_db.bump(req, pl.id, .raid_kills, 1);
         const rw = try rewards.apply(req, &pl, &acc, null);
         const boss = data.archetype(.abomination).name.get(pl.fac());
         const text = try std.fmt.allocPrint(req.arena, "The {s} has fallen. You dealt {d}% of the damage with {d} fighters.", .{

@@ -356,6 +356,40 @@ pub fn catalog(req: *Req, jw: *Stringify) HandlerError!void {
     for (data.place_kinds) |k| try jw.write(.{ .id = k.id, .names = pairView(k.name), .text = k.text.human, .text_zombie = k.text.zombie });
     try jw.endArray();
 
+    try jw.objectField("achievements");
+    try jw.beginArray();
+    for (game.achievements.list) |a| {
+        try jw.write(.{
+            .id = a.id,
+            .group = a.group,
+            .names = pairView(a.name),
+            .text = a.text,
+            .metric = a.metric,
+            .need = a.need,
+            .salvage = a.salvage,
+            .title = if (a.title) |t| pairView(t) else null,
+            .cosmetic = a.cosmetic,
+        });
+    }
+    try jw.endArray();
+
+    try jw.objectField("cosmetics");
+    try jw.beginArray();
+    for (game.cosmetics.list) |c| {
+        const by = game.cosmetics.unlockedBy(c.id);
+        try jw.write(.{
+            .id = c.id,
+            .kind = c.kind,
+            .names = pairView(c.name),
+            .text = c.text,
+            .price = c.price,
+            .survey = c.survey,
+            .heat = c.heat,
+            .unlock = if (by) |i| game.achievements.list[i].id else null,
+        });
+    }
+    try jw.endArray();
+
     try jw.objectField("levels");
     try jw.beginObject();
     try jw.objectField("xp_to_next");

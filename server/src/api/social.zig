@@ -13,6 +13,7 @@ const account = @import("account.zig");
 const names = @import("../names.zig");
 const world = @import("world.zig");
 const raids = @import("../raids.zig");
+const ach_db = @import("../achievements.zig");
 
 const data = game.data;
 const geo = game.geo;
@@ -64,7 +65,7 @@ pub fn clans(req: *Req, jw: *Stringify) HandlerError!void {
     try jw.write(.{ .clans = list.items });
 }
 
-const MemberView = struct { callsign: []const u8, level: u8, title: []const u8, role: []const u8, weekly_points: u32 };
+const MemberView = struct { callsign: []const u8, callsign_color: ?[]const u8, level: u8, title: []const u8, role: []const u8, weekly_points: u32 };
 const ClanPerks = struct { xp_bonus: f32, strongholds: u32 };
 const ClanDetail = struct {
     id: []const u8,
@@ -92,7 +93,7 @@ fn clanDetail(req: *Req, clan_id: i64) HandlerError!ClanDetail {
     var members: std.ArrayList(MemberView) = .empty;
     {
         var st = try db.query(
-            \\SELECT p.callsign, p.level, p.faction, COALESCE(p.clan_role, 'member'),
+            \\SELECT p.callsign, p.level, p.faction, COALESCE(p.clan_role, 'member'), p.callsign_color,
             \\  COALESCE((SELECT SUM(points) FROM war_player w WHERE w.player_id = p.id AND w.week = ?), 0)
             \\FROM players p WHERE p.clan_id = ?
             \\ORDER BY CASE p.clan_role WHEN 'leader' THEN 0 WHEN 'officer' THEN 1 ELSE 2 END, p.level DESC, p.id
@@ -102,10 +103,11 @@ fn clanDetail(req: *Req, clan_id: i64) HandlerError!ClanDetail {
             const level: u8 = @intCast(st.int(1));
             try members.append(a, .{
                 .callsign = try st.dupe(a, 0),
+                .callsign_color = try ach_db.colorOf(req, &st, 4),
                 .level = level,
                 .title = progression.title(@enumFromInt(st.int(2)), level),
                 .role = try st.dupe(a, 3),
-                .weekly_points = @intCast(st.int(4)),
+                .weekly_points = @intCast(st.int(5)),
             });
         }
     }
@@ -224,12 +226,12 @@ pub fn clan(req: *Req, jw: *Stringify) HandlerError!void {
     try jw.write(.{ .clan = try clanDetail(req, clan_id) });
 }
 
-const ChatMessage = struct { id: []const u8, callsign: []const u8, text: []const u8, at: i64 };
+const ChatMessage = struct { id: []const u8, callsign: []const u8, callsign_color: ?[]const u8, text: []const u8, at: i64 };
 
 fn chatMessages(req: *Req, clan_id: i64) HandlerError![]const ChatMessage {
     var st = try req.ctx.db.query(
         \\SELECT * FROM (
-        \\  SELECT m.id, COALESCE(p.callsign, '[deleted]'), m.text, m.at FROM clan_chat m LEFT JOIN players p ON p.id = m.player_id
+        \\  SELECT m.id, COALESCE(p.callsign, '[deleted]'), m.text, m.at, COALESCE(p.callsign_color, '') FROM clan_chat m LEFT JOIN players p ON p.id = m.player_id
         \\  WHERE m.clan_id = ? ORDER BY m.id DESC LIMIT ?) ORDER BY id
     , .{ clan_id, chat_history });
     defer st.finalize();
@@ -238,6 +240,7 @@ fn chatMessages(req: *Req, clan_id: i64) HandlerError![]const ChatMessage {
         try list.append(req.arena, .{
             .id = try std.fmt.allocPrint(req.arena, "{d}", .{st.int(0)}),
             .callsign = try st.dupe(req.arena, 1),
+            .callsign_color = try ach_db.colorOf(req, &st, 4),
             .text = try st.dupe(req.arena, 2),
             .at = st.int(3),
         });
@@ -344,6 +347,7 @@ pub fn raidAttack(req: *Req, jw: *Stringify) HandlerError!void {
     acc.war_points = game.war.raidPoints(@as(f32, @floatFromInt(dealt)) / @as(f32, @floatFromInt(@max(1, raid.max_hp))));
     if (o.won()) p.wins += 1 else p.losses += 1;
     rewards.settleHp(&p, fight.hpAfter(a, o), req.now);
+    try ach_db.bump(req, p.id, .raid_hits, 1);
     const rw = try rewards.apply(req, &p, &acc, raid.district);
     try raids.recordDamage(req, raid.id, p.id, dealt);
     if (try raids.hpLeft(req, raid.id) <= 0) try raids.settle(req, raid.id, true);

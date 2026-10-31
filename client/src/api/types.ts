@@ -43,7 +43,24 @@ export interface Rewards {
   auto_scrapped?: number;
   /** Notes found with this payout (absent from older servers). */
   notes?: NoteRef[];
+  /** Achievements this payout completed; their salvage is paid on top of `salvage`. */
+  achievements?: EarnedAchievement[];
 }
+
+/** A newly earned achievement, named for the player's own faction. */
+export interface EarnedAchievement {
+  id: string; name: string; text: string; salvage: number; title: string | null; cosmetic: string | null;
+}
+export interface AchievementList {
+  earned: { id: string; at: number }[];
+  /** Where the player stands on everything an achievement counts, by metric. */
+  progress: Record<string, number>;
+  fresh?: EarnedAchievement[];
+}
+/** What the player has ever held. Anything not listed is still a silhouette. */
+export interface Collection { bases: string[]; uniques: string[]; rarities: Rarity[] }
+export type CosmeticKind = 'color' | 'frame';
+export interface Cosmetics { owned: string[]; color: string | null; frame: string | null }
 
 export interface NoteSet {
   id: NoteSetId; name: string; title: string; blurb: string;
@@ -123,8 +140,11 @@ export interface Me {
   bestiary: Record<string, number>;
   /** Notes found, and how many this faction can find in all. */
   notes?: { found: number; total: number };
-  /** Cosmetic titles from completed note sets. */
+  /** Cosmetic titles from completed note sets and achievements. */
   titles_extra?: string[];
+  /** Callsign colours and avatar frames owned, and the ones worn. */
+  cosmetics?: Cosmetics;
+  achievements?: { earned: number; total: number };
 }
 
 export interface MeLite {
@@ -165,7 +185,7 @@ export interface WorldLandmark {
 }
 export interface WorldTime { phase: 'day' | 'night'; changes_at: number }
 
-export type EventType = 'contact' | 'echo_report' | 'level_up' | 'raid' | 'war_result' | 'clan';
+export type EventType = 'contact' | 'echo_report' | 'level_up' | 'raid' | 'war_result' | 'clan' | 'achievement';
 export interface GameEvent {
   id: string;
   at: number;
@@ -239,7 +259,7 @@ export interface CatalogItem {
   names: Record<Faction, string>; stats: Stats;
 }
 export interface CatalogUnique {
-  id: string; base: string; names: Record<Faction, string>; lore: string; perks: string[];
+  id: string; base: string; names: Record<Faction, string>; lore: string; lore_zombie?: string; perks: string[];
 }
 export interface CatalogPerk { id: string; name: string; text: string }
 export interface CatalogConsumable {
@@ -255,6 +275,20 @@ export interface CatalogEnemy {
 }
 export interface CatalogStance { id: Stance; names: Record<Faction, string>; text: string }
 export interface CatalogPlace { id: PlaceKind; names: Record<Faction, string>; text: string; text_zombie: string }
+export interface CatalogAchievement {
+  id: string; group: string; names: Record<Faction, string>; text: string;
+  /** What it counts (a key of `AchievementList.progress`) and how many it takes. */
+  metric: string; need: number; salvage: number;
+  title: Record<Faction, string> | null; cosmetic: string | null;
+}
+export interface CatalogCosmetic {
+  id: string; kind: CosmeticKind; names: Record<Faction, string>; text: string;
+  /** Salvage; 0 means it is earned, not bought (`unlock` names the achievement). */
+  price: number;
+  /** Callsign colours: the hex to draw it in on paper (Survey) and on thermal (Heat). */
+  survey: string | null; heat: string | null;
+  unlock: string | null;
+}
 export interface CatalogStoreEntry { sku: string; name: string; price: number; text: string }
 export interface Catalog {
   version: number | string;
@@ -267,6 +301,8 @@ export interface Catalog {
   enemies: CatalogEnemy[];
   stances?: CatalogStance[];
   places?: CatalogPlace[];
+  achievements?: CatalogAchievement[];
+  cosmetics?: CatalogCosmetic[];
   levels: {
     xp_to_next: number[];
     titles: Record<Faction, string[]>;
@@ -305,24 +341,24 @@ export interface WarState {
   ends_at: number;
   global: { human: number; zombie: number };
   district: { id: string; human: number; zombie: number } | null;
-  top: { callsign: string; level: number; title: string; points: number }[];
+  top: { callsign: string; callsign_color?: string | null; level: number; title: string; points: number }[];
   my_points: number;
 }
 export interface LeaderboardEntry {
-  rank: number; callsign: string; level: number; title: string;
+  rank: number; callsign: string; callsign_color?: string | null; level: number; title: string;
   faction: Faction; value: number; clan_tag: string | null;
 }
 export interface ClanSummary {
   id: string; name: string; tag: string; members: number; level_sum: number; faction: Faction;
 }
 export interface ClanMember {
-  callsign: string; level: number; title: string; role: string; weekly_points: number;
+  callsign: string; callsign_color?: string | null; level: number; title: string; role: string; weekly_points: number;
 }
 export interface ClanDetail {
   id: string; name: string; tag: string; code: string;
   members: ClanMember[]; strongholds: number; perks: { xp_bonus: number; strongholds: number };
 }
-export interface ClanMessage { id: string; callsign: string; text: string; at: number }
+export interface ClanMessage { id: string; callsign: string; callsign_color?: string | null; text: string; at: number }
 
 export interface ApiErrorBody { error: string; message: string }
 

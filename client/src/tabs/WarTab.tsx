@@ -4,6 +4,7 @@ import { me } from '../state/store';
 import { say } from '../ui/voice';
 import { Icon } from '../ui/Icon';
 import { ErrorLine, Section } from '../ui/kit';
+import { Callsign } from '../ui/Callsign';
 import { longClock, useNow } from '../ui/hooks';
 import { FactionBar } from '../war/FactionBar';
 import { Leaderboard } from '../war/Boards';
@@ -54,7 +55,7 @@ export function WarTab() {
                 {war.top.map((t, i) => (
                   <li key={t.callsign} class={'rank card' + (t.callsign === m.callsign ? ' me' : '')}>
                     <b class="rk num">{i + 1}</b>
-                    <span class="rk-main"><b class="rk-name">{t.callsign}</b><span class="dim">{say('Level', 'level')} {t.level} · {t.title}</span></span>
+                    <span class="rk-main"><b class="rk-name"><Callsign name={t.callsign} color={t.callsign_color} /></b><span class="dim">{say('Level', 'level')} {t.level} · {t.title}</span></span>
                     <span class="rk-val num">{t.points}<small> pts</small></span>
                   </li>
                 ))}

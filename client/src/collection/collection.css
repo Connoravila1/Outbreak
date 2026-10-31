@@ -1,0 +1,94 @@
+/* The collection log, wardrobe and cosmetic store rows. Lens tokens only: Survey is ink on paper,
+   Heat is warm on dark. What you have not found yet is a dim silhouette and "???". */
+
+.col-entry { display: flex; align-items: center; gap: 12px; width: 100%; margin-top: 14px; padding: 12px; text-align: left; background: var(--surface-2); color: var(--text); cursor: pointer; }
+.col-entry > .icon { flex: none; color: var(--accent); }
+:root[data-lens='survey'] .col-entry > .icon { color: var(--survey-brown); }
+.col-entry-main { flex: 1; min-width: 0; display: grid; gap: 1px; }
+.col-entry-h { font-size: var(--fs-20); line-height: 1.1; }
+.col-entry-main small { font-size: var(--fs-12); }
+.col-go { flex: none; font-weight: 700; font-size: var(--fs-14); color: var(--text-dim); }
+.col-entry .col-go { font-size: var(--fs-28); line-height: 1; }
+
+.col-log { display: grid; gap: 12px; padding-bottom: 8px; }
+.col-title { font-size: var(--fs-28); margin: 0; }
+.col-sum { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.col-sum .card { display: grid; padding: 8px; text-align: center; background: var(--surface-2); }
+.col-sum b { font-size: var(--fs-20); font-family: var(--f-display); font-weight: 800; }
+:root[data-lens='heat'] .col-sum b { font-family: var(--f-body); font-weight: 600; }
+.col-sum small { font-size: var(--fs-12); text-transform: uppercase; letter-spacing: .08em; color: var(--text-dim); }
+.col-notes { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; background: var(--surface-2); color: var(--text); padding: 10px 12px; cursor: pointer; min-height: 48px; }
+.col-notes > .icon { flex: none; color: var(--accent); }
+:root[data-lens='survey'] .col-notes > .icon { color: var(--survey-brown); }
+.col-notes-main { flex: 1; min-width: 0; display: grid; }
+.col-log .seg { width: 100%; }
+.col-log .seg-btn { flex: 1; padding: 0 6px; }
+.col-note { margin: 0; font-size: var(--fs-14); }
+.col-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.col-group { display: grid; gap: 6px; }
+.col-group-h { display: flex; justify-content: space-between; align-items: baseline; margin: 6px 0 0; font-size: var(--fs-16); letter-spacing: .06em; }
+
+/* bestiary and gear rows */
+.beast, .gear-seen { display: flex; align-items: center; gap: 12px; padding: 10px 12px; background: var(--surface-2); }
+.beast-ico { flex: none; width: 44px; height: 44px; display: grid; place-items: center; border: 1.5px solid var(--text); border-radius: 50%; }
+:root[data-lens='heat'] .beast-ico { border-color: var(--hot); }
+.gear-seen .beast-ico { width: 40px; height: 40px; border-radius: 4px; }
+:root[data-lens='heat'] .gear-seen .beast-ico { border-radius: 12px; }
+.beast-main { flex: 1; min-width: 0; display: grid; gap: 1px; }
+.beast-main b { font-size: var(--fs-16); }
+.beast-main small { font-size: var(--fs-12); overflow-wrap: anywhere; }
+.beast-hint { color: var(--text); font-weight: 600; margin-top: 2px; }
+.beast-n { flex: none; display: grid; text-align: right; line-height: 1.1; }
+.beast-n b { font-size: var(--fs-20); }
+.beast-n small { font-size: var(--fs-12); color: var(--text-dim); }
+.unseen { background: transparent; border-style: dashed; }
+.unseen .beast-ico { opacity: .45; border-style: dashed; }
+.unseen .beast-ico .icon { opacity: .5; }
+.unseen .beast-main b { color: var(--text-dim); letter-spacing: .2em; }
+.rarity-legendary-row:not(.unseen) { border-color: var(--r-legendary); }
+.col-extra { display: flex; align-items: center; gap: 8px; background: var(--surface-2); padding: 10px 12px; font-size: var(--fs-14); }
+.col-extra b { margin-left: auto; font-size: var(--fs-20); }
+.rarity-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.rarity-row .chip { text-transform: uppercase; letter-spacing: .08em; font-weight: 700; color: var(--text-dim); border-style: dashed; }
+.rarity-row .chip.on { color: var(--text); border-style: solid; border-color: var(--r); }
+
+/* achievements */
+.ach-row { display: flex; align-items: flex-start; gap: 12px; padding: 10px 12px; background: transparent; border-style: dashed; }
+.ach-row.earned { background: var(--surface-2); border-style: solid; }
+.ach-ico { flex: none; color: var(--text-dim); margin-top: 2px; }
+.ach-row.earned .ach-ico { color: var(--accent); }
+:root[data-lens='survey'] .ach-row.earned .ach-ico { color: var(--survey-brown); }
+.ach-main { flex: 1; min-width: 0; display: grid; gap: 3px; }
+.ach-main b { font-size: var(--fs-16); }
+.ach-row:not(.earned) .ach-main b { color: var(--text-dim); }
+.ach-main small { font-size: var(--fs-12); }
+.ach-prog { color: var(--text-dim); }
+.ach-reward { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; font-weight: 700; color: var(--text); }
+.ach-pay { flex: none; display: inline-flex; align-items: center; gap: 3px; font-weight: 700; font-size: var(--fs-14); color: var(--text-dim); }
+.ach-row.earned .ach-pay { color: var(--text); }
+
+/* wardrobe (equip) and cosmetic store rows */
+.wardrobe-h { margin: 12px 0 6px; font-size: var(--fs-12); text-transform: uppercase; letter-spacing: .1em; color: var(--text-dim); font-weight: 700; }
+.wardrobe-h:first-of-type { margin-top: 0; }
+.swatches { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.swatch { min-height: 44px; padding: 0 12px; display: inline-flex; align-items: center; gap: 8px; background: transparent; color: var(--text); border: 1.5px solid var(--line); border-radius: 6px; font-weight: 700; }
+:root[data-lens='heat'] .swatch { border-radius: 999px; }
+.swatch[aria-pressed='true'] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+:root[data-lens='survey'] .swatch[aria-pressed='true'] { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+.swatch:disabled { opacity: .5; }
+.swatch .dot { width: 14px; height: 14px; border-radius: 50%; background: currentColor; flex: none; }
+.swatch .sw-name { font-size: var(--fs-14); }
+.frames { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 8px; }
+.frame-pick { display: grid; justify-items: center; gap: 4px; width: 100%; padding: 8px 4px; background: transparent; color: var(--text); border: 1.5px solid var(--line); border-radius: 6px; font-size: var(--fs-12); font-weight: 700; text-align: center; min-height: 44px; }
+:root[data-lens='heat'] .frame-pick { border-radius: 14px; }
+.frame-pick[aria-pressed='true'] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+:root[data-lens='survey'] .frame-pick[aria-pressed='true'] { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+.frame-pick.locked { border-style: dashed; opacity: .6; }
+.frame-pick .fp-lock { display: grid; place-items: center; width: 56px; height: 56px; color: var(--text-dim); }
+.wardrobe-note { margin: 8px 0 0; font-size: var(--fs-12); }
+
+.cos-sub { margin: 14px 0 6px; font-size: var(--fs-12); text-transform: uppercase; letter-spacing: .1em; color: var(--text-dim); font-weight: 700; }
+.cos-row .cos-ico { flex: none; display: grid; place-items: center; min-width: 52px; }
+.cos-sample { overflow-wrap: anywhere; font-family: var(--f-display); font-weight: 800; font-size: var(--fs-20); letter-spacing: .02em; }
+:root[data-lens='heat'] .cos-sample { overflow-wrap: anywhere; font-family: var(--f-body); font-weight: 600; text-transform: lowercase; }
+.cos-owned { font-size: var(--fs-14); font-weight: 700; color: var(--text-dim); }
