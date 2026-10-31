@@ -1,0 +1,73 @@
+/* Map markers. 56px hit area (>= 48px tap target). Colours via lens tokens only. */
+.mk {
+  width: 56px; height: 56px; cursor: pointer;
+  display: grid; place-items: center; border-radius: 50%;
+  transition: scale .18s var(--ease);
+  touch-action: manipulation;
+}
+.mk .mk-icon { position: relative; z-index: 2; }
+.mk.selected { scale: 1.18; z-index: 5; }
+.mk:focus-visible { outline: 3px solid var(--accent); outline-offset: 0; }
+
+.mk-note {
+  position: absolute; top: 50px; left: 50%; transform: translateX(-50%) rotate(-3deg);
+  white-space: nowrap; pointer-events: none; z-index: 3;
+  font-size: var(--fs-12); line-height: 1;
+}
+
+/* ----- Survey: grease-pencil circle, ink icon, marker scrawl ----- */
+.mk-survey { color: var(--ink); }
+.mk-survey .mk-ring { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.mk-survey .grease { fill: none; stroke: var(--grease); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; filter: drop-shadow(0 0 .5px var(--paper)); }
+.mk-survey .mk-elite-ring { fill: none; stroke: var(--hazard); stroke-width: 3; stroke-dasharray: 5 3; }
+.mk-survey.mk-cache .grease, .mk-survey.mk-airdrop .grease { stroke: var(--survey-brown); }
+.mk-survey.mk-echo .grease { stroke: var(--survey-blue); stroke-dasharray: 2 5; }
+.mk-survey.mk-stronghold .grease, .mk-survey.mk-raid .grease { stroke: var(--ink); }
+.mk-survey .mk-note { color: var(--grease); text-shadow: 0 0 3px var(--paper), 0 0 3px var(--paper), 0 0 2px var(--paper); }
+.mk-survey.mk-cache .mk-note, .mk-survey.mk-airdrop .mk-note { color: var(--survey-brown); }
+.mk-survey.mk-echo .mk-note { color: var(--survey-blue); }
+.mk-survey.mk-stronghold .mk-note, .mk-survey.mk-raid .mk-note { color: var(--ink); }
+.mk-survey.selected .grease { stroke-width: 4; }
+
+/* ----- Heat: blooms. Intensity follows threat. ----- */
+.mk-heat { color: var(--void, #110A1A); --bloom: var(--warm); --size: 56px; }
+.mk-heat.threat-easy { --bloom: var(--warm); --size: 48px; }
+.mk-heat.threat-even { --bloom: var(--hot); --size: 62px; }
+.mk-heat.threat-dangerous { --bloom: var(--hot); --size: 78px; }
+.mk-heat.threat-deadly { --bloom: var(--white-hot); --size: 92px; }
+.mk-heat .mk-bloom {
+  position: absolute; left: 50%; top: 50%; width: var(--size); height: var(--size); translate: -50% -50%;
+  border-radius: 50%; pointer-events: none;
+  background: radial-gradient(circle, var(--white-hot) 0 12%, var(--bloom) 28%, color-mix(in srgb, var(--warm) 55%, transparent) 55%, transparent 72%);
+  animation: bloom 2.6s ease-in-out infinite;
+}
+.mk-heat.threat-deadly .mk-bloom { background: radial-gradient(circle, #fff 0 14%, var(--white-hot) 26%, var(--hot) 48%, color-mix(in srgb, var(--warm) 60%, transparent) 62%, transparent 74%); }
+@keyframes bloom { 0%, 100% { scale: 1; opacity: .95; } 50% { scale: 1.12; opacity: .75; } }
+.mk-heat .mk-icon { color: var(--void); opacity: .85; }
+.mk-heat .mk-elite-halo { position: absolute; inset: -6px; border-radius: 50%; border: 2px solid var(--white-hot); box-shadow: 0 0 14px var(--white-hot), inset 0 0 10px var(--white-hot); }
+.mk-heat.mk-cache, .mk-heat.mk-airdrop { --bloom: var(--vein); --size: 54px; }
+.mk-heat.mk-cache .mk-icon, .mk-heat.mk-airdrop .mk-icon { color: var(--flesh); }
+.mk-heat.mk-echo { --bloom: var(--cold); --size: 64px; }
+.mk-heat.mk-echo .mk-icon { color: var(--flesh); }
+.mk-heat.mk-stronghold, .mk-heat.mk-raid { --bloom: var(--warm); --size: 72px; }
+.mk-heat .mk-note { color: var(--flesh); letter-spacing: .12em; text-transform: lowercase; transform: translateX(-50%); text-shadow: 0 0 6px var(--void), 0 0 6px var(--void); top: 52px; }
+.mk-heat.selected .mk-bloom { filter: brightness(1.25) saturate(1.2); }
+
+/* ----- you ----- */
+.you { width: 20px; height: 20px; pointer-events: none; }
+.you-dot { position: absolute; inset: 3px; border-radius: 50%; }
+.you-ring { position: absolute; left: 50%; top: 50%; translate: -50% -50%; border-radius: 50%; width: 60px; height: 60px; transition: width .15s linear, height .15s linear; }
+.you-survey .you-dot { background: var(--survey-blue); border: 2.5px solid var(--paper); box-shadow: 0 0 0 1px var(--ink); }
+.you-survey .you-ring { border: 1.5px dashed var(--ink); opacity: .65; background: color-mix(in srgb, var(--survey-blue) 8%, transparent); }
+.you-heat .you-dot { background: var(--void); box-shadow: 0 0 0 2px var(--white-hot), 0 0 10px var(--white-hot); }
+.you-heat .you-ring { border: 2px solid color-mix(in srgb, var(--void) 70%, #000); box-shadow: 0 0 0 1px var(--vein), inset 0 0 18px #000; background: radial-gradient(circle, transparent 55%, color-mix(in srgb, #000 55%, transparent)); animation: pulse 2.8s ease-out infinite; }
+@keyframes pulse { 0% { opacity: .95; } 60% { opacity: .5; } 100% { opacity: .95; } }
+.you-neutral .you-dot { background: var(--fg); }
+.you-neutral .you-ring { border: 1px solid var(--muted); }
+
+/* walk-to target (simulator) */
+.walk-target { width: 18px; height: 18px; border: 2px solid var(--accent); border-radius: 50%; pointer-events: none; }
+.walk-target::after { content: ''; position: absolute; inset: 5px; background: var(--accent); border-radius: 50%; }
+
+.maplibregl-ctrl-attrib { font-size: 10px; }
+.maplibregl-ctrl-bottom-left { z-index: 2; }

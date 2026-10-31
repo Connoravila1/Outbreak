@@ -1,0 +1,16 @@
+.simpanel {
+  width: 280px; align-self: flex-start; margin-top: 40px; padding: 18px; border-radius: 10px;
+  background: #121417; color: #cfd3d6; border: 1px solid #2a2e34; font-size: 14px; display: grid; gap: 10px;
+}
+.simpanel h2 { font-family: var(--f-display); font-size: 22px; letter-spacing: .08em; text-transform: uppercase; color: #fff; font-weight: 800; }
+.simpanel h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .14em; color: #8a9096; margin-top: 4px; }
+.simpanel dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; }
+.simpanel dt { color: #8a9096; } .simpanel dd { margin: 0; text-align: right; }
+.simpanel .keys, .simpanel .note { color: #8a9096; font-size: 13px; }
+.simpanel kbd { display: inline-block; min-width: 20px; padding: 1px 5px; margin-right: 2px; border: 1px solid #4a5058; border-bottom-width: 2px; border-radius: 4px; background: #1b1e22; color: #fff; font-size: 12px; text-align: center; }
+.sim-toggle { display: flex; gap: 10px; align-items: center; min-height: 40px; }
+.sim-toggle input { width: 20px; height: 20px; accent-color: #E2342D; }
+.presets { display: flex; flex-wrap: wrap; gap: 6px; }
+.presets button { min-height: 40px; padding: 0 12px; background: #1b1e22; color: #fff; border: 1px solid #3a3f46; border-radius: 6px; }
+.presets button:hover { border-color: #8a9096; }
+.simpanel :focus-visible { outline-color: #fff; }

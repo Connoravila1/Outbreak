@@ -71,3 +71,19 @@ that — it is where we keep our own books.
 
 The attribution is the *price* of the music, not a nicety attached to it. If we cannot put a credit
 on a screen, we do not get to use the track.
+
+---
+
+## Client (`client/`)
+
+| | |
+|---|---|
+| **Game-icons.net icons** | via `@iconify-json/game-icons`; a generated subset in `client/src/ui/icon-data.ts` |
+| Authors | Lorc, Delapouite and other game-icons.net contributors (https://game-icons.net; authors listed in the package's `info.json` and the project licence file) |
+| Licence | CC BY 3.0 — https://creativecommons.org/licenses/by/3.0/ |
+| **Big Shoulders Display**, **Barlow**, **Permanent Marker** | bundled via `@fontsource/*`, served from our own origin |
+| Licence | SIL OFL 1.1 (Big Shoulders Display © Patric King / Chicago Tribune; Barlow © Jeremy Tribby; Permanent Marker © Font Diner / Stephen Hicks) |
+| **OpenFreeMap** tiles and **OpenMapTiles** schema | https://openfreemap.org — vector tiles, no key |
+| **OpenStreetMap** data | © OpenStreetMap contributors, ODbL 1.0 — https://www.openstreetmap.org/copyright. The map always carries the attribution control (and the split-lens screen prints it). |
+| **MapLibre GL JS** | BSD-3-Clause, `maplibre-gl` |
+| **Preact**, **@preact/signals** | MIT |

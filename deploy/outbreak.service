@@ -1,0 +1,17 @@
+[Unit]
+Description=Outbreak game server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=outbreak
+WorkingDirectory=/opt/outbreak
+ExecStart=/opt/outbreak/outbreak-server --bind 127.0.0.1 --port 8080 --data /opt/outbreak/data
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/outbreak/data
+
+[Install]
+WantedBy=multi-user.target

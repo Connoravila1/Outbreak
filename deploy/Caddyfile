@@ -1,0 +1,6 @@
+# Replace play.example.com with your domain. Point its DNS A/AAAA record at this machine,
+# open ports 80 and 443, and Caddy fetches and renews the HTTPS certificate by itself.
+play.example.com {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8080
+}

@@ -1,0 +1,99 @@
+/* Tokens from docs/UI.md. Components use these (and the semantic aliases), never raw colours. */
+
+:root {
+  --alert: #E2342D;
+  --r-common: #A3A8AE;
+  --r-uncommon: #3FA34D;
+  --r-rare: #2F7BD9;
+  --r-legendary: #E8A317;
+
+  --sa-top: env(safe-area-inset-top, 0px);
+  --sa-right: env(safe-area-inset-right, 0px);
+  --sa-bottom: env(safe-area-inset-bottom, 0px);
+  --sa-left: env(safe-area-inset-left, 0px);
+
+  --f-display: 'Big Shoulders Display', 'Arial Narrow', Impact, sans-serif;
+  --f-body: 'Barlow', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --f-hand: 'Permanent Marker', 'Comic Sans MS', cursive;
+
+  --fs-12: 12px; --fs-14: 14px; --fs-16: 16px; --fs-20: 20px; --fs-28: 28px; --fs-40: 40px; --fs-64: 64px;
+  --tap: 48px;
+  --ease: cubic-bezier(.2, .8, .2, 1);
+}
+
+/* ---------- Neutral: the broadcast, before the choice ---------- */
+:root[data-lens='neutral'] {
+  --bg: #0B0C0E;
+  --fg: #EEF0F0;
+  --muted: #7C8288;
+
+  --surface: #14161A;
+  --surface-2: #1C1F24;
+  --text: var(--fg);
+  --text-dim: var(--muted);
+  --line: #2A2E34;
+  --accent: var(--alert);
+  --accent-ink: #fff;
+  --danger: var(--alert);
+  --you: var(--fg);
+  --map-bg: var(--bg);
+  --t-easy: var(--muted); --t-even: var(--fg); --t-dangerous: var(--alert); --t-deadly: var(--alert);
+  --case: none; --track: 0.02em; --f-head: var(--f-display);
+}
+
+/* ---------- Survey (Human): two-ink print on grey map paper ---------- */
+:root[data-lens='survey'], [data-scope='survey'] {
+  --bg: #0B0C0E; --fg: #EEF0F0; --muted: #7C8288;
+  --paper: #DCDDD5;
+  --paper-2: #C9CBC1;
+  --ink: #1F2326;
+  --survey-brown: #8A5A3C;
+  --survey-blue: #3B6E99;
+  --grease: #C8312B;
+  --hazard: #F2BE1A;
+  --tape: #16181A;
+
+  --surface: var(--paper);
+  --surface-2: var(--paper-2);
+  --text: var(--ink);
+  --text-dim: color-mix(in srgb, var(--ink) 62%, var(--paper));
+  --line: color-mix(in srgb, var(--ink) 28%, var(--paper));
+  --accent: var(--hazard);
+  --accent-ink: var(--ink);
+  --danger: var(--grease);
+  --you: var(--survey-blue);
+  --map-bg: var(--paper);
+  --t-easy: var(--survey-blue);
+  --t-even: var(--ink);
+  --t-dangerous: #B8651A;
+  --t-deadly: var(--grease);
+  --case: none; --track: 0.01em; --f-head: var(--f-display);
+}
+
+/* ---------- Heat (Zombie): thermal sense ---------- */
+:root[data-lens='heat'], [data-scope='heat'] {
+  --bg: #0B0C0E; --fg: #EEF0F0; --muted: #7C8288;
+  --void: #110A1A;
+  --cold: #2A2560;
+  --vein: #5B2A6E;
+  --warm: #C02A7C;
+  --hot: #FF6B2C;
+  --white-hot: #FFF0C2;
+  --flesh: #E9D9DE;
+
+  --surface: color-mix(in srgb, var(--cold) 38%, var(--void));
+  --surface-2: color-mix(in srgb, var(--cold) 70%, var(--void));
+  --text: var(--flesh);
+  --text-dim: color-mix(in srgb, var(--flesh) 58%, var(--void));
+  --line: color-mix(in srgb, var(--vein) 70%, var(--void));
+  --accent: var(--hot);
+  --accent-ink: var(--void);
+  --danger: var(--hot);
+  --you: var(--white-hot);
+  --map-bg: var(--void);
+  --t-easy: #8F7BE0;
+  --t-even: var(--warm);
+  --t-dangerous: var(--hot);
+  --t-deadly: var(--white-hot);
+  --case: lowercase; --track: 0.1em; --f-head: var(--f-body);
+}
