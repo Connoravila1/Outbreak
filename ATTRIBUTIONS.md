@@ -44,10 +44,6 @@ linked from here.
 
 ---
 
-## Audio
-
----
-
 ## Client sound set (`client/public/audio/`)
 
 All of it is **CC0 (public domain)**, so no credit is legally owed. It is credited anyway, in the in-app
