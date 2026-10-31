@@ -46,8 +46,8 @@ pub const Build = struct {
             if (!first) try w.writeByte('|');
             first = false;
             try w.print("{d},{d},{d},{d},{d},{d},{d}", .{
-                it.base,                   @intFromEnum(it.rarity),    it.upgrade,
-                if (it.unique) |u| @as(i32, u) else -1, it.perk_count, @intFromEnum(it.perk_ids[0]),
+                it.base,                                @intFromEnum(it.rarity), it.upgrade,
+                if (it.unique) |u| @as(i32, u) else -1, it.perk_count,           @intFromEnum(it.perk_ids[0]),
                 @intFromEnum(it.perk_ids[1]),
             });
         }

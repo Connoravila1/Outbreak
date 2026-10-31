@@ -99,9 +99,29 @@ side B). Expected: an even fight ends in 5–8 turns (the simulator measures 5�
 ### Health, downed, recovery
 
 - HP persists between fights. This paces play and makes healing items matter.
-- Out of combat you regenerate 1% max HP per minute (Zombies 1.25%).
-- At 0 HP you are **Downed** for 10 minutes: no PvE, no PvP, no raids. You revive at 30% HP.
-  A revive item skips this. Losing never costs items or XP.
+- Out of combat you regenerate 2% max HP per minute (Zombies 2.5%): empty to full in 50 minutes
+  (Zombies 40). Reaching a new level heals you fully.
+- At 0 HP you are **Downed**: no PvE, no PvP, no raids. 5 minutes below L5, 10 minutes from L5.
+  You revive at 30% HP. A revive item skips this. Losing never costs items or XP.
+
+### New-player grace (L1–4) and First Blood
+
+PvP protection ends at L5, and so does the gentle start. For a viewer below L5:
+
+- Enemies come at level offsets −2..0 only (never above you, minimum level 1), and **no elites** are
+  generated or visible.
+- Enemy HP, ATK and DEF are multiplied by a grace factor: 0.75 at L1, 0.80 at L2, 0.87 at L3,
+  0.94 at L4, 1.0 from L5.
+
+**First Blood.** While a player has **0 wins**, `/api/location` adds one extra enemy with
+`tutorial: true` (every enemy object carries the flag; it is false for normal ones): a Shambler
+(mirrored per faction) at the player's own level, HP/ATK/DEF ×0.6 (replacing, not stacking with,
+the grace factor), never elite, standing 25–35 m from the player. The spot is derived from
+(server seed, player, re-anchor count) and held in memory like positions; it is placed again near
+the player if they get more than 150 m from it. Its id is `t.<player_id>` and engaging it
+validates like any other enemy (reach, not Downed, not in a sanctuary). A win pays normal PvE
+rewards plus a guaranteed Uncommon-or-better item from the player's level pool, and ends the
+tutorial enemy for good. A loss leaves it standing.
 
 ### Abilities
 
@@ -122,7 +142,7 @@ automatically in combat. Pairs are mirrored in power, different in flavour.
 
 Levels 1–50. XP to go from level L to L+1:
 
-    xpToNext(L) = round_to_10(5 * L^2.65 + 60)
+    xpToNext(L) = round_to_10(5.1 * L^2.65 + 440)
 
 Pacing targets (active play time, verified by the balance simulator): **L5 ≈ 1 h, L10 ≈ 5 h,
 L20 ≈ 25 h, L30 ≈ 70 h, L50 ≈ 300 h.** Tune `xpToNext` and the XP sources against these.
@@ -130,8 +150,9 @@ L20 ≈ 25 h, L30 ≈ 70 h, L50 ≈ 300 h.** Tune `xpToNext` and the XP sources 
 The simulator (`zig build sim`) assumes a player who is active ~2 h a day (HP is full at the start
 of each day), walks constantly, fights whenever HP ≥ 60% (healing from stock under 50%, otherwise
 waiting for regeneration), and does the dailies and weekly. Median results (100 players): see
-`server/src/sim.zig`; the curve above lands within about ±10% of every target. Total XP from
-L1 to L50 is about 2.1 million.
+`server/src/sim.zig`; the curve above lands within about ±10% of every target (last run, 100 players: L5 1.05 h, L10
+4.9 h, L20 23.3 h, L30 66 h, L50 304 h). The 440 offset keeps the first levels from flying by now
+that missions pay in wins. Total XP from L1 to L50 is about 2.1 million.
 
 ### XP sources
 
@@ -144,7 +165,7 @@ L1 to L50 is about 2.1 million.
 | PvP win | `60 + 10*opp_level` |
 | PvP loss | 30% of win value |
 | Echo win | `40 + 7*echo_level` |
-| Daily mission | 2–3% of xpToNext(L) each (weekly: 7–8%) |
+| Daily mission | `k * pveWinXp(L)`, k = 2.0–3.0 by difficulty (weekly: k = 10); `pveWinXp(L)` is a standard enemy's win at your own level |
 | Raid contribution | scaled by damage share |
 
 ### Every level matters
@@ -305,16 +326,19 @@ The world is split into **geohash-7 cells** (≈153 m × 153 m). Content is gene
 deterministically from `(server_seed, cell, time_window)`, so everyone near a place sees the same
 things, and the server can recompute and validate any id without storing spawns.
 
-- **Enemies**: every 10-minute window, each cell has 0–3 enemy spawns (mean 1.2). Each spawn has a
-  position inside the cell, an archetype, and a level offset. Enemy level is shown relative to the
-  viewer: `player_level + offset` with offset in −2..+2 (elite: +3..+5, 8% chance, gold ring).
-  A player can defeat each spawn once.
-- **Caches**: every 30-minute window, each cell has a 35% chance of one cache. One open per player.
+- **Enemies**: every 10-minute window, each cell has 0–2 enemy spawns (55% / 35% / 10%, mean
+  0.55). Each spawn has a position inside the cell, an archetype, and a level offset. Enemy level is
+  shown relative to the viewer: `player_level + offset` with offset in −2..+2 (elite: +3..+5, 8%
+  chance, gold ring); viewers below L5 get −2..0 and no elites (section 4, grace). A player can
+  defeat each spawn once.
+- **Caches**: every 30-minute window, each cell has a 30% chance of one cache. One open per player.
 - **Airdrops** (L8+): each geohash-5 region (≈4.9 km) gets one airdrop per 2-hour window, live for
   45 minutes, visible from 2 km. Better loot, higher Legendary chance (×3).
 - **Strongholds** (clans): one per geohash-6 cell (≈1.2 km × 0.6 km), at a fixed point.
 
-Interaction range is **50 m** (generous for GPS error). Content is shown within **450 m**.
+Interaction range is **50 m** (generous for GPS error). Content is shown within **400 m**: about 14–18 enemies
+and 7–10 caches at mid latitudes (cells are narrower the further from the equator; about 14 / 7 at
+30° N, 16 / 8.5 at 41° N), so there is always something to do without clutter.
 
 ### Enemy archetypes (mirrored per faction)
 
@@ -395,11 +419,16 @@ If no real snapshot of a fitting level exists (very early servers), the server u
 ## 9. Missions
 
 Three **daily missions** (reset 00:00 UTC) from a pool, plus one **weekly** (from L5). Rewards: XP
-(2–3% of xpToNext for dailies, 7–8% for the weekly), salvage (`10 + L` daily, `80 + 5L` weekly), and
+(`k` standard wins' worth, `k` = 2.0–3.0 for dailies and 10 for the weekly, so it scales with level
+the way fights do and is never a token amount), salvage (`10 + L` daily, `80 + 5L` weekly), and
 for the weekly a guaranteed Rare-or-better item. The three dailies are distinct kinds, chosen
-deterministically per player and day, and gated by level (Contacts from L5, upgrades from L4).
+deterministically per player and day, and gated by what the player can plausibly do: scrap and upgrade missions from L4 (spare gear),
+elite, Contact and Echo missions from L5 (elites and real-world fights do not exist before that).
 Completing all three dailies adds a bonus consumable. A **streak** counter adds +10% mission XP per
 consecutive day on which a daily is claimed, capped at +50%; it lapses after a missed day.
+
+The pool is recomputed from (player, day, frozen level), so existing mission ids stay valid; the
+gating applies to whatever is generated from the next selection on.
 
 Pool: defeat N enemies · defeat an elite · open N caches · walk N metres · win a Contact or an
 Echo · use a consumable · upgrade an item · scrap N items · defeat N of a specific archetype.

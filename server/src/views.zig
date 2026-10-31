@@ -119,6 +119,8 @@ pub const Raw = struct {
     }
 };
 
+pub const RecordView = struct { wins: u32, losses: u32, contacts: u32, echoes: u32, caches: u32, distance_m: u64 };
+
 pub const MeView = struct {
     id: []const u8,
     callsign: []const u8,
@@ -145,6 +147,7 @@ pub const MeView = struct {
     pvp_protected: bool,
     underdog_bonus: f32,
     war_points_week: u32,
+    record: RecordView,
 };
 
 pub const MeLite = struct {
@@ -269,6 +272,7 @@ pub fn meView(req: *Req, p: *Player) HandlerError!MeView {
         .pvp_protected = progression.pvpProtected(p.level),
         .underdog_bonus = if (p.faction) |f| sh.bonusFor(f) else 0,
         .war_points_week = try warstate.weekPoints(req, p.id),
+        .record = .{ .wins = p.wins, .losses = p.losses, .contacts = p.contacts, .echoes = p.echoes, .caches = p.caches, .distance_m = p.distance_m },
     };
 }
 

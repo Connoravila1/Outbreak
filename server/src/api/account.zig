@@ -60,9 +60,9 @@ fn normalizeCode(buf: []u8, text: []const u8) []const u8 {
 // --- Callsigns --------------------------------------------------------------------------------------
 
 const blocked = [_][]const u8{
-    "nigg",   "faggot", "retard", "cunt",   "fuck",  "shit",    "bitch",  "whore",   "slut",  "rapist",
-    "nazi",   "hitler", "kike",   "chink",  "tranny", "pussy",  "asshole", "twat",   "penis", "vagina",
-    "dildo",  "porn",   "pedophile", "molest", "jihadist", "kkk",
+    "nigg",  "faggot", "retard",    "cunt",   "fuck",     "shit",  "bitch",   "whore", "slut",  "rapist",
+    "nazi",  "hitler", "kike",      "chink",  "tranny",   "pussy", "asshole", "twat",  "penis", "vagina",
+    "dildo", "porn",   "pedophile", "molest", "jihadist", "kkk",
 };
 
 /// Letters only, lowercase, common look-alike digits folded back, so "Sh1t_Head" is caught.

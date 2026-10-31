@@ -325,7 +325,7 @@ pub fn raidAttack(req: *Req, jw: *Stringify) HandlerError!void {
 
     const boss_level: u32 = @min(p.level + 2, data.max_level + 2);
     const a = try fight.selfSide(req, &p);
-    const b = try fight.enemySide(req.arena, p.fac(), .abomination, boss_level, false, true);
+    const b = try fight.enemySide(req.arena, p.fac(), .abomination, boss_level, false, true, 1.0);
     const o = try fight.run(req, a, b, fight.seedFor(req, p.id, game.rng.hashBytes(4, body.id)));
 
     const dealt: i64 = @max(0, b.combatant.hp - o.result.hp_b);

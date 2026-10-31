@@ -8,6 +8,7 @@ const ctx_mod = @import("ctx.zig");
 const api = @import("api.zig");
 const tick = @import("tick.zig");
 const live = @import("live.zig");
+const model = @import("model.zig");
 
 const testing = std.testing;
 const Value = std.json.Value;
@@ -170,10 +171,13 @@ const Harness = struct {
 fn findEnemy(seed: u64, now: i64) spawns.Enemy {
     var cell = geo.encode(base_lat, base_lon, 7);
     const window = spawns.windowIndex(now, spawns.enemy_window_ms);
-    var buf: [3]spawns.Enemy = undefined;
+    var buf: [spawns.max_enemies_per_cell]spawns.Enemy = undefined;
     while (true) {
         const found = spawns.enemiesInCell(seed, cell, window, &buf);
-        if (found.len > 0) return found[0];
+        // Not an elite: new players cannot see those.
+        for (found) |e| {
+            if (e.visibleTo(1)) return e;
+        }
         cell = geo.neighbors(cell)[2].?;
     }
 }
@@ -387,6 +391,146 @@ test "location, engage an enemy, rewards and the defeated list" {
     try testing.expect(far.status == 404 or far.status == 409);
 }
 
+/// The tutorial enemy in a /api/location answer, if there is one.
+fn tutorialIn(world: *const Res) !?std.json.ObjectMap {
+    for ((try world.at("enemies")).array.items) |e| {
+        try testing.expect(e.object.get("tutorial") != null);
+        if (e.object.get("tutorial").?.bool) return e.object;
+    }
+    return null;
+}
+
+test "First Blood: one gentle Shambler while a player has no wins, a guaranteed Uncommon, then gone" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var tok: [64]u8 = undefined;
+    try h.player("Rookie", "human", &tok);
+    const pid = try h.playerId("Rookie");
+
+    var w = try h.location(&tok, base_lat, base_lon);
+    defer w.deinit();
+    const t = (try tutorialIn(&w)).?;
+    try testing.expectEqualStrings("shambler", t.get("archetype").?.string);
+    try testing.expectEqual(@as(i64, 1), t.get("level").?.integer);
+    try testing.expect(!t.get("elite").?.bool);
+    const tid = try std.fmt.allocPrint(testing.allocator, "t.{d}", .{pid});
+    defer testing.allocator.free(tid);
+    try testing.expectEqualStrings(tid, t.get("id").?.string);
+    const d = geo.haversineM(base_lat, base_lon, t.get("lat").?.float, t.get("lon").?.float);
+    try testing.expect(d >= 24 and d <= 36);
+    // Exactly one, and world enemies are flagged false.
+    var n: usize = 0;
+    for ((try w.at("enemies")).array.items) |e| {
+        if (e.object.get("tutorial").?.bool) n += 1;
+    }
+    try testing.expectEqual(@as(usize, 1), n);
+
+    // It stays put while the player stays near, and follows once they are 150 m away from it.
+    h.advance(5000);
+    var w2 = try h.location(&tok, base_lat + 0.0001, base_lon);
+    defer w2.deinit();
+    const t2 = (try tutorialIn(&w2)).?;
+    try testing.expectEqual(t.get("lat").?.float, t2.get("lat").?.float);
+    var far_lat: f64 = base_lat;
+    for (0..8) |_| { // about 100 m a step: out of range of the old anchor after 2
+        h.advance(30_000);
+        far_lat += 0.0009;
+        var step = try h.location(&tok, far_lat, base_lon);
+        step.deinit();
+    }
+    var w3 = try h.location(&tok, far_lat, base_lon);
+    defer w3.deinit();
+    const t3 = (try tutorialIn(&w3)).?;
+    const d3 = geo.haversineM(far_lat, base_lon, t3.get("lat").?.float, t3.get("lon").?.float);
+    try testing.expect(d3 >= 24 and d3 <= 36);
+
+    // Someone else's id does not validate.
+    var bad = try h.post("/api/engage", &tok, "{\"id\":\"t.999\"}");
+    defer bad.deinit();
+    try testing.expectEqual(@as(u16, 404), bad.status);
+
+    var b = try h.ok("/api/engage", &tok, "{{\"id\":\"{s}\"}}", .{tid});
+    defer b.deinit();
+    try testing.expectEqualStrings("a", try b.str("winner"));
+    try testing.expect(try b.int("rewards.xp") >= 26);
+    var uncommon_plus = false;
+    for ((try b.at("rewards.items")).array.items) |it| {
+        if (!std.mem.eql(u8, it.object.get("rarity").?.string, "common")) uncommon_plus = true;
+    }
+    try testing.expect(uncommon_plus);
+    try testing.expectEqual(@as(i64, 1), try b.int("me.record.wins"));
+
+    // Gone for good.
+    var again = try h.postf("/api/engage", &tok, "{{\"id\":\"{s}\"}}", .{tid});
+    defer again.deinit();
+    try testing.expectEqual(@as(u16, 404), again.status);
+    h.advance(5000);
+    var w4 = try h.location(&tok, far_lat, base_lon);
+    defer w4.deinit();
+    try testing.expect((try tutorialIn(&w4)) == null);
+}
+
+test "new players see no elites and nothing above their level" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var tok: [64]u8 = undefined;
+    try h.player("Newbie", "zombie", &tok);
+    var lat: f64 = base_lat;
+    for (0..25) |_| {
+        var w = try h.location(&tok, lat, base_lon);
+        defer w.deinit();
+        for ((try w.at("enemies")).array.items) |e| {
+            try testing.expect(!e.object.get("elite").?.bool);
+            try testing.expect(e.object.get("level").?.integer <= try w.int("me.level"));
+        }
+        lat += 0.002;
+        h.advance(60_000);
+    }
+}
+
+test "Me has a record of wins, losses, contacts, echoes, caches and distance" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var tok: [64]u8 = undefined;
+    try h.player("Recorder", "human", &tok);
+    const pid = try h.playerId("Recorder");
+    try h.ctx.db.run("UPDATE players SET wins = 4, losses = 2, contacts = 1, echoes = 3, caches = 5, distance_m = 1234 WHERE id = ?", .{pid});
+    var me = try h.get("/api/me", &tok);
+    defer me.deinit();
+    try testing.expectEqual(@as(i64, 4), try me.int("record.wins"));
+    try testing.expectEqual(@as(i64, 2), try me.int("record.losses"));
+    try testing.expectEqual(@as(i64, 1), try me.int("record.contacts"));
+    try testing.expectEqual(@as(i64, 3), try me.int("record.echoes"));
+    try testing.expectEqual(@as(i64, 5), try me.int("record.caches"));
+    try testing.expectEqual(@as(i64, 1234), try me.int("record.distance_m"));
+}
+
+test "healing pace: a level-up heals fully; Downed lasts 5 minutes below level 5, 10 from 5" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var tok: [64]u8 = undefined;
+    try h.player("Healer", "human", &tok);
+    const pid = try h.playerId("Healer");
+    try h.ctx.db.run("UPDATE players SET hp = 5, hp_at = ? WHERE id = ?", .{ h.ctx.now(), pid });
+    try h.grantXp(&tok, game.progression.xpToNext(1));
+    var me = try h.get("/api/me", &tok);
+    defer me.deinit();
+    try testing.expectEqual(@as(i64, 2), try me.int("level"));
+    try testing.expectEqual(try me.int("max_hp"), try me.int("hp"));
+
+    var p: model.Player = undefined;
+    p.level = 4;
+    p.down(h.ctx.now());
+    try testing.expectEqual(h.ctx.now() + 5 * 60 * 1000, p.downed_until.?);
+    p.level = 5;
+    p.down(h.ctx.now());
+    try testing.expectEqual(h.ctx.now() + 10 * 60 * 1000, p.downed_until.?);
+}
+
 test "sanctuary hides content; a teleport is rejected; walking pays XP" {
     var h: Harness = undefined;
     try h.init(.{ .dev = true, .limits = false });
@@ -522,7 +666,7 @@ test "HP regenerates lazily; Downed ends at 30%; revive and not-usable flags" {
     h.advance(10 * 60 * 1000);
     var me1 = try h.get("/api/me", &tok);
     defer me1.deinit();
-    // Zombies regenerate 1.25% of max HP per minute.
+    // Zombies regenerate 2.5% of max HP per minute.
     try testing.expectEqual(10 + game.stats.regenHp(.zombie, @intCast(max), 10), try me1.int("hp"));
 
     try h.ctx.db.run("UPDATE players SET hp = 0, hp_at = ?, downed_until = ? WHERE id = ?", .{ h.ctx.now(), h.ctx.now() + 10 * 60 * 1000, pid });
@@ -902,7 +1046,7 @@ test "dev bot contact stages a Contact against a generated opponent" {
     defer w.deinit();
     const ev = (try eventOfType(&w, "contact")) orelse return error.NoContactEvent;
     try testing.expectEqualStrings("A Zombie", ev.object.get("battle").?.object.get("b").?.object.get("name").?.string);
-    }
+}
 
 test "echoes: a real opposing snapshot (reported to its owner), or a labelled rogue" {
     var h: Harness = undefined;

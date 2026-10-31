@@ -74,6 +74,7 @@ const Player = struct {
     metres_frac: f64 = 0,
     downed_left: f64 = 0,
     echo_timer: f64 = 0,
+    total_wins: u32 = 0,
 
     streak: u32 = 0,
     last_claim_day: i64 = -10,
@@ -198,7 +199,7 @@ const Player = struct {
                 p.hp = stats.revive_fraction * p.maxHp();
             }
         } else {
-            const rate: f64 = if (p.faction == .zombie) 0.0125 else 0.01;
+            const rate = stats.regenRate(p.faction);
             p.hp = @min(p.maxHp(), p.hp + rate * p.maxHp() * dt / 60.0);
         }
         if (walking) {
@@ -236,6 +237,7 @@ const Player = struct {
         }
         p.level = r.level;
         p.recompute();
+        if (p.downed_left == 0) p.hp = p.maxHp(); // levelling up heals fully
         p.reach_ratio[r.level] = p.ratio();
         for (probe_levels, 0..) |pl, i| {
             if (pl > r.level - r.levels_gained and pl <= r.level) p.probe(i, pl);
@@ -252,7 +254,7 @@ const Player = struct {
         var log: [combat.max_log]combat.Turn = undefined;
         for (0..probe_archetypes) |a| {
             const arch: data.Archetype = @enumFromInt(a);
-            const foe = enemyCombatant(arch, level);
+            const foe = enemyCombatant(arch, level, 1.0);
             var cell = &p.probes[slot][a];
             for (0..probe_fights) |_| {
                 const r = combat.fight(me, foe, rng.next(), &log);
@@ -400,7 +402,7 @@ const Player = struct {
 
     fn lose(p: *Player) void {
         p.hp = 0;
-        p.downed_left = @floatFromInt(@divTrunc(stats.downed_ms, 1000));
+        p.downed_left = @floatFromInt(@divTrunc(stats.downedMs(p.level), 1000));
     }
 
     fn pveFight(p: *Player) void {
@@ -408,17 +410,32 @@ const Player = struct {
         var arch: data.Archetype = undefined;
         var elite = false;
         var offset: i32 = 0;
+        const new_player = p.level < stats.grace_levels;
         for (0..6) |_| {
             arch = @enumFromInt(p.rng.weighted(&data.archetype_weights));
             elite = p.rng.chance(game.spawns.elite_chance);
             offset = if (elite) p.rng.intRange(3, 5) else p.rng.intRange(-2, 2);
+            if (new_player) {
+                // Below level 5 the world has no elites and nothing above the player.
+                elite = false;
+                offset = @mod(p.rng.intRange(-2, 2) + 2, 3) - 2;
+                break;
+            }
             if (!elite or p.hpFrac() >= elite_hp_floor) break;
         }
+        // The First Blood enemy: a weak Shambler at the player's level, until the first win.
+        const first_blood = p.total_wins == 0;
+        if (first_blood) {
+            arch = .shambler;
+            elite = false;
+            offset = 0;
+        }
+        const mult: f32 = if (first_blood) stats.tutorial_factor else stats.graceFactor(p.level);
         const e_level: u8 = @intCast(std.math.clamp(@as(i32, p.level) + offset, 1, max_lvl + 5));
         p.advance(approach_seconds, true);
         var log: [combat.max_log]combat.Turn = undefined;
         const me = p.combatant();
-        const r = combat.fight(me, enemyCombatant(arch, e_level), p.rng.next(), &log);
+        const r = combat.fight(me, enemyCombatant(arch, e_level, mult), p.rng.next(), &log);
         p.advance(fight_seconds, false);
         const lvl = p.level;
         p.fights[lvl] += 1;
@@ -430,7 +447,9 @@ const Player = struct {
         const win_xp = progression.pveWinXp(e_level, class, row.reward_mult);
         if (r.winner == .a) {
             p.wins[lvl] += 1;
+            p.total_wins += 1;
             p.takeDrop(loot.rollPve(&p.rng, .{ .player_level = lvl, .enemy_level = e_level, .archetype = arch, .loot_mult = p.lootMult() }));
+            if (first_blood) p.handleItem(loot.rollItem(&p.rng, .{ .level = lvl, .min_rarity = .uncommon }), true);
             p.gainXp(.fight, win_xp);
             p.missionEvent(.{ .kind = .pve_win, .archetype = arch, .elite = elite });
         } else {
@@ -472,8 +491,8 @@ const Player = struct {
     }
 };
 
-fn enemyCombatant(arch: data.Archetype, level: u8) combat.Combatant {
-    const s = stats.enemyStats(arch, level);
+fn enemyCombatant(arch: data.Archetype, level: u8, mult: f32) combat.Combatant {
+    const s = stats.enemyStatsScaled(arch, level, mult);
     return .{ .faction = .zombie, .stats = s, .hp = s.hp };
 }
 

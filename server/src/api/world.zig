@@ -17,14 +17,15 @@ const data = game.data;
 const geo = game.geo;
 const spawns = game.spawns;
 const progression = game.progression;
+const stats = game.stats;
 const loot = game.loot;
 const Req = ctx_mod.Req;
 const HandlerError = ctx_mod.HandlerError;
 const Player = model.Player;
 const Stringify = std.json.Stringify;
 
-/// Content is shown within 450 m and can be touched within 50 m (plus GPS slack).
-pub const view_radius_m = 450.0;
+/// Content is shown within 400 m and can be touched within 50 m (plus GPS slack).
+pub const view_radius_m = 400.0;
 pub const reach_m = 50.0;
 pub const reach_slack_max_m = 25.0;
 pub const hostile_radius_m = 500.0;
@@ -39,7 +40,7 @@ pub fn withinReach(pos: live.Pos, lat: f64, lon: f64) bool {
 
 // --- /api/location -------------------------------------------------------------------------------------
 
-const EnemyView = struct { id: []const u8, archetype: []const u8, level: u32, elite: bool, lat: f64, lon: f64, expires_at: i64 };
+const EnemyView = struct { id: []const u8, archetype: []const u8, level: u32, elite: bool, tutorial: bool, lat: f64, lon: f64, expires_at: i64 };
 const CacheView = struct { id: []const u8, kind: []const u8, lat: f64, lon: f64, expires_at: i64 };
 const EchoView = struct { id: []const u8, level: u8, faction: data.Faction, title: []const u8, rogue: bool, lat: f64, lon: f64, expires_at: i64 };
 const ClanTag = struct { tag: []const u8, name: []const u8, faction: data.Faction };
@@ -148,6 +149,7 @@ fn worldEnemies(req: *Req, p: *const Player, pos: live.Pos, out: *std.ArrayList(
     for (cells[0..n]) |cell| {
         for (spawns.enemiesInCell(req.ctx.seed, cell, window, &buf)) |e| {
             if (geo.haversineM(pos.lat, pos.lon, e.lat, e.lon) > view_radius_m) continue;
+            if (!e.visibleTo(p.level)) continue;
             const id = e.id();
             if (try isDone(req, p.id, id.str())) continue;
             try out.append(req.arena, .{
@@ -155,12 +157,46 @@ fn worldEnemies(req: *Req, p: *const Player, pos: live.Pos, out: *std.ArrayList(
                 .archetype = @tagName(e.archetype),
                 .level = e.levelFor(p.level),
                 .elite = e.elite,
+                .tutorial = false,
                 .lat = e.lat,
                 .lon = e.lon,
                 .expires_at = e.expires_at,
             });
         }
     }
+    if (try tutorialAnchor(req, p, pos)) |t| {
+        var tid_buf: [24]u8 = undefined;
+        try out.append(req.arena, .{
+            .id = try req.arena.dupe(u8, spawns.tutorialId(&tid_buf, p.id)),
+            .archetype = @tagName(tutorial_archetype),
+            .level = p.level,
+            .elite = false,
+            .tutorial = true,
+            .lat = t.lat,
+            .lon = t.lon,
+            .expires_at = t.expires_at,
+        });
+    }
+}
+
+/// First Blood: a gentle Shambler for a player with no wins, 25 to 35 m away. It stays where it
+/// was put until the player walks more than 150 m from it (or it times out), then it is placed
+/// near them again. Only /api/location moves it.
+const tutorial_archetype: data.Archetype = .shambler;
+const tutorial_live_ms: i64 = 30 * 60 * 1000;
+
+fn tutorialAnchor(req: *Req, p: *const Player, pos: live.Pos) HandlerError!?live.Tutorial {
+    if (p.wins != 0) return null;
+    const ctx = req.ctx;
+    var gen: u32 = 0;
+    if (ctx.live.tutorials.get(p.id)) |t| {
+        if (t.expires_at > req.now and geo.haversineM(pos.lat, pos.lon, t.lat, t.lon) <= spawns.tutorial_reanchor_m) return t;
+        gen = t.gen +% 1;
+    }
+    const pt = spawns.tutorialPoint(ctx.seed, p.id, gen, .{ .lat = pos.lat, .lon = pos.lon });
+    const t = live.Tutorial{ .lat = pt.lat, .lon = pt.lon, .gen = gen, .expires_at = req.now + tutorial_live_ms };
+    try ctx.live.tutorials.put(ctx.live.gpa, p.id, t);
+    return t;
 }
 
 fn worldCaches(req: *Req, p: *const Player, pos: live.Pos, out: *std.ArrayList(CacheView)) HandlerError!void {
@@ -276,14 +312,41 @@ fn markDone(req: *Req, pid: i64, sid: []const u8, expires_at: i64) HandlerError!
     try req.ctx.db.run("INSERT OR IGNORE INTO done(player_id, sid, expires_at) VALUES(?,?,?)", .{ pid, sid, expires_at });
 }
 
-fn engageEnemy(req: *Req, jw: *Stringify, p: *Player, pos: live.Pos, id: []const u8) HandlerError!void {
-    const en = spawns.resolveEnemy(req.ctx.seed, id, req.now) orelse return req.fail(404, "not_found", "That enemy is gone.");
-    if (!withinReach(pos, en.lat, en.lon)) return req.fail(409, "too_far", "Get closer to engage.");
-    if (try isDone(req, p.id, id)) return req.fail(409, "already_defeated", "You already defeated that one.");
+/// What a PvE engage resolved to: a world enemy or the player's First Blood enemy.
+const Target = struct {
+    archetype: data.Archetype,
+    level: u32,
+    elite: bool,
+    tutorial: bool,
+    lat: f64,
+    lon: f64,
+    expires_at: i64,
+    /// Multiplier on the enemy's HP, ATK and DEF.
+    mult: f32,
+};
 
-    const level = en.levelFor(p.level);
+fn resolveTarget(req: *Req, p: *const Player, id: []const u8) HandlerError!Target {
+    if (std.mem.startsWith(u8, id, "t.")) {
+        var buf: [24]u8 = undefined;
+        const t = req.ctx.live.tutorials.get(p.id);
+        if (p.wins != 0 or t == null or t.?.expires_at <= req.now or !std.mem.eql(u8, id, spawns.tutorialId(&buf, p.id))) {
+            return req.fail(404, "not_found", "That enemy is gone.");
+        }
+        return .{ .archetype = tutorial_archetype, .level = p.level, .elite = false, .tutorial = true, .lat = t.?.lat, .lon = t.?.lon, .expires_at = t.?.expires_at, .mult = stats.tutorial_factor };
+    }
+    const en = spawns.resolveEnemy(req.ctx.seed, id, req.now) orelse return req.fail(404, "not_found", "That enemy is gone.");
+    if (!en.visibleTo(p.level)) return req.fail(404, "not_found", "That enemy is gone.");
+    return .{ .archetype = en.archetype, .level = en.levelFor(p.level), .elite = en.elite, .tutorial = false, .lat = en.lat, .lon = en.lon, .expires_at = en.expires_at, .mult = stats.graceFactor(p.level) };
+}
+
+fn engageEnemy(req: *Req, jw: *Stringify, p: *Player, pos: live.Pos, id: []const u8) HandlerError!void {
+    const en = try resolveTarget(req, p, id);
+    if (!withinReach(pos, en.lat, en.lon)) return req.fail(409, "too_far", "Get closer to engage.");
+    if (!en.tutorial and try isDone(req, p.id, id)) return req.fail(409, "already_defeated", "You already defeated that one.");
+
+    const level = en.level;
     const a = try fight.selfSide(req, p);
-    const b = try fight.enemySide(req.arena, p.fac(), en.archetype, level, en.elite, false);
+    const b = try fight.enemySide(req.arena, p.fac(), en.archetype, level, en.elite, false, en.mult);
     const o = try fight.run(req, a, b, fight.seedFor(req, p.id, game.rng.hashBytes(1, id)));
     const row = data.archetype(en.archetype);
 
@@ -294,9 +357,13 @@ fn engageEnemy(req: *Req, jw: *Stringify, p: *Player, pos: live.Pos, id: []const
         acc.xp = win_xp;
         var lrng = game.rng.Rng.init(game.rng.hash(o.seed, .{"loot"}));
         try acc.addDrop(req, loot.rollPve(&lrng, .{ .player_level = p.level, .enemy_level = level, .archetype = en.archetype, .loot_mult = rewards.lootMult(p, req.now) }));
+        // First Blood always leaves something worth wearing.
+        if (en.tutorial) try acc.items.append(req.arena, loot.rollItem(&lrng, .{ .level = p.level, .min_rarity = .uncommon }));
         acc.war_points = game.war.points(if (en.elite) .pve_elite else .pve_win);
         p.wins += 1;
-        try markDone(req, p.id, id, en.expires_at);
+        if (en.tutorial) {
+            _ = req.ctx.live.tutorials.remove(p.id);
+        } else try markDone(req, p.id, id, en.expires_at);
     } else {
         acc.xp = progression.pveLossXp(win_xp);
         p.losses += 1;

@@ -23,12 +23,14 @@ pub const cache_precision = 7;
 pub const airdrop_precision = 5;
 pub const stronghold_precision = 6;
 
-pub const cache_chance = 0.35;
+const stats_grace_levels = @import("stats.zig").grace_levels;
+
+pub const cache_chance = 0.30;
 pub const elite_chance = 0.08;
 
-/// Chance of 0, 1, 2 and 3 enemies in a cell for one window: mean 1.21.
-const enemy_count_weights = [_]f64{ 27, 36, 26, 11 };
-pub const max_enemies_per_cell = 3;
+/// Chance of 0, 1 and 2 enemies in a cell for one window: mean 0.55.
+const enemy_count_weights = [_]f64{ 55, 35, 10 };
+pub const max_enemies_per_cell = 2;
 
 pub const Kind = enum {
     enemy,
@@ -120,7 +122,8 @@ pub const Enemy = struct {
     window: i64,
     idx: u8,
     archetype: data.Archetype,
-    /// Level relative to the viewer, -2..+2 (+3..+5 for elites).
+    /// Level relative to the viewer, -2..+2 (+3..+5 for elites). Viewers below level 5 see
+    /// -2..0 instead (see `levelFor`).
     offset: i8,
     elite: bool,
     lat: f64,
@@ -131,10 +134,18 @@ pub const Enemy = struct {
         return formatId(.enemy, self.cell, self.window, self.idx);
     }
 
-    /// The enemy's level as seen by a player of `player_level`.
+    /// The enemy's level as seen by a player of `player_level`. New players (below level 5)
+    /// never meet anything above their own level: offsets fold into -2..0.
     pub fn levelFor(self: *const Enemy, player_level: u32) u32 {
-        const lvl = @as(i64, player_level) + self.offset;
+        var off: i64 = self.offset;
+        if (player_level < stats_grace_levels) off = @mod(off + 2, 3) - 2;
+        const lvl = @as(i64, player_level) + off;
         return @intCast(std.math.clamp(lvl, 1, data.max_level + 5));
+    }
+
+    /// Whether a viewer can see this enemy at all: elites are hidden below level 5.
+    pub fn visibleTo(self: *const Enemy, player_level: u32) bool {
+        return !(self.elite and player_level < stats_grace_levels);
     }
 };
 
@@ -166,6 +177,27 @@ pub fn enemiesInCell(seed: u64, cell: Geohash, window: i64, out: *[max_enemies_p
     return out[0..n];
 }
 
+// --- First Blood ---------------------------------------------------------------------------------
+
+pub const tutorial_min_m = 25.0;
+pub const tutorial_max_m = 35.0;
+pub const tutorial_reanchor_m = 150.0;
+
+/// Where a player's First Blood enemy stands: 25 to 35 m from `from`, in a direction fixed by
+/// (seed, player, generation). Bump `gen` to move it.
+pub fn tutorialPoint(seed: u64, player_id: i64, gen: u32, from: Point) Point {
+    var rng = rng_mod.derive(seed, .{ "tut", player_id, gen });
+    const bearing = rng.range(0, 2 * std.math.pi);
+    const dist = rng.range(tutorial_min_m, tutorial_max_m);
+    const dlat = dist * @cos(bearing) / 111_320.0;
+    const dlon = dist * @sin(bearing) / (111_320.0 * @max(0.01, @cos(from.lat * std.math.pi / 180.0)));
+    return .{ .lat = from.lat + dlat, .lon = from.lon + dlon };
+}
+
+pub fn tutorialId(buf: []u8, player_id: i64) []const u8 {
+    return std.fmt.bufPrint(buf, "t.{d}", .{player_id}) catch unreachable;
+}
+
 // --- Caches ------------------------------------------------------------------------------------------
 
 pub const Cache = struct {
@@ -180,7 +212,7 @@ pub const Cache = struct {
     }
 };
 
-/// The cell's cache for a 30-minute window (35% of cells have one).
+/// The cell's cache for a 30-minute window (30% of cells have one).
 pub fn cache(seed: u64, cell: Geohash, window: i64) ?Cache {
     var rng = rng_mod.derive(seed, .{ "c", cell.str(), window });
     if (!rng.chance(cache_chance)) return null;
@@ -294,8 +326,8 @@ test "id format and parse round trip" {
 
 test "world content is deterministic and world dependent" {
     const cell = cellAt(40.7484, -73.9857, 7);
-    var a: [3]Enemy = undefined;
-    var b: [3]Enemy = undefined;
+    var a: [max_enemies_per_cell]Enemy = undefined;
+    var b: [max_enemies_per_cell]Enemy = undefined;
     var differs = false;
     for (0..40) |w| {
         const ea = enemiesInCell(world, cell, @intCast(w), &a);
@@ -309,9 +341,9 @@ test "world content is deterministic and world dependent" {
     try testing.expectEqualDeep(airdrop(world, cell.parent(5), 9), airdrop(world, cell.parent(5), 9));
 }
 
-test "enemy counts average 1.2 and stay within 0..3" {
+test "enemy counts average 0.55 and stay within 0..2" {
     var total: f64 = 0;
-    var counts = [_]f64{0} ** 4;
+    var counts = [_]f64{0} ** 3;
     const base = cellAt(48.8566, 2.3522, 7);
     var cell = base;
     var n: f64 = 0;
@@ -324,9 +356,9 @@ test "enemy counts average 1.2 and stay within 0..3" {
             n += 1;
         }
     }
-    try testing.expectApproxEqAbs(1.21, total / n, 0.05);
-    try testing.expectApproxEqAbs(0.27, counts[0] / n, 0.03);
-    try testing.expectApproxEqAbs(0.11, counts[3] / n, 0.03);
+    try testing.expectApproxEqAbs(0.55, total / n, 0.03);
+    try testing.expectApproxEqAbs(0.55, counts[0] / n, 0.03);
+    try testing.expectApproxEqAbs(0.10, counts[2] / n, 0.02);
 }
 
 test "enemies sit inside their cell with designed levels, archetypes and elite rate" {
@@ -337,7 +369,7 @@ test "enemies sit inside their cell with designed levels, archetypes and elite r
     for (0..60) |i| {
         cell = geo.neighbors(cell)[1].?;
         for (0..60) |w| {
-            var buf: [3]Enemy = undefined;
+            var buf: [max_enemies_per_cell]Enemy = undefined;
             for (enemiesInCell(world, cell, @intCast(w), &buf)) |e| {
                 const box = geo.decode(cell);
                 try testing.expect(e.lat >= box.lat_min and e.lat <= box.lat_max);
@@ -369,7 +401,72 @@ test "enemy levels are relative to the viewer and clamped" {
     try testing.expectEqual(@as(u32, 15), e.levelFor(10));
 }
 
-test "caches appear in about 35% of cell-windows" {
+test "viewers below level 5 only meet enemies at -2..0 and never elites" {
+    var e: Enemy = undefined;
+    e.elite = false;
+    var off: i8 = -2;
+    while (off <= 2) : (off += 1) {
+        e.offset = off;
+        for (1..5) |lvl| {
+            const l = e.levelFor(@intCast(lvl));
+            try testing.expect(l <= lvl);
+            try testing.expect(l >= 1 and lvl - l <= 2);
+        }
+        // Level 5 and up are unchanged.
+        try testing.expectEqual(@as(u32, @intCast(10 + @as(i32, off))), e.levelFor(10));
+    }
+    e.elite = true;
+    try testing.expect(!e.visibleTo(4));
+    try testing.expect(e.visibleTo(5));
+    e.elite = false;
+    try testing.expect(e.visibleTo(1));
+}
+
+test "First Blood sits 25 to 35 m away, deterministically" {
+    const from = Point{ .lat = 40.7484, .lon = -73.9857 };
+    for (0..50) |g| {
+        const a = tutorialPoint(world, 7, @intCast(g), from);
+        try testing.expectEqualDeep(a, tutorialPoint(world, 7, @intCast(g), from));
+        const d = geo.haversineM(from.lat, from.lon, a.lat, a.lon);
+        try testing.expect(d >= 24.5 and d <= 35.5);
+    }
+    const a = tutorialPoint(world, 7, 0, from);
+    const b = tutorialPoint(world, 7, 1, from);
+    try testing.expect(a.lat != b.lat or a.lon != b.lon);
+    var buf: [24]u8 = undefined;
+    try testing.expectEqualStrings("t.42", tutorialId(&buf, 42));
+}
+
+test "about a dozen enemies and a handful of caches within 400 m" {
+    var enemies: f64 = 0;
+    var caches: f64 = 0;
+    var n: f64 = 0;
+    const lats = [_]f64{ 30.0, 40.7, 48.9 };
+    for (lats) |lat| {
+        for (0..40) |i| {
+            const lon = -73.9 + 0.013 * @as(f64, @floatFromInt(i));
+            const ew = windowIndex(1_760_000_000_000 + @as(i64, @intCast(i)) * enemy_window_ms * 7, enemy_window_ms);
+            const cw = windowIndex(1_760_000_000_000 + @as(i64, @intCast(i)) * cache_window_ms * 5, cache_window_ms);
+            var cells: [128]Geohash = undefined;
+            const cn = geo.cellsWithin(lat, lon, 400.0, enemy_precision, &cells);
+            var buf: [max_enemies_per_cell]Enemy = undefined;
+            for (cells[0..cn]) |cell| {
+                for (enemiesInCell(world, cell, ew, &buf)) |e| {
+                    if (geo.haversineM(lat, lon, e.lat, e.lon) <= 400.0) enemies += 1;
+                }
+                if (cache(world, cell, cw)) |c| {
+                    if (geo.haversineM(lat, lon, c.lat, c.lon) <= 400.0) caches += 1;
+                }
+            }
+            n += 1;
+        }
+    }
+    // Mid latitudes are the target (the middle row is 40.7 N); the average over all rows is wider.
+    try testing.expect(enemies / n >= 11 and enemies / n <= 18);
+    try testing.expect(caches / n >= 5 and caches / n <= 9);
+}
+
+test "caches appear in about 30% of cell-windows" {
     var cell = cellAt(51.5, -0.12, 7);
     var hits: f64 = 0;
     var n: f64 = 0;
@@ -385,7 +482,7 @@ test "caches appear in about 35% of cell-windows" {
             }
         }
     }
-    try testing.expectApproxEqAbs(0.35, hits / n, 0.03);
+    try testing.expectApproxEqAbs(0.30, hits / n, 0.03);
 }
 
 test "airdrops live 45 minutes inside their 2-hour window" {

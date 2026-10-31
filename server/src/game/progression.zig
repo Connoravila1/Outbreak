@@ -8,9 +8,9 @@ pub const max_level = data.max_level;
 
 // --- The XP curve (tuned with the simulator; DESIGN.md section 5) -----------------------------
 
-pub const curve_scale = 5.0;
+pub const curve_scale = 5.1;
 pub const curve_power = 2.65;
-pub const curve_offset = 60.0;
+pub const curve_offset = 440.0;
 
 /// XP needed to go from level `level` to `level + 1`.
 pub fn xpToNext(level: u32) u32 {
@@ -161,8 +161,8 @@ pub fn walkXp(metres: u32, earned_today: u32) u32 {
     return @min(room, metres / walk_metres_per_xp);
 }
 
-pub const mission_xp_min_percent: u32 = 15;
-pub const mission_xp_max_percent: u32 = 25;
+/// Weekly missions pay this many standard wins' worth of XP (dailies pay 2 to 3).
+pub const weekly_xp_k10: u32 = 100;
 pub const streak_step = 0.10;
 pub const streak_cap = 0.50;
 
@@ -170,9 +170,12 @@ pub fn streakBonus(streak: u32) f32 {
     return @min(streak_cap, streak_step * @as(f32, @floatFromInt(streak)));
 }
 
-/// XP for a mission worth `percent` of the level's XP, with the streak bonus.
-pub fn missionXp(level: u32, percent: u32, streak: u32) u32 {
-    const base: f32 = @floatFromInt(xpToNext(level) * percent / 100);
+/// XP for a mission worth `k10 / 10` standard wins at the player's own level (k10 = 25 pays
+/// 2.5 wins), with the streak bonus. Scales with level the way fights do, so a mission is never
+/// worth a rounding error.
+pub fn missionXp(level: u32, k10: u32, streak: u32) u32 {
+    const win: f32 = @floatFromInt(pveWinXp(level, .normal, 1.0));
+    const base = win * @as(f32, @floatFromInt(k10)) / 10.0;
     return @intFromFloat(@round(base * (1.0 + streakBonus(streak))));
 }
 
@@ -213,7 +216,7 @@ test "xp curve is monotonic, rounded to 10, and matches hand values" {
         try std.testing.expectEqual(@as(u32, 0), x % 10);
         prev = x;
     }
-    try std.testing.expectEqual(@as(u32, 70), xpToNext(1)); // round10(5 * 1 + 60)
+    try std.testing.expectEqual(@as(u32, 450), xpToNext(1)); // round10(5.1 * 1 + 440)
 }
 
 test "multi-level xp and the cap" {
@@ -294,8 +297,12 @@ test "xp sources" {
 test "mission xp, streak, underdog, multipliers" {
     try std.testing.expectApproxEqAbs(0.3, streakBonus(3), 1e-6);
     try std.testing.expectApproxEqAbs(0.5, streakBonus(40), 1e-6);
-    // xpToNext(1)=70; 20% of it = 14; streak 5 -> x1.5 = 21
-    try std.testing.expectEqual(@as(u32, 21), missionXp(1, 20, 5));
+    // L1 standard win = 26 XP; k 2.0 -> 52, streak 5 -> x1.5 = 78; k 2.5 -> 65
+    try std.testing.expectEqual(@as(u32, 52), missionXp(1, 20, 0));
+    try std.testing.expectEqual(@as(u32, 78), missionXp(1, 20, 5));
+    try std.testing.expectEqual(@as(u32, 65), missionXp(1, 25, 0));
+    // L10: win = 80; weekly k 10 -> 800
+    try std.testing.expectEqual(@as(u32, 800), missionXp(10, weekly_xp_k10, 0));
     try std.testing.expectApproxEqAbs(0.05, underdogBonus(0.45, 0.55), 1e-5);
     try std.testing.expectApproxEqAbs(0.25, underdogBonus(0.1, 0.9), 1e-6);
     try std.testing.expectEqual(@as(f32, 0), underdogBonus(0.6, 0.4));

@@ -141,5 +141,5 @@ simulator panel beside it.
 - Numbers come from the server; names come from `/api/catalog`.
 - Motion reinforces state changes (HP drain, XP fill, loot flip). `prefers-reduced-motion` turns
   off ambient motion, shake, and breathing.
-- Honest empty states: "Nothing within 450 m. Walk a block and it changes every 10 minutes."
+- Honest empty states: "Nothing within 400 m. Walk a block and it changes every 10 minutes."
 - Icons: game-icons.net via `@iconify-json/game-icons` (CC BY 3.0, attributed), one consistent set.

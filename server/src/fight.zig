@@ -129,10 +129,11 @@ pub fn buildSide(arena: Allocator, b: *const snapshot.Build, kind: CombatantKind
     };
 }
 
-/// A PvE enemy as the viewer's opposing faction sees it.
-pub fn enemySide(arena: Allocator, viewer: data.Faction, arch: data.Archetype, level: u32, elite: bool, boss: bool) Allocator.Error!Side {
+/// A PvE enemy as the viewer's opposing faction sees it. `mult` scales its HP, ATK and DEF
+/// (new-player grace, First Blood; 1.0 otherwise).
+pub fn enemySide(arena: Allocator, viewer: data.Faction, arch: data.Archetype, level: u32, elite: bool, boss: bool, mult: f32) Allocator.Error!Side {
     _ = arena;
-    const s = stats.enemyStats(arch, level);
+    const s = stats.enemyStatsScaled(arch, level, mult);
     const row = data.archetype(arch);
     return .{
         .combatant = .{ .faction = viewer.opposite(), .stats = s, .hp = s.hp },

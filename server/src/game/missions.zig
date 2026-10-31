@@ -29,28 +29,31 @@ pub const Template = struct {
     /// Targets are rounded to a multiple of this (walks use 250 m).
     step: u32 = 1,
     min_level: u8,
-    /// XP as a percent of xpToNext(level): 2 to 3 for dailies, 7 to 8 for weeklies.
-    xp_percent: u8,
+    /// XP as ten times the number of standard wins at the player's level it is worth: 20 to 30
+    /// for dailies by difficulty, 100 for weeklies.
+    xp_k10: u8,
 };
 
+/// Gates keep every offered daily doable: Elites do not appear below level 5, Contacts and
+/// Echoes begin at 5, and scrapping or upgrading needs spare gear, which takes until level 4.
 pub const dailies = [_]Template{
-    .{ .kind = .defeat, .min_target = 5, .max_target = 8, .min_level = 1, .xp_percent = 2 },
-    .{ .kind = .defeat_elite, .min_target = 1, .max_target = 1, .min_level = 1, .xp_percent = 3 },
-    .{ .kind = .open_cache, .min_target = 2, .max_target = 4, .min_level = 1, .xp_percent = 2 },
-    .{ .kind = .walk, .min_target = 1000, .max_target = 2000, .step = 250, .min_level = 1, .xp_percent = 2 },
-    .{ .kind = .win_contact, .min_target = 1, .max_target = 1, .min_level = 5, .xp_percent = 3 },
-    .{ .kind = .use_consumable, .min_target = 1, .max_target = 2, .min_level = 1, .xp_percent = 2 },
-    .{ .kind = .upgrade_item, .min_target = 1, .max_target = 1, .min_level = 4, .xp_percent = 2 },
-    .{ .kind = .scrap_items, .min_target = 3, .max_target = 5, .min_level = 1, .xp_percent = 2 },
-    .{ .kind = .defeat_archetype, .min_target = 3, .max_target = 5, .min_level = 1, .xp_percent = 2 },
+    .{ .kind = .defeat, .min_target = 5, .max_target = 8, .min_level = 1, .xp_k10 = 25 },
+    .{ .kind = .defeat_elite, .min_target = 1, .max_target = 1, .min_level = 5, .xp_k10 = 30 },
+    .{ .kind = .open_cache, .min_target = 2, .max_target = 4, .min_level = 1, .xp_k10 = 20 },
+    .{ .kind = .walk, .min_target = 1000, .max_target = 2000, .step = 250, .min_level = 1, .xp_k10 = 20 },
+    .{ .kind = .win_contact, .min_target = 1, .max_target = 1, .min_level = 5, .xp_k10 = 30 },
+    .{ .kind = .use_consumable, .min_target = 1, .max_target = 2, .min_level = 1, .xp_k10 = 20 },
+    .{ .kind = .upgrade_item, .min_target = 1, .max_target = 1, .min_level = 4, .xp_k10 = 20 },
+    .{ .kind = .scrap_items, .min_target = 3, .max_target = 5, .min_level = 4, .xp_k10 = 20 },
+    .{ .kind = .defeat_archetype, .min_target = 3, .max_target = 5, .min_level = 1, .xp_k10 = 25 },
 };
 
 pub const weeklies = [_]Template{
-    .{ .kind = .defeat, .min_target = 40, .max_target = 60, .step = 5, .min_level = 5, .xp_percent = 7 },
-    .{ .kind = .open_cache, .min_target = 12, .max_target = 20, .step = 2, .min_level = 5, .xp_percent = 7 },
-    .{ .kind = .walk, .min_target = 8000, .max_target = 12000, .step = 1000, .min_level = 5, .xp_percent = 7 },
-    .{ .kind = .win_contact, .min_target = 3, .max_target = 5, .min_level = 5, .xp_percent = 8 },
-    .{ .kind = .defeat_elite, .min_target = 3, .max_target = 5, .min_level = 5, .xp_percent = 8 },
+    .{ .kind = .defeat, .min_target = 40, .max_target = 60, .step = 5, .min_level = 5, .xp_k10 = 100 },
+    .{ .kind = .open_cache, .min_target = 12, .max_target = 20, .step = 2, .min_level = 5, .xp_k10 = 100 },
+    .{ .kind = .walk, .min_target = 8000, .max_target = 12000, .step = 1000, .min_level = 5, .xp_k10 = 100 },
+    .{ .kind = .win_contact, .min_target = 3, .max_target = 5, .min_level = 5, .xp_k10 = 100 },
+    .{ .kind = .defeat_elite, .min_target = 3, .max_target = 5, .min_level = 5, .xp_k10 = 100 },
 };
 
 /// Archetypes a "defeat N of a kind" mission may ask for (the ones you meet often).
@@ -75,7 +78,7 @@ pub const Mission = struct {
     kind: Kind,
     target: u32,
     archetype: ?data.Archetype = null,
-    xp_percent: u8,
+    xp_k10: u8,
     salvage: u32,
     /// Weekly missions guarantee an item of at least this rarity.
     item_min_rarity: ?data.Rarity = null,
@@ -131,7 +134,7 @@ fn instantiate(rng: *rng_mod.Rng, t: Template, weekly: bool, period: i64, slot: 
         .slot = slot,
         .kind = t.kind,
         .target = target,
-        .xp_percent = t.xp_percent,
+        .xp_k10 = t.xp_k10,
         .salvage = if (weekly) 80 + 5 * level else 10 + level,
     };
     if (t.kind == .defeat_archetype) m.archetype = target_archetypes[rng.weighted(&target_archetype_weights)];
@@ -223,7 +226,7 @@ pub const Reward = struct {
 
 pub fn reward(m: Mission, level: u32, streak: u32) Reward {
     return .{
-        .xp = progression.missionXp(level, m.xp_percent, if (m.weekly) 0 else streak),
+        .xp = progression.missionXp(level, m.xp_k10, if (m.weekly) 0 else streak),
         .salvage = m.salvage,
         .item_min_rarity = m.item_min_rarity,
     };
@@ -259,9 +262,16 @@ test "daily selection is deterministic, distinct and level gated" {
             try testing.expectEqual(@as(u8, @intCast(slot)), m.slot);
             try testing.expect(!m.weekly and m.item_min_rarity == null);
         }
-        // Level 1: no contact or upgrade missions yet.
-        for (dailyMissions(p, 20400, 1)) |m| {
-            try testing.expect(m.kind != .win_contact and m.kind != .upgrade_item);
+        // Level 1 to 3: nothing that needs spare gear, elites or other players.
+        for (1..4) |lvl| {
+            for (dailyMissions(p, 20400, @intCast(lvl))) |m| {
+                try testing.expect(m.kind != .win_contact and m.kind != .upgrade_item and
+                    m.kind != .scrap_items and m.kind != .defeat_elite);
+            }
+        }
+        // Level 4: gear missions open, elites and Contacts still wait for 5.
+        for (dailyMissions(p, 20400, 4)) |m| {
+            try testing.expect(m.kind != .win_contact and m.kind != .defeat_elite);
         }
     }
     try testing.expect(!std.meta.eql(dailyMissions(1, 20400, 10)[0], dailyMissions(1, 20401, 10)[0]) or
@@ -277,7 +287,7 @@ test "targets stay in range and archetype missions name a real archetype" {
             } else unreachable;
             try testing.expect(m.target >= t.min_target and m.target <= t.max_target);
             try testing.expectEqual(@as(u32, 0), (m.target - t.min_target) % t.step);
-            try testing.expect(m.xp_percent >= 2 and m.xp_percent <= 3);
+            try testing.expect(m.xp_k10 >= 20 and m.xp_k10 <= 30);
             if (m.kind == .defeat_archetype) {
                 archetypes_seen[@intFromEnum(m.archetype.?)] = true;
             } else try testing.expect(m.archetype == null);
@@ -314,7 +324,7 @@ test "ids round trip through resolve; stale or foreign ids do not" {
 
 test "text mentions the target and uses faction names" {
     var buf: [96]u8 = undefined;
-    var m = Mission{ .weekly = false, .period = 1, .slot = 0, .kind = .defeat_archetype, .target = 4, .archetype = .shambler, .xp_percent = 20, .salvage = 5 };
+    var m = Mission{ .weekly = false, .period = 1, .slot = 0, .kind = .defeat_archetype, .target = 4, .archetype = .shambler, .xp_k10 = 20, .salvage = 5 };
     try testing.expectEqualStrings("Defeat 4 Shamblers", m.text(.human, &buf));
     try testing.expectEqualStrings("Defeat 4 Scavengers", m.text(.zombie, &buf));
     m.kind = .open_cache;
@@ -333,7 +343,7 @@ test "text mentions the target and uses faction names" {
 }
 
 test "progress events advance the right missions" {
-    const base = Mission{ .weekly = false, .period = 1, .slot = 0, .kind = .defeat, .target = 5, .xp_percent = 20, .salvage = 5 };
+    const base = Mission{ .weekly = false, .period = 1, .slot = 0, .kind = .defeat, .target = 5, .xp_k10 = 20, .salvage = 5 };
     var m = base;
     try testing.expectEqual(@as(u32, 1), progressDelta(m, .{ .kind = .pve_win }));
     try testing.expectEqual(@as(u32, 0), progressDelta(m, .{ .kind = .cache_open }));
@@ -359,14 +369,23 @@ test "progress events advance the right missions" {
 }
 
 test "rewards scale with level and streak" {
-    const m = Mission{ .weekly = false, .period = 1, .slot = 0, .kind = .defeat, .target = 5, .xp_percent = 20, .salvage = 20 };
-    // xpToNext(1) = 70 -> 20% = 14; streak 5 -> x1.5 = 21
-    try testing.expectEqual(@as(u32, 14), reward(m, 1, 0).xp);
-    try testing.expectEqual(@as(u32, 21), reward(m, 1, 5).xp);
-    try testing.expectEqual(@as(u32, 21), reward(m, 1, 50).xp);
+    const m = Mission{ .weekly = false, .period = 1, .slot = 0, .kind = .defeat, .target = 5, .xp_k10 = 20, .salvage = 20 };
+    // L1 standard win = 26 XP; k 2.0 -> 52; streak 5 -> x1.5 = 78
+    try testing.expectEqual(@as(u32, 52), reward(m, 1, 0).xp);
+    try testing.expectEqual(@as(u32, 78), reward(m, 1, 5).xp);
+    try testing.expectEqual(@as(u32, 78), reward(m, 1, 50).xp);
     var w = m;
     w.weekly = true;
-    try testing.expectEqual(@as(u32, 14), reward(w, 1, 5).xp);
+    w.xp_k10 = 100;
+    try testing.expectEqual(@as(u32, 260), reward(w, 1, 5).xp);
+    // Never a token amount: every daily pays at least two standard wins at every level.
+    for (1..51) |lvl| {
+        for (0..40) |p| {
+            for (dailyMissions(p, 3, @intCast(lvl))) |dm| {
+                try testing.expect(reward(dm, @intCast(lvl), 0).xp >= 2 * progression.pveWinXp(@intCast(lvl), .normal, 1.0));
+            }
+        }
+    }
 }
 
 test "streaks extend on consecutive days and lapse after a gap" {

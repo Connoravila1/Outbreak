@@ -41,6 +41,15 @@ pub const Echo = struct {
     }
 };
 
+/// Where a player's First Blood enemy currently stands (memory only, like positions).
+pub const Tutorial = struct {
+    lat: f64,
+    lon: f64,
+    /// Bumped on each re-anchor so the new spot differs from the old one.
+    gen: u32,
+    expires_at: i64,
+};
+
 pub const Bucket = struct { tokens: f64, at: i64 };
 
 pub const Live = struct {
@@ -48,6 +57,7 @@ pub const Live = struct {
     positions: std.AutoHashMapUnmanaged(i64, Pos) = .empty,
     echoes: std.AutoHashMapUnmanaged(i64, Echo) = .empty,
     buckets: std.AutoHashMapUnmanaged(i64, Bucket) = .empty,
+    tutorials: std.AutoHashMapUnmanaged(i64, Tutorial) = .empty,
     chat_last: std.AutoHashMapUnmanaged(i64, i64) = .empty,
 
     pub fn init(gpa: Allocator) Live {
@@ -58,6 +68,7 @@ pub const Live = struct {
         self.positions.deinit(self.gpa);
         self.echoes.deinit(self.gpa);
         self.buckets.deinit(self.gpa);
+        self.tutorials.deinit(self.gpa);
         self.chat_last.deinit(self.gpa);
     }
 
@@ -119,6 +130,11 @@ pub const Live = struct {
         pruneMap(Echo, &self.echoes, now, struct {
             fn old(e: Echo, t: i64) bool {
                 return e.expires_at <= t;
+            }
+        }.old);
+        pruneMap(Tutorial, &self.tutorials, now, struct {
+            fn old(t: Tutorial, n: i64) bool {
+                return t.expires_at <= n;
             }
         }.old);
         pruneMap(Bucket, &self.buckets, now, struct {

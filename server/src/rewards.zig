@@ -75,7 +75,6 @@ pub fn apply(req: *Req, p: *Player, acc: *Acc, district: ?[]const u8) HandlerErr
     out.xp = xp;
 
     const before = p.level;
-    const max_before = p.maxHp(req.now);
     const lr = progression.applyXp(p.level, p.xp, xp);
     p.xp = lr.xp;
     p.level = lr.level;
@@ -84,8 +83,8 @@ pub fn apply(req: *Req, p: *Player, acc: *Acc, district: ?[]const u8) HandlerErr
         const n = progression.unlockTexts(before, p.level, &texts);
         out.level_up = .{ .from = before, .to = p.level, .unlocks = try a.dupe([]const u8, texts[0..n]) };
         model.fillAbilities(p);
-        // A level raises max HP; current HP rises with it so levelling never leaves you worse off.
-        if (!p.downed(req.now)) p.setHp(@min(p.maxHp(req.now), p.hp + p.maxHp(req.now) - max_before), req.now);
+        // Levelling up heals fully.
+        if (!p.downed(req.now)) p.setHp(p.maxHp(req.now), req.now);
     }
 
     var salvage = acc.salvage;

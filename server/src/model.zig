@@ -144,7 +144,7 @@ pub const Player = struct {
 
     /// Start the Downed countdown.
     pub fn down(self: *Player, now: i64) void {
-        self.downed_until = now + stats.downed_ms;
+        self.downed_until = now + stats.downedMs(self.level);
         self.setHp(0, now);
     }
 
@@ -292,10 +292,10 @@ pub fn save(req: *Req, p: *Player) HandlerError!void {
         \\  distance_m = ?, clan_id = ?, clan_role = ?, downed_until = ?
         \\WHERE id = ?
     , .{
-        p.level,        p.xp,             p.salvage,   p.expansions, p.avatar,      w.buffered(),
-        p.last_pvp_at,  p.streak,         p.last_claim_day, p.mday,  p.mlevel,      p.mweek,
-        p.wlevel,       p.walk_day,       p.walk_xp_today, p.wins,   p.losses,      p.contacts,
-        p.echoes,       p.caches,         p.distance_m, p.clan_id,   p.clan_role,   p.downed_until,
+        p.level,       p.xp,       p.salvage,        p.expansions, p.avatar,    w.buffered(),
+        p.last_pvp_at, p.streak,   p.last_claim_day, p.mday,       p.mlevel,    p.mweek,
+        p.wlevel,      p.walk_day, p.walk_xp_today,  p.wins,       p.losses,    p.contacts,
+        p.echoes,      p.caches,   p.distance_m,     p.clan_id,    p.clan_role, p.downed_until,
         p.id,
     });
     if (p.hp_dirty) {
@@ -320,11 +320,11 @@ pub fn insertItem(req: *Req, pid: i64, item: stats.Item, equipped: bool) Handler
     try req.ctx.db.run(
         "INSERT INTO items(uid, player_id, base, rarity, upgrade, uniq, perk_count, perk0, perk1, equipped) VALUES(?,?,?,?,?,?,?,?,?,?)",
         .{
-            @as([]const u8, &uid),                 pid,
-            item.base,                             @intFromEnum(item.rarity),
-            item.upgrade,                          if (item.unique) |u| @as(i32, u) else -1,
-            item.perk_count,                       @intFromEnum(item.perk_ids[0]),
-            @intFromEnum(item.perk_ids[1]),        @intFromBool(equipped),
+            @as([]const u8, &uid),          pid,
+            item.base,                      @intFromEnum(item.rarity),
+            item.upgrade,                   if (item.unique) |u| @as(i32, u) else -1,
+            item.perk_count,                @intFromEnum(item.perk_ids[0]),
+            @intFromEnum(item.perk_ids[1]), @intFromBool(equipped),
         },
     );
     return uid;

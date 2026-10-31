@@ -129,13 +129,14 @@ Me = { id, callsign, faction: Faction|null, level, xp, xp_next, title,
        buffs: {kind: string, until: number}[],
        missions: { daily: Mission[], weekly: Mission|null, streak: number, resets_at: number },
        clan: {id, name, tag, role}|null, avatar: object|null,
-       pvp_protected: boolean, underdog_bonus: number, war_points_week: number }
+       pvp_protected: boolean, underdog_bonus: number, war_points_week: number,
+       record: { wins, losses, contacts, echoes, caches, distance_m } }
 
 Mission = { id, kind, text, target, progress, rewards: Rewards, claimed: boolean }
 
 WorldView = { now, me: MeLite /* hp, max_hp, downed_until, level, xp, xp_next, salvage */,
   hostiles_near: boolean,
-  enemies: {id, archetype, level, elite, lat, lon, expires_at}[],      // undefeated only
+  enemies: {id, archetype, level, elite, tutorial: boolean, lat, lon, expires_at}[], // undefeated only
   caches: {id, kind:"cache"|"airdrop", lat, lon, expires_at}[],        // unopened only
   echoes: {id, level, faction, title, rogue: boolean, lat, lon, expires_at}[],
   strongholds: {id, lat, lon, clan: {tag, name, faction}|null}[],

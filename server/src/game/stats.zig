@@ -33,8 +33,30 @@ pub const perk_lucky = 0.15;
 pub const hunger_leech = 0.05; // ... and heal this share of damage dealt.
 pub const resolve_heal_bonus = 0.25;
 
-pub const downed_ms: i64 = 10 * 60 * 1000;
+pub const downed_ms_grace: i64 = 5 * 60 * 1000;
+pub const downed_ms_full: i64 = 10 * 60 * 1000;
 pub const revive_fraction = 0.30;
+/// Levels below this are "new": gentler Downed time, weaker enemies, no elites.
+pub const grace_levels: u32 = 5;
+
+/// How long Downed lasts: 5 minutes below level 5, 10 from level 5.
+pub fn downedMs(level: u32) i64 {
+    return if (level < grace_levels) downed_ms_grace else downed_ms_full;
+}
+
+/// Multiplier on enemy HP, ATK and DEF for a viewer below level 5: 0.75 at L1 up to 1.0 at L5.
+pub fn graceFactor(viewer_level: u32) f32 {
+    return switch (viewer_level) {
+        0, 1 => 0.75,
+        2 => 0.80,
+        3 => 0.87,
+        4 => 0.94,
+        else => 1.0,
+    };
+}
+
+/// The First Blood enemy's strength against the stats it would have at the player's level.
+pub const tutorial_factor: f32 = 0.6;
 
 pub fn baseStats(level: u32) Stats {
     const l: f64 = @floatFromInt(level - 1);
@@ -234,23 +256,32 @@ fn enemyScale(level: u32) f32 {
 /// Stats of a PvE enemy: the archetype's multiples of a same-level player's base stats plus
 /// reference gear (no trait, no perks).
 pub fn enemyStats(arch: data.Archetype, level: u32) Stats {
+    return enemyStatsScaled(arch, level, 1.0);
+}
+
+/// `enemyStats` with HP, ATK and DEF multiplied by `mult` (new-player grace, First Blood).
+pub fn enemyStatsScaled(arch: data.Archetype, level: u32, mult: f32) Stats {
     const b = baseStats(level);
     const g = reference_gear[@min(level, data.max_level)];
     const a = data.archetype(arch);
     return .{
-        .hp = @max(1, scale(b.hp + g.hp, a.hp * enemyScale(level))),
-        .atk = @max(1, scale(b.atk + g.atk, a.atk * enemyScale(level))),
-        .def = @max(0, scale(b.def + g.def, a.def * enemyScale(level))),
+        .hp = @max(1, scale(b.hp + g.hp, a.hp * enemyScale(level) * mult)),
+        .atk = @max(1, scale(b.atk + g.atk, a.atk * enemyScale(level) * mult)),
+        .def = @max(0, scale(b.def + g.def, a.def * enemyScale(level) * mult)),
         .spd = @max(1, scale(b.spd + g.spd, a.spd)),
     };
 }
 
 // --- Health and healing ----------------------------------------------------------------------
 
-/// HP regenerated out of combat over `minutes`: 1% of max HP per minute, Zombies 1.25%.
+/// Fraction of max HP regenerated per minute out of combat: 2%, Zombies 2.5%.
+pub fn regenRate(faction: Faction) f64 {
+    return if (faction == .zombie) 0.025 else 0.02;
+}
+
+/// HP regenerated out of combat over `minutes`.
 pub fn regenHp(faction: Faction, max_hp: i32, minutes: f64) i32 {
-    const rate: f64 = if (faction == .zombie) 0.0125 else 0.01;
-    return @intFromFloat(@floor(rate * @as(f64, @floatFromInt(max_hp)) * minutes));
+    return @intFromFloat(@floor(regenRate(faction) * @as(f64, @floatFromInt(max_hp)) * minutes));
 }
 
 /// HP restored by a healing consumable (0 for anything that does not heal). Humans heal 25% more.
@@ -341,11 +372,31 @@ test "enemy stats are multiples of base stats" {
 }
 
 test "regen and heals" {
-    try std.testing.expectEqual(@as(i32, 10), regenHp(.human, 100, 10));
-    try std.testing.expectEqual(@as(i32, 12), regenHp(.zombie, 100, 10));
+    try std.testing.expectEqual(@as(i32, 20), regenHp(.human, 100, 10));
+    try std.testing.expectEqual(@as(i32, 25), regenHp(.zombie, 100, 10));
+    // A Human with 110 max HP is back from empty in 50 minutes.
+    try std.testing.expectEqual(@as(i32, 110), @min(110, regenHp(.human, 110, 50)));
     try std.testing.expectEqual(@as(i32, 31), healAmount(.heal_s, .human, 100));
     try std.testing.expectEqual(@as(i32, 25), healAmount(.heal_s, .zombie, 100));
     try std.testing.expectEqual(@as(i32, 75), healAmount(.heal_m, .human, 100));
     try std.testing.expectEqual(@as(i32, 100), healAmount(.revive, .human, 100));
     try std.testing.expectEqual(@as(i32, 0), healAmount(.buff_atk, .human, 100));
+}
+
+test "new-player grace: factors, downed time, scaled enemies" {
+    try std.testing.expectEqual(@as(f32, 0.75), graceFactor(1));
+    try std.testing.expectEqual(@as(f32, 0.80), graceFactor(2));
+    try std.testing.expectEqual(@as(f32, 0.87), graceFactor(3));
+    try std.testing.expectEqual(@as(f32, 0.94), graceFactor(4));
+    try std.testing.expectEqual(@as(f32, 1.0), graceFactor(5));
+    try std.testing.expectEqual(@as(f32, 1.0), graceFactor(40));
+    try std.testing.expectEqual(@as(i64, 5 * 60 * 1000), downedMs(4));
+    try std.testing.expectEqual(@as(i64, 10 * 60 * 1000), downedMs(5));
+    const full = enemyStats(.shambler, 1);
+    const soft = enemyStatsScaled(.shambler, 1, graceFactor(1));
+    const first = enemyStatsScaled(.shambler, 1, tutorial_factor);
+    try std.testing.expect(first.hp < soft.hp and soft.hp < full.hp);
+    try std.testing.expect(first.atk <= soft.atk and soft.atk <= full.atk);
+    try std.testing.expectEqual(full.spd, first.spd);
+    try std.testing.expectEqualDeep(full, enemyStatsScaled(.shambler, 1, 1.0));
 }
