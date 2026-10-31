@@ -185,7 +185,7 @@ that missions pay in wins. Total XP from L1 to L50 is about 2.1 million.
 | PvE win | `20 + 6*E` (E = enemy level), ×1.5 elite, ×4 boss |
 | PvE loss | 25% of win value |
 | Cache opened | `10 + 2*L` |
-| Walking | 1 XP per 20 m at ≤ 7 m/s (no XP in vehicles), max 300 XP/day |
+| Walking | 1 XP per 20 m at ≤ 7 m/s (no XP in vehicles; no fights either, see In transit), max 300 XP/day |
 | PvP win | `60 + 10*opp_level` |
 | PvP loss | 30% of win value |
 | Echo win | `40 + 7*echo_level` |
@@ -433,6 +433,38 @@ averages over the day.
 
 Positions implying > 45 m/s are rejected; walking XP needs ≤ 7 m/s. Engage requests are validated
 against the last accepted position. Rate limits per account.
+
+### In transit (no fights from a vehicle)
+
+A location game must not be played behind a wheel, so fights wait while a player is moving faster
+than a person walks. The server watches the speed between consecutive fixes (foreground and Patrol).
+Faster than 7 m/s on **two fixes in a row** puts the player *in transit* (one fast fix is usually a
+GPS jump); every further fast fix extends it, and it clears **60 seconds** after the last one, so a
+minute on foot (or standing still) brings fights back. The distance is reduced by both fixes'
+accuracy radii and fixes vaguer than 100 m are ignored, so a wobbling signal on a standing phone is
+never "movement".
+
+While in transit: Engage, cache and landmark claims, Stronghold claims and raid attacks are refused
+(409 `in_transit`); Contact does not match them (and they do not raise anyone's Contact alarm);
+Patrol sends no notifications (they wait). The map shows a calm banner, "Moving fast. Fights wait
+until you're on foot.", and Engage is disabled. There is no "I'm a passenger" switch: a rule a
+button can lift is not a rule. The state is held in memory, like positions, and never stored.
+
+### Safety, age and terms
+
+- **Safety notice.** Before the first map, once, in-world: stay aware of traffic and surroundings,
+  keep off private property, never play while driving or cycling, take care at night and go with
+  others, and leave sanctuaries alone. One "I understand". A one-line reminder rotates through the
+  boot screen now and then, and Settings has "Play safe" to read it again.
+- **Age.** Before anything is sent to the server the app asks for a birth year, neutrally. Under 13
+  cannot play: the app says so kindly and remembers it on the device for a day so the answer cannot
+  be changed at once. Nothing about the answer reaches the server; the birth year is never stored.
+- **Terms.** `client/public/terms.html` (plain language) and the privacy policy are linked from an
+  explicit accept step. The server records the terms version accepted and when
+  (`players.terms_accepted`, `terms_accepted_at`); new accounts cannot be created without it. When
+  `data.terms_version` is raised, `Me.terms.needs_accept` is true and the app shows a short
+  re-accept sheet. The legal text is a **draft** for the operator to review (and have reviewed) before
+  launch; the contact address in it is a placeholder.
 
 ## 8. Encounters
 

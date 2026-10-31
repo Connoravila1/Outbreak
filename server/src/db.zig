@@ -552,6 +552,11 @@ const migrations = [_][:0]const u8{
     \\INSERT INTO counters(player_id, key, n) SELECT id, 'pve_wins', wins - contacts_won - echoes_won FROM players WHERE wins - contacts_won - echoes_won > 0;
     \\INSERT INTO counters(player_id, key, n) SELECT id, 'best_streak', streak FROM players WHERE streak > 0;
     ,
+    // Terms of service: the version a player accepted and when (0: never; players from before
+    // this are asked once). No age or birth date is kept anywhere.
+    \\ALTER TABLE players ADD COLUMN terms_accepted INTEGER NOT NULL DEFAULT 0;
+    \\ALTER TABLE players ADD COLUMN terms_accepted_at INTEGER NOT NULL DEFAULT 0;
+    ,
 };
 
 // --- Tests -------------------------------------------------------------------------------------------

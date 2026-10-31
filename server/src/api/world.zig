@@ -20,6 +20,7 @@ const spawns = game.spawns;
 const daynight = game.daynight;
 const landmarks = game.landmarks;
 const stance_rules = game.stance;
+const transit = game.transit;
 const progression = game.progression;
 const stats = game.stats;
 const loot = game.loot;
@@ -72,6 +73,8 @@ fn acceptFix(req: *Req, p: *Player, fix: Fix, source: live.Source) HandlerError!
     if (ctx.live.position(p.id, now)) |prev| {
         const d = geo.haversineM(prev.lat, prev.lon, fix.lat, fix.lon);
         const dt_s = @max(1.0, @as(f64, @floatFromInt(now - prev.at)) / 1000.0);
+        // Faster than walking for two fixes running puts the player in transit (a jump counts too).
+        try ctx.live.observeSpeed(p.id, transit.speedMs(d, now - prev.at, prev.acc, acc), @max(prev.acc, acc), now);
         if (d / dt_s > max_speed_ms) {
             // A jump no one could walk (or drive): keep the old position and answer from it.
             pos = prev;
@@ -96,6 +99,7 @@ pub fn location(req: *Req, jw: *Stringify) HandlerError!void {
     var p = (try model.load(req, req.pid)).?;
     const pos = try acceptFix(req, &p, fix, .foreground);
 
+    const in_transit = ctx.live.inTransit(p.id, now);
     // Everything below is a function of the accepted position.
     var enemies: std.ArrayList(EnemyView) = .empty;
     var caches: std.ArrayList(CacheView) = .empty;
@@ -137,7 +141,8 @@ pub fn location(req: *Req, jw: *Stringify) HandlerError!void {
     try jw.write(.{
         .now = now,
         .me = views.meLite(&p, now),
-        .hostiles_near = !pos.sanctuary and hostilesNear(req, &p, pos),
+        .hostiles_near = !pos.sanctuary and !in_transit and hostilesNear(req, &p, pos),
+        .in_transit = in_transit,
         .enemies = enemies.items,
         .caches = caches.items,
         .echoes = echoes.items,
@@ -160,7 +165,8 @@ pub fn patrol(req: *Req, jw: *Stringify) HandlerError!void {
     const fix = try req.json(PatrolFix);
     var p = (try model.load(req, req.pid)).?;
     _ = try acceptFix(req, &p, .{ .lat = fix.lat, .lon = fix.lon, .acc = fix.acc, .sanctuary = fix.sanctuary }, .patrol);
-    const evs = try events.takeUnnotified(req, p.id);
+    // No notifications from a moving vehicle; they stay queued for the next check-in.
+    const evs: []const events.NoticeView = if (req.ctx.live.inTransit(p.id, req.now)) &.{} else try events.takeUnnotified(req, p.id);
     const me = views.meLite(&p, req.now);
     try jw.write(.{ .events = evs, .hp = me.hp, .downed_until = me.downed_until });
 }
@@ -373,6 +379,7 @@ fn hostilesNear(req: *Req, p: *const Player, pos: live.Pos) bool {
         if (e.key_ptr.* == p.id) continue;
         const o = e.value_ptr.*;
         if (!o.fresh(req.now) or o.sanctuary or o.faction == p.fac()) continue;
+        if (req.ctx.live.inTransit(e.key_ptr.*, req.now)) continue;
         if (geo.haversineM(pos.lat, pos.lon, o.lat, o.lon) <= hostile_radius_m) return true;
     }
     return false;
@@ -380,7 +387,15 @@ fn hostilesNear(req: *Req, p: *const Player, pos: live.Pos) bool {
 
 // --- Fighting ----------------------------------------------------------------------------------------------
 
+/// Fights and claims wait while the player is moving faster than walking pace.
+pub fn refuseInTransit(req: *Req, pid: i64) HandlerError!void {
+    if (req.ctx.live.inTransit(pid, req.now)) {
+        return req.fail(409, "in_transit", "You're moving too fast. Fights wait until you're on foot.");
+    }
+}
+
 fn requireReady(req: *Req, p: *const Player) HandlerError!live.Pos {
+    try refuseInTransit(req, p.id);
     if (p.downed(req.now)) return req.fail(409, "downed", "You are down. Heal, or wait to get back up.");
     const pos = req.ctx.live.position(p.id, req.now) orelse
         return req.fail(409, "no_position", "Your position is unknown. Wait for a location update.");
@@ -559,6 +574,7 @@ pub fn open(req: *Req, jw: *Stringify) HandlerError!void {
     const body = try req.json(struct { id: []const u8 });
     var p = (try model.load(req, req.pid)).?;
     const id = body.id;
+    try refuseInTransit(req, p.id);
     if (p.downed(req.now)) {
         // Looting does not need a fight, but a downed player is in no state to walk up to a crate.
         return req.fail(409, "downed", "You are down. Heal, or wait to get back up.");

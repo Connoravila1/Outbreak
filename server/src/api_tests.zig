@@ -137,7 +137,7 @@ const Harness = struct {
 
     /// Register and choose a faction. The token is copied into `out`.
     fn player(h: *Harness, name: []const u8, faction: []const u8, out: *[64]u8) !void {
-        const body = try std.fmt.allocPrint(testing.allocator, "{{\"callsign\":\"{s}\"}}", .{name});
+        const body = try std.fmt.allocPrint(testing.allocator, "{{\"callsign\":\"{s}\",\"terms\":1}}", .{name});
         defer testing.allocator.free(body);
         var r = try h.post("/api/register", null, body);
         defer r.deinit();
@@ -187,18 +187,18 @@ test "register, callsign rules, faction choice, recovery" {
     try h.init(.{});
     defer h.deinit();
 
-    var bad = try h.post("/api/register", null, "{\"callsign\":\"ab\"}");
+    var bad = try h.post("/api/register", null, "{\"callsign\":\"ab\",\"terms\":1}");
     defer bad.deinit();
     try testing.expectEqual(@as(u16, 400), bad.status);
     try testing.expectEqualStrings("callsign_invalid", try bad.errorCode());
-    var rude = try h.post("/api/register", null, "{\"callsign\":\"Sh1t_lord\"}");
+    var rude = try h.post("/api/register", null, "{\"callsign\":\"Sh1t_lord\",\"terms\":1}");
     defer rude.deinit();
     try testing.expectEqual(@as(u16, 400), rude.status);
     var junk = try h.post("/api/register", null, "not json");
     defer junk.deinit();
     try testing.expectEqual(@as(u16, 400), junk.status);
 
-    var r = try h.post("/api/register", null, "{\"callsign\":\"NightOwl\"}");
+    var r = try h.post("/api/register", null, "{\"callsign\":\"NightOwl\",\"terms\":1}");
     defer r.deinit();
     try testing.expectEqual(@as(u16, 200), r.status);
     const token = try r.str("token");
@@ -208,7 +208,7 @@ test "register, callsign rules, faction choice, recovery" {
     try testing.expect(code[4] == '-' and code[9] == '-' and code[14] == '-');
     try testing.expect((try r.at("me.faction")) == .null);
 
-    var dup = try h.post("/api/register", null, "{\"callsign\":\"nightowl\"}");
+    var dup = try h.post("/api/register", null, "{\"callsign\":\"nightowl\",\"terms\":1}");
     defer dup.deinit();
     try testing.expectEqual(@as(u16, 409), dup.status);
     try testing.expectEqualStrings("callsign_taken", try dup.errorCode());
@@ -1536,7 +1536,7 @@ const fx = @import("jwt_fixture.zig");
 
 /// A guest with no callsign (the new onboarding order): faction first, callsign later.
 fn guest(h: *Harness, out: *[64]u8) !void {
-    var r = try h.post("/api/register", null, "{}");
+    var r = try h.post("/api/register", null, "{\"terms\":1}");
     defer r.deinit();
     try testing.expectEqual(@as(u16, 200), r.status);
     @memcpy(out, try r.str("token"));
@@ -1554,7 +1554,7 @@ fn withProviders(h: *Harness) !void {
 
 /// POST `{"id_token": ...}` expecting 200.
 fn okToken(h: *Harness, path: []const u8, token: ?[]const u8, id_token: []const u8) !Res {
-    const body = try std.fmt.allocPrint(testing.allocator, "{{\"id_token\":\"{s}\"}}", .{id_token});
+    const body = try std.fmt.allocPrint(testing.allocator, "{{\"id_token\":\"{s}\",\"terms\":1}}", .{id_token});
     defer testing.allocator.free(body);
     const r = try h.post(path, token, body);
     if (r.status != 200) std.debug.print("{s}: {d} {s}\n", .{ path, r.status, r.raw.json });
@@ -1645,7 +1645,7 @@ test "health reports which providers are on; unconfigured ones answer 503" {
     try testing.expectEqual(@as(u16, 503), g.status);
     try testing.expectEqualStrings("provider_not_configured", try g.errorCode());
     // The dev provider does not exist on a production server.
-    var d = try h.post("/api/auth/dev", null, "{\"subject\":\"x\"}");
+    var d = try h.post("/api/auth/dev", null, "{\"subject\":\"x\",\"terms\":1}");
     defer d.deinit();
     try testing.expectEqual(@as(u16, 404), d.status);
 
@@ -1721,7 +1721,7 @@ test "Apple sign-in checks the nonce" {
     var wrong = try h.postf("/api/auth/apple", null, "{{\"id_token\":\"{s}\",\"nonce\":\"nope\"}}", .{fx.apple_1});
     defer wrong.deinit();
     try testing.expectEqual(@as(u16, 401), wrong.status);
-    var ok = try h.postf("/api/auth/apple", null, "{{\"id_token\":\"{s}\",\"nonce\":\"{s}\"}}", .{ fx.apple_1, fx.raw_nonce });
+    var ok = try h.postf("/api/auth/apple", null, "{{\"id_token\":\"{s}\",\"nonce\":\"{s}\",\"terms\":1}}", .{ fx.apple_1, fx.raw_nonce });
     defer ok.deinit();
     try testing.expectEqual(@as(u16, 200), ok.status);
     try testing.expect((try ok.at("created")).bool);
@@ -1740,7 +1740,7 @@ test "a guest links an identity and keeps its progress" {
     c.deinit();
     try h.reachLevel(&t, 3);
 
-    var l = try h.ok("/api/auth/dev", &t, "{{\"subject\":\"dev-1\",\"email\":\"a@b.co\"}}", .{});
+    var l = try h.ok("/api/auth/dev", &t, "{{\"subject\":\"dev-1\",\"terms\":1,\"email\":\"a@b.co\"}}", .{});
     defer l.deinit();
     try testing.expect(!(try l.at("created")).bool);
     try testing.expectEqualStrings("Linker", try l.str("me.callsign"));
@@ -1752,7 +1752,7 @@ test "a guest links an identity and keeps its progress" {
     var me = try h.get("/api/me", try l.str("token"));
     defer me.deinit();
     try testing.expectEqualStrings("Linker", try me.str("callsign"));
-    var other = try h.post("/api/auth/dev", null, "{\"subject\":\"dev-1\"}");
+    var other = try h.post("/api/auth/dev", null, "{\"subject\":\"dev-1\",\"terms\":1}");
     defer other.deinit();
     try testing.expectEqualStrings("Linker", try other.str("me.callsign"));
     try testing.expect(!(try other.at("created")).bool);
@@ -1763,7 +1763,7 @@ test "a guest with progress meets an identity that already has a character" {
     try h.init(.{ .dev = true, .limits = false });
     defer h.deinit();
     // The existing character, reachable by sign-in.
-    var existing = try h.post("/api/auth/dev", null, "{\"subject\":\"dev-9\"}");
+    var existing = try h.post("/api/auth/dev", null, "{\"subject\":\"dev-9\",\"terms\":1}");
     defer existing.deinit();
     var et: [64]u8 = undefined;
     @memcpy(&et, try existing.str("token"));
@@ -1780,7 +1780,7 @@ test "a guest with progress meets an identity that already has a character" {
     var gc = try h.ok("/api/callsign", &g, "{{\"callsign\":\"Newbie\"}}", .{});
     gc.deinit();
 
-    var clash = try h.post("/api/auth/dev", &g, "{\"subject\":\"dev-9\"}");
+    var clash = try h.post("/api/auth/dev", &g, "{\"subject\":\"dev-9\",\"terms\":1}");
     defer clash.deinit();
     try testing.expectEqual(@as(u16, 409), clash.status);
     try testing.expectEqualStrings("identity_in_use", try clash.errorCode());
@@ -1792,7 +1792,7 @@ test "a guest with progress meets an identity that already has a character" {
     try testing.expectEqualStrings("Newbie", try still.str("callsign"));
 
     // The player agrees to switch: the guest is discarded.
-    var sw = try h.ok("/api/auth/dev", &g, "{{\"subject\":\"dev-9\",\"switch\":true}}", .{});
+    var sw = try h.ok("/api/auth/dev", &g, "{{\"subject\":\"dev-9\",\"terms\":1,\"switch\":true}}", .{});
     defer sw.deinit();
     try testing.expectEqualStrings("Veteran", try sw.str("me.callsign"));
     try testing.expect(!(try sw.at("created")).bool);
@@ -1806,11 +1806,11 @@ test "a guest with no faction is discarded silently when it signs in to an exist
     var h: Harness = undefined;
     try h.init(.{ .dev = true, .limits = false });
     defer h.deinit();
-    var existing = try h.post("/api/auth/dev", null, "{\"subject\":\"dev-5\"}");
+    var existing = try h.post("/api/auth/dev", null, "{\"subject\":\"dev-5\",\"terms\":1}");
     existing.deinit();
     var g: [64]u8 = undefined;
     try guest(&h, &g);
-    var r = try h.ok("/api/auth/dev", &g, "{{\"subject\":\"dev-5\"}}", .{});
+    var r = try h.ok("/api/auth/dev", &g, "{{\"subject\":\"dev-5\",\"terms\":1}}", .{});
     defer r.deinit();
     try testing.expect(!(try r.at("created")).bool);
     try testing.expectEqual(@as(?i64, 1), try h.ctx.db.scalar("SELECT COUNT(*) FROM players", .{}));
@@ -1821,7 +1821,7 @@ test "link and unlink: second provider, conflicts, never the last identity" {
     try h.init(.{ .dev = true, .limits = false });
     defer h.deinit();
     try withProviders(&h);
-    var a = try h.post("/api/auth/dev", null, "{\"subject\":\"dev-a\"}");
+    var a = try h.post("/api/auth/dev", null, "{\"subject\":\"dev-a\",\"terms\":1}");
     defer a.deinit();
     var at: [64]u8 = undefined;
     @memcpy(&at, try a.str("token"));
@@ -1842,7 +1842,7 @@ test "link and unlink: second provider, conflicts, never the last identity" {
     try testing.expectEqualStrings("already_linked", try second.errorCode());
 
     // Another player cannot take that Google identity.
-    var b = try h.post("/api/auth/dev", null, "{\"subject\":\"dev-b\"}");
+    var b = try h.post("/api/auth/dev", null, "{\"subject\":\"dev-b\",\"terms\":1}");
     defer b.deinit();
     var bt: [64]u8 = undefined;
     @memcpy(&bt, try b.str("token"));
@@ -1930,7 +1930,7 @@ test "deleting an account removes everything it owned and tidies the clan and ch
     var gone = try h.get("/api/me", &a);
     defer gone.deinit();
     try testing.expectEqual(@as(u16, 401), gone.status);
-    var reuse = try h.post("/api/register", null, "{\"callsign\":\"Founder\"}");
+    var reuse = try h.post("/api/register", null, "{\"callsign\":\"Founder\",\"terms\":1}");
     defer reuse.deinit();
     try testing.expectEqual(@as(u16, 200), reuse.status);
 
@@ -3072,14 +3072,14 @@ test "names: blocked callsigns and clan names are refused plainly, innocent ones
     try h.init(.{ .dev = true, .limits = false });
     defer h.deinit();
 
-    var bad = try h.post("/api/register", null, "{\"callsign\":\"xX_Fuck_Xx\"}");
+    var bad = try h.post("/api/register", null, "{\"callsign\":\"xX_Fuck_Xx\",\"terms\":1}");
     defer bad.deinit();
     try testing.expectEqual(@as(u16, 400), bad.status);
     try testing.expectEqualStrings("That name is not allowed here. Please pick another name.", try bad.str("message"));
-    var leet = try h.post("/api/register", null, "{\"callsign\":\"TheCuntKing\"}");
+    var leet = try h.post("/api/register", null, "{\"callsign\":\"TheCuntKing\",\"terms\":1}");
     defer leet.deinit();
     try testing.expectEqual(@as(u16, 400), leet.status);
-    var fine = try h.post("/api/register", null, "{\"callsign\":\"Scunthorpe\"}");
+    var fine = try h.post("/api/register", null, "{\"callsign\":\"Scunthorpe\",\"terms\":1}");
     defer fine.deinit();
     try testing.expectEqual(@as(u16, 200), fine.status);
 
@@ -3292,4 +3292,195 @@ test "ban: a suspended player can still delete their account" {
     defer del.deinit();
     try testing.expectEqual(@as(u16, 200), del.status);
     try testing.expectEqual(@as(?i64, 0), try h.ctx.db.scalar("SELECT COUNT(*) FROM players WHERE callsign = 'Ghoul'", .{}));
+}
+
+// --- In transit ------------------------------------------------------------------------------------------
+
+/// Drive north at 15 m/s, ending at (`lat`, `lon`): `n` fixes two seconds apart.
+fn drive(h: *Harness, tok: []const u8, lat: f64, lon: f64, n: usize) !Res {
+    var last: ?Res = null;
+    var i: usize = n;
+    while (i > 0) : (i -= 1) {
+        h.advance(2000);
+        if (last) |*l| l.deinit();
+        last = try h.location(tok, lat - @as(f64, @floatFromInt(i - 1)) * 30.0 / 111_320.0, lon);
+    }
+    return last.?;
+}
+
+test "in transit: fast fixes block fights, claims, Contact and notices until a minute on foot" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var a: [64]u8 = undefined;
+    var z: [64]u8 = undefined;
+    try h.player("Hank", "human", &a);
+    try h.player("Zed", "zombie", &z);
+    try h.reachLevel(&a, 6);
+    try h.reachLevel(&z, 7);
+    const pid = try h.playerId("Hank");
+    const en = findEnemy(h.ctx.seed, h.ctx.now());
+    const id = en.id();
+    const zlat = en.lat + 30.0 / 111_320.0;
+
+    // Start 120 m south of the enemy, on foot. Zed stands 30 m from where Hank will stop.
+    var start = try h.location(&a, en.lat - 120.0 / 111_320.0, en.lon);
+    defer start.deinit();
+    try testing.expect(!(try start.at("in_transit")).bool);
+    var zw = try h.location(&z, zlat, en.lon);
+    zw.deinit();
+
+    // One fast fix is not enough (a GPS jump looks the same)...
+    h.advance(2000);
+    var one = try h.location(&a, en.lat - 90.0 / 111_320.0, en.lon);
+    defer one.deinit();
+    try testing.expect(!(try one.at("in_transit")).bool);
+    // ...two in a row are: 15 m/s all the way to the enemy.
+    var two = try drive(&h, &a, en.lat, en.lon, 3);
+    defer two.deinit();
+    try testing.expect((try two.at("in_transit")).bool);
+    try testing.expect(!(try two.at("hostiles_near")).bool);
+
+    var eng = try h.postf("/api/engage", &a, "{{\"id\":\"{s}\"}}", .{id.str()});
+    defer eng.deinit();
+    try testing.expectEqual(@as(u16, 409), eng.status);
+    try testing.expectEqualStrings("in_transit", try eng.errorCode());
+    var opn = try h.post("/api/open", &a, "{\"id\":\"c.dr5ru7k.1.0\"}");
+    defer opn.deinit();
+    try testing.expectEqualStrings("in_transit", try opn.errorCode());
+
+    // Not matched for Contact from the road: Zed stays live and in range.
+    var zw2 = try h.location(&z, zlat, en.lon);
+    zw2.deinit();
+    tick.runLocked(&h.ctx, h.ctx.now());
+    try testing.expectEqual(@as(?i64, 0), try h.ctx.db.scalar("SELECT COUNT(*) FROM contact_log", .{}));
+    // A queued notice stays queued on a Patrol check-in.
+    try h.ctx.db.run("INSERT INTO events(player_id, at, type, text) VALUES(?,?,?,?)", .{ pid, h.ctx.now(), "echo_report", "Your echo fell." });
+    var pt = try patrol(&h, &a, en.lat, en.lon);
+    defer pt.deinit();
+    try testing.expectEqual(@as(usize, 0), try pt.len("events"));
+
+    // Standing still for 50 s changes nothing; a minute past the last fast fix it clears.
+    for (0..10) |_| {
+        h.advance(5000);
+        var w = try h.location(&a, en.lat, en.lon);
+        w.deinit();
+        var zk = try h.location(&z, zlat, en.lon);
+        zk.deinit();
+    }
+    var still = try h.location(&a, en.lat, en.lon);
+    try testing.expect((try still.at("in_transit")).bool);
+    still.deinit();
+    for (0..3) |_| {
+        h.advance(5000);
+        var w = try h.location(&a, en.lat, en.lon);
+        w.deinit();
+        var zk = try h.location(&z, zlat, en.lon);
+        zk.deinit();
+    }
+    var free = try h.location(&a, en.lat, en.lon);
+    defer free.deinit();
+    try testing.expect(!(try free.at("in_transit")).bool);
+    tick.runLocked(&h.ctx, h.ctx.now());
+    try testing.expectEqual(@as(?i64, 1), try h.ctx.db.scalar("SELECT COUNT(*) FROM contact_log", .{}));
+    var notice = try patrol(&h, &a, en.lat, en.lon);
+    defer notice.deinit();
+    try testing.expect(try notice.len("events") >= 1);
+}
+
+test "in transit: engaging works again once the player is back on foot" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var a: [64]u8 = undefined;
+    try h.player("Hank", "human", &a);
+    const en = findEnemy(h.ctx.seed, h.ctx.now());
+    const id = en.id();
+    var start = try h.location(&a, en.lat - 120.0 / 111_320.0, en.lon);
+    start.deinit();
+    var d = try drive(&h, &a, en.lat, en.lon, 4);
+    d.deinit();
+    var blocked = try h.postf("/api/engage", &a, "{{\"id\":\"{s}\"}}", .{id.str()});
+    defer blocked.deinit();
+    try testing.expectEqualStrings("in_transit", try blocked.errorCode());
+    // A minute and a bit at a standstill.
+    for (0..14) |_| {
+        h.advance(5000);
+        var w = try h.location(&a, en.lat, en.lon);
+        w.deinit();
+    }
+    var b = try h.ok("/api/engage", &a, "{{\"id\":\"{s}\"}}", .{id.str()});
+    b.deinit();
+}
+
+test "in transit: a wobbling signal on a standing phone is not movement" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var a: [64]u8 = undefined;
+    try h.player("Hank", "human", &a);
+    for (0..8) |i| {
+        h.advance(3000);
+        // 25 m of sideways jitter on a 20 m accuracy radius.
+        const off: f64 = if (i % 2 == 0) 0 else 25.0 / 111_320.0;
+        var r = try h.ok("/api/location", &a, "{{\"lat\":{d},\"lon\":{d},\"acc\":20,\"sanctuary\":false}}", .{ base_lat + off, base_lon });
+        defer r.deinit();
+        try testing.expect(!(try r.at("in_transit")).bool);
+    }
+}
+
+// --- Terms of service ------------------------------------------------------------------------------------
+
+test "terms: a new account must accept the current version, which is recorded; older versions are asked again" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+
+    var health = try h.get("/api/health", null);
+    defer health.deinit();
+    try testing.expectEqual(@as(i64, game.data.terms_version), try health.int("terms_version"));
+
+    for ([_][]const u8{ "{}", "{\"terms\":0}", "{\"terms\":99}" }) |body| {
+        var no = try h.post("/api/register", null, body);
+        defer no.deinit();
+        try testing.expectEqual(@as(u16, 400), no.status);
+        try testing.expectEqualStrings("terms_required", try no.errorCode());
+    }
+    var dev = try h.post("/api/auth/dev", null, "{\"subject\":\"kid\"}");
+    defer dev.deinit();
+    try testing.expectEqualStrings("terms_required", try dev.errorCode());
+    try testing.expectEqual(@as(?i64, 0), try h.ctx.db.scalar("SELECT COUNT(*) FROM players", .{}));
+
+    var r = try h.post("/api/register", null, "{\"terms\":1}");
+    defer r.deinit();
+    try testing.expectEqual(@as(i64, 1), try r.int("me.terms.accepted"));
+    try testing.expect(!(try r.at("me.terms.needs_accept")).bool);
+    const pid = (try h.ctx.db.scalar("SELECT id FROM players", .{})).?;
+    try testing.expectEqual(h.ctx.now(), (try h.ctx.db.scalar("SELECT terms_accepted_at FROM players WHERE id = ?", .{pid})).?);
+
+    // A player from before terms existed (or from an older version) is asked once.
+    const token = try r.str("token");
+    try h.ctx.db.run("UPDATE players SET terms_accepted = 0, terms_accepted_at = 0 WHERE id = ?", .{pid});
+    var me = try h.get("/api/me", token);
+    defer me.deinit();
+    try testing.expect((try me.at("terms.needs_accept")).bool);
+    try testing.expectEqual(@as(i64, game.data.terms_version), try me.int("terms.current"));
+    var wrong = try h.post("/api/terms", token, "{\"version\":0}");
+    defer wrong.deinit();
+    try testing.expectEqualStrings("terms_required", try wrong.errorCode());
+    h.advance(1000);
+    var ok = try h.post("/api/terms", token, "{\"version\":1}");
+    defer ok.deinit();
+    try testing.expectEqual(@as(u16, 200), ok.status);
+    try testing.expect(!(try ok.at("me.terms.needs_accept")).bool);
+    try testing.expectEqual(h.ctx.now(), (try h.ctx.db.scalar("SELECT terms_accepted_at FROM players WHERE id = ?", .{pid})).?);
+
+    // Signing in to an existing account with the terms attached records them too.
+    var created = try h.post("/api/auth/dev", null, "{\"subject\":\"kid\",\"terms\":1}");
+    created.deinit();
+    const pid2 = (try h.ctx.db.scalar("SELECT player_id FROM identities WHERE subject = 'kid'", .{})).?;
+    try h.ctx.db.run("UPDATE players SET terms_accepted = 0 WHERE id = ?", .{pid2});
+    var again = try h.post("/api/auth/dev", null, "{\"subject\":\"kid\",\"terms\":1}");
+    defer again.deinit();
+    try testing.expect(!(try again.at("me.terms.needs_accept")).bool);
 }

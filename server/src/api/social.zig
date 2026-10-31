@@ -272,6 +272,7 @@ pub fn claimStronghold(req: *Req, jw: *Stringify) HandlerError!void {
     const body = try req.json(struct { id: []const u8, stance: ?[]const u8 = null });
     const stance = try world.requestStance(req, body.stance);
     var p = try loadP(req);
+    try world.refuseInTransit(req, p.id);
     if (p.level < stronghold_min_level) return req.fail(409, "locked", "Territory unlocks at level 15.");
     const clan_id = p.clan_id orelse return req.fail(409, "no_clan", "Join a clan to claim territory.");
     if (p.downed(req.now)) return req.fail(409, "downed", "You are down. Heal, or wait to get back up.");
@@ -324,6 +325,7 @@ pub fn raidAttack(req: *Req, jw: *Stringify) HandlerError!void {
     const body = try req.json(struct { id: []const u8, stance: ?[]const u8 = null });
     const stance = try world.requestStance(req, body.stance);
     var p = try loadP(req);
+    try world.refuseInTransit(req, p.id);
     if (p.level < raid_min_level) return req.fail(409, "locked", "Raids unlock at level 20.");
     if (p.downed(req.now)) return req.fail(409, "downed", "You are down. Heal, or wait to get back up.");
     const pos = req.ctx.live.position(p.id, req.now) orelse return req.fail(409, "no_position", "Your position is unknown. Wait for a location update.");

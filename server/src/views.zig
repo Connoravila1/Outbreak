@@ -169,6 +169,10 @@ pub const CosmeticsView = struct { owned: []const []const u8, color: ?[]const u8
 /// Achievements earned, out of all of them.
 pub const AchievementTally = struct { earned: u32, total: u32 };
 
+/// The terms of service: the version in force, the one this player accepted (0: none), and
+/// whether they are asked to accept again.
+pub const TermsView = struct { current: u32, accepted: u32, needs_accept: bool };
+
 pub const AccountView = struct { guest: bool, providers: []const []const u8, email: ?[]const u8 };
 
 pub const MeView = struct {
@@ -205,6 +209,7 @@ pub const MeView = struct {
     record: RecordView,
     contact_rank: progression.ContactRank,
     account: AccountView,
+    terms: TermsView,
     /// The saved default stance (used in Contact); PvE asks per fight.
     stance: data.Stance,
     bestiary: BestiaryMap,
@@ -323,6 +328,9 @@ pub fn meView(req: *Req, p: *Player) HandlerError!MeView {
         }
     }
 
+    const terms_accepted: u32 = @intCast((try req.ctx.db.scalar("SELECT terms_accepted FROM players WHERE id = ?", .{p.id})) orelse 0);
+    const terms = TermsView{ .current = data.terms_version, .accepted = terms_accepted, .needs_accept = terms_accepted < data.terms_version };
+
     const sh = try warstate.shares(req);
     return .{
         .id = try std.fmt.allocPrint(a, "{d}", .{p.id}),
@@ -354,6 +362,7 @@ pub fn meView(req: *Req, p: *Player) HandlerError!MeView {
         .war_points_week = try warstate.weekPoints(req, p.id),
         .record = .{ .wins = p.wins, .losses = p.losses, .contacts = p.contacts, .contacts_won = p.contacts_won, .contacts_lost = p.contacts_lost, .echoes = p.echoes, .echoes_won = p.echoes_won, .caches = p.caches, .distance_m = p.distance_m },
         .contact_rank = progression.contactRank(p.fac(), p.contacts_won),
+        .terms = terms,
         .account = .{ .guest = providers.items.len == 0, .providers = providers.items, .email = email },
         .stance = p.stance,
         .bestiary = .{ .counts = p.bestiary },

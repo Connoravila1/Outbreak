@@ -39,7 +39,7 @@ async function call(token, method, path, body) {
 
 /** A fresh character with gear in every slot, healed. */
 async function makePlayer(side, xp) {
-  const { token } = await call(null, 'POST', '/api/register', {});
+  const { token } = await call(null, 'POST', '/api/register', { terms: 1 });
   const cs = (side === 'human' ? 'Warden' : 'Gnaw') + (Date.now() % 10000);
   await call(token, 'POST', '/api/callsign', { callsign: cs });
   await call(token, 'POST', '/api/faction', { faction: side });

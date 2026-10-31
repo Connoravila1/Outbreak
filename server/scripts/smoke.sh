@@ -38,7 +38,7 @@ call GET /api/catalog 200
 call GET /api/factions 200
 call GET /api/me 401
 call GET /api/nope 404
-call POST /api/register 200 "" '{"callsign":"Smoke"}'
+call POST /api/register 200 "" '{"callsign":"Smoke","terms":1}'
 TOKEN=$(field token)
 [ -n "$TOKEN" ] || { echo "FAIL no token in register response"; exit 1; }
 call POST /api/faction 200 "$TOKEN" '{"faction":"human"}'
