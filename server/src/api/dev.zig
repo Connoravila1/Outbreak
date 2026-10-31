@@ -8,6 +8,7 @@ const views = @import("../views.zig");
 const rewards = @import("../rewards.zig");
 const contact = @import("../contact.zig");
 const snapshot = @import("../snapshot.zig");
+const notes_db = @import("../notes.zig");
 
 const data = game.data;
 const Req = ctx_mod.Req;
@@ -20,6 +21,8 @@ pub fn grant(req: *Req, jw: *Stringify) HandlerError!void {
         salvage: ?u32 = null,
         item: ?struct { base: []const u8, rarity: []const u8 } = null,
         consumable: ?struct { id: []const u8, n: u32 = 1 } = null,
+        /// A note id, or "all" for every note this faction can find.
+        note: ?[]const u8 = null,
     });
     var p = (try model.load(req, req.pid)).?;
     if (body.salvage) |s| p.salvage += s;
@@ -35,6 +38,16 @@ pub fn grant(req: *Req, jw: *Stringify) HandlerError!void {
     if (body.consumable) |c| {
         const kind = std.meta.stringToEnum(data.Consumable, c.id) orelse return req.fail(400, "bad_request", "Unknown consumable.");
         try model.addConsumable(req, p.id, kind, c.n);
+    }
+    if (body.note) |id| {
+        if (std.mem.eql(u8, id, "all")) {
+            for (game.notes.notes, 0..) |n, i| {
+                if (game.notes.visibleTo(n, p.fac())) _ = try notes_db.grant(req, p.id, @intCast(i));
+            }
+        } else {
+            const i = game.notes.indexOf(id) orelse return req.fail(400, "bad_request", "Unknown note.");
+            _ = try notes_db.grant(req, p.id, i);
+        }
     }
     var acc = rewards.Acc{ .xp = body.xp orelse 0, .flat_xp = true, .deliver_level_up = true };
     _ = try rewards.apply(req, &p, &acc, null);

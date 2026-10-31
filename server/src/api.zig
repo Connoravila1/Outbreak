@@ -11,6 +11,7 @@ const social = @import("api/social.zig");
 const war = @import("api/war.zig");
 const dev = @import("api/dev.zig");
 const auth = @import("api/auth.zig");
+const notes = @import("api/notes.zig");
 
 const Ctx = ctx_mod.Ctx;
 const Req = ctx_mod.Req;
@@ -79,6 +80,9 @@ const routes = [_]Route{
     .{ .method = .post, .path = "/api/abilities", .access = .faction, .handler = gear.abilities },
     .{ .method = .post, .path = "/api/missions/claim", .access = .faction, .handler = gear.claimMission },
     .{ .method = .post, .path = "/api/store/buy", .access = .faction, .handler = gear.buy },
+
+    .{ .method = .get, .path = "/api/notes", .access = .faction, .handler = notes.list },
+    .{ .method = .post, .path = "/api/notes/claim", .access = .faction, .handler = notes.claim },
 
     .{ .method = .get, .path = "/api/war", .access = .faction, .handler = war.war },
     .{ .method = .get, .path = "/api/leaderboard", .access = .faction, .handler = war.leaderboard },

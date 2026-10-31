@@ -443,6 +443,10 @@ fn engageEnemy(req: *Req, jw: *Stringify, p: *Player, pos: live.Pos, id: []const
         try acc.addDrop(req, loot.rollPve(&lrng, .{ .player_level = p.level, .enemy_level = level, .archetype = en.archetype, .loot_mult = rewards.lootMult(p, req.now) }));
         // First Blood always leaves something worth wearing.
         if (en.tutorial) try acc.items.append(req.arena, loot.rollItem(&lrng, .{ .level = p.level, .min_rarity = .uncommon }));
+        // ...and the first note of the story; otherwise a small chance of one.
+        if (en.tutorial) {
+            try acc.addNote(req, game.notes.indexOf(game.notes.first_blood_id).?);
+        } else try acc.rollNote(req, p, if (en.elite) .elite else .pve, null, o.seed);
         acc.war_points = game.war.points(if (en.elite) .pve_elite else .pve_win);
         p.wins += 1;
         if (en.tutorial) {
@@ -555,6 +559,7 @@ pub fn open(req: *Req, jw: *Stringify) HandlerError!void {
     const mult = rewards.lootMult(&p, req.now);
     var acc = rewards.Acc{ .xp = progression.cacheXp(p.level), .war_points = game.war.points(.cache) };
     try acc.addDrop(req, if (airdrop) loot.rollAirdrop(&lrng, p.level, mult) else loot.rollCache(&lrng, p.level, mult));
+    try acc.rollNote(req, &p, if (airdrop) .airdrop else .cache, null, lrng.next());
     p.caches += 1;
     const rw = try rewards.apply(req, &p, &acc, try districtOf(req.arena, lat, lon));
     try missions.event(req, &p, .{ .kind = .cache_open });
@@ -580,6 +585,7 @@ fn openLandmark(req: *Req, jw: *Stringify, p: *Player, pos: live.Pos, id: []cons
     var lrng = game.rng.Rng.init(game.rng.hash(ctx.seed, .{ "landmark", p.id, id, req.now }));
     var acc = rewards.Acc{ .xp = progression.cacheXp(p.level), .war_points = game.war.points(.cache) };
     try acc.addDrop(req, loot.rollLandmark(&lrng, p.level, rewards.lootMult(p, req.now), data.placeKind(place.place.kind)));
+    try acc.rollNote(req, p, .landmark, place.place.kind, lrng.next());
     p.caches += 1;
     const rw = try rewards.apply(req, p, &acc, try districtOf(req.arena, place.place.lat, place.place.lon));
     try missions.event(req, p, .{ .kind = .cache_open });

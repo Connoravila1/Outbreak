@@ -458,6 +458,20 @@ const migrations = [_][:0]const u8{
     \\ALTER TABLE players ADD COLUMN stance INTEGER NOT NULL DEFAULT 1;
     \\ALTER TABLE players ADD COLUMN bestiary TEXT NOT NULL DEFAULT '';
     ,
+    // Found notes (docs/LORE.md) and the sets whose reward and title were claimed.
+    \\CREATE TABLE player_notes (
+    \\  player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    \\  note_id TEXT NOT NULL,
+    \\  found_at INTEGER NOT NULL,
+    \\  PRIMARY KEY (player_id, note_id)
+    \\);
+    \\CREATE TABLE note_claims (
+    \\  player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    \\  set_id TEXT NOT NULL,
+    \\  claimed_at INTEGER NOT NULL,
+    \\  PRIMARY KEY (player_id, set_id)
+    \\);
+    ,
 };
 
 // --- Tests -------------------------------------------------------------------------------------------

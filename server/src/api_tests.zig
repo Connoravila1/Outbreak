@@ -1355,6 +1355,9 @@ test "raids: weekend spawn, attack once an hour, damage share rewards on the kil
     const ev = (try eventOfType(&wa, "raid")) orelse return error.NoRaidEvent;
     try testing.expect(ev.object.get("rewards").?.object.get("salvage").?.integer >= 50);
     try testing.expect(ev.object.get("rewards").?.object.get("items").?.array.items.len >= 1);
+    // Every contributor takes exactly one note from the wreckage.
+    try testing.expectEqual(@as(usize, 1), ev.object.get("rewards").?.object.get("notes").?.array.items.len);
+    try testing.expectEqual(@as(?i64, 1), try h.ctx.db.scalar("SELECT COUNT(*) FROM player_notes WHERE player_id = ?", .{pa}));
     try testing.expectEqual(@as(usize, 0), try wa.len("raids"));
 
     // An untouched raid just expires after 48 hours.
@@ -2313,4 +2316,178 @@ test "day: Zombies earn +15% PvE XP, and the same enemy is softer for a Human th
     // The underdog bonus can add to a Zombie's XP when Humans outnumber Zombies; allow for it.
     const got: u32 = @intCast(try b.int("rewards.xp"));
     try testing.expect(got >= expect_xp and got <= expect_xp * 5 / 4 + 1);
+}
+
+// --- Notes (docs/LORE.md) -------------------------------------------------------------------------
+
+fn noteSet(notes: *const Res, id: []const u8) !?std.json.ObjectMap {
+    for ((try notes.at("sets")).array.items) |x| {
+        if (std.mem.eql(u8, x.object.get("id").?.string, id)) return x.object;
+    }
+    return null;
+}
+
+test "notes: First Blood always leaves Dale's last text, readable in the archive" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var tok: [64]u8 = undefined;
+    try h.player("Rookie", "human", &tok);
+    const pid = try h.playerId("Rookie");
+
+    var before = try h.get("/api/notes", &tok);
+    defer before.deinit();
+    try testing.expectEqual(@as(i64, 0), (try noteSet(&before, "lantern")).?.get("found").?.integer);
+
+    var w = try h.location(&tok, base_lat, base_lon);
+    defer w.deinit();
+    const tid = try std.fmt.allocPrint(testing.allocator, "t.{d}", .{pid});
+    defer testing.allocator.free(tid);
+    var b = try h.ok("/api/engage", &tok, "{{\"id\":\"{s}\"}}", .{tid});
+    defer b.deinit();
+    try testing.expectEqual(@as(usize, 1), try b.len("rewards.notes"));
+    try testing.expectEqualStrings("starlite.04", try b.str("rewards.notes.0.id"));
+    try testing.expectEqualStrings("Dale's Last Text", try b.str("rewards.notes.0.title"));
+    try testing.expectEqualStrings("starlite", try b.str("rewards.notes.0.set"));
+    try testing.expectEqual(@as(i64, 1), try b.int("me.notes.found"));
+    try testing.expectEqual(@as(i64, 52), try b.int("me.notes.total"));
+
+    var arch = try h.get("/api/notes", &tok);
+    defer arch.deinit();
+    var held: usize = 0;
+    for ((try arch.at("notes")).array.items) |n| {
+        if (n.object.get("locked").?.bool) {
+            // Locked notes are silhouettes: set and rarity, no text.
+            try testing.expect(n.object.get("body").? == .null);
+            try testing.expect(n.object.get("title").? == .null);
+        } else {
+            held += 1;
+            try testing.expectEqualStrings("starlite.04", n.object.get("id").?.string);
+            try testing.expect(std.mem.indexOf(u8, n.object.get("body").?.string, "everybody smells so good") != null);
+            try testing.expect(n.object.get("found_at").?.integer > 0);
+        }
+    }
+    try testing.expectEqual(@as(usize, 1), held);
+    try testing.expectEqual(@as(i64, 1), (try noteSet(&arch, "starlite")).?.get("found").?.integer);
+}
+
+test "notes: each faction sees only its own sets, Patient Zero stays sealed, nothing duplicates" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var hu: [64]u8 = undefined;
+    var zo: [64]u8 = undefined;
+    try h.player("Living", "human", &hu);
+    try h.player("Turned", "zombie", &zo);
+
+    var a = try h.get("/api/notes", &hu);
+    defer a.deinit();
+    var z = try h.get("/api/notes", &zo);
+    defer z.deinit();
+    try testing.expect((try noteSet(&a, "survey")) != null);
+    try testing.expect((try noteSet(&a, "hunger")) == null);
+    try testing.expect((try noteSet(&z, "hunger")) != null);
+    try testing.expect((try noteSet(&z, "survey")) == null);
+    try testing.expectEqual(@as(usize, 7), try a.len("sets"));
+    try testing.expectEqualStrings("???", (try noteSet(&a, "zero")).?.get("name").?.string);
+    for ((try z.at("notes")).array.items) |n| try testing.expect(!std.mem.startsWith(u8, n.object.get("id").?.string, "survey"));
+
+    // Granting one note twice holds it once.
+    for (0..2) |_| {
+        var g = try h.ok("/api/dev/grant", &hu, "{{\"note\":\"survey.03\"}}", .{});
+        try testing.expectEqual(@as(i64, 1), try g.int("me.notes.found"));
+        g.deinit();
+    }
+    var bad = try h.post("/api/dev/grant", &hu, "{\"note\":\"nope.99\"}");
+    defer bad.deinit();
+    try testing.expectEqual(@as(u16, 400), bad.status);
+    var all = try h.ok("/api/dev/grant", &zo, "{{\"note\":\"all\"}}", .{});
+    defer all.deinit();
+    try testing.expectEqual(@as(i64, 52), try all.int("me.notes.found"));
+    const zid = try h.playerId("Turned");
+    try testing.expectEqual(@as(?i64, 52), try h.ctx.db.scalar("SELECT COUNT(*) FROM player_notes WHERE player_id = ?", .{zid}));
+    try testing.expectEqual(@as(?i64, 0), try h.ctx.db.scalar("SELECT COUNT(*) FROM player_notes WHERE player_id = ? AND note_id LIKE 'survey.%'", .{zid}));
+}
+
+test "notes: a completed set is claimed once for salvage and a title" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var tok: [64]u8 = undefined;
+    try h.player("Reader", "human", &tok);
+
+    var unk = try h.post("/api/notes/claim", &tok, "{\"set\":\"nope\"}");
+    defer unk.deinit();
+    try testing.expectEqual(@as(u16, 404), unk.status);
+    var hungry = try h.post("/api/notes/claim", &tok, "{\"set\":\"hunger\"}");
+    defer hungry.deinit();
+    try testing.expectEqual(@as(u16, 404), hungry.status);
+    var early = try h.post("/api/notes/claim", &tok, "{\"set\":\"starlite\"}");
+    defer early.deinit();
+    try testing.expectEqual(@as(u16, 409), early.status);
+    try testing.expectEqualStrings("set_incomplete", try early.errorCode());
+
+    var g = try h.ok("/api/dev/grant", &tok, "{{\"note\":\"all\"}}", .{});
+    g.deinit();
+    var me0 = try h.get("/api/me", &tok);
+    defer me0.deinit();
+    const salvage0 = try me0.int("salvage");
+    try testing.expectEqual(@as(usize, 0), try me0.len("titles_extra"));
+
+    var c = try h.ok("/api/notes/claim", &tok, "{{\"set\":\"starlite\"}}", .{});
+    defer c.deinit();
+    const want: i64 = game.notes.setReward(.starlite);
+    try testing.expectEqual(want, try c.int("rewards.salvage"));
+    try testing.expectEqual(salvage0 + want, try c.int("me.salvage"));
+    try testing.expectEqualStrings("Archivist of the Starlite", try c.str("title"));
+    try testing.expectEqualStrings("Archivist of the Starlite", try c.str("me.titles_extra.0"));
+    var twice = try h.post("/api/notes/claim", &tok, "{\"set\":\"starlite\"}");
+    defer twice.deinit();
+    try testing.expectEqual(@as(u16, 409), twice.status);
+    try testing.expectEqualStrings("already_claimed", try twice.errorCode());
+
+    var arch = try h.get("/api/notes", &tok);
+    defer arch.deinit();
+    try testing.expect((try noteSet(&arch, "starlite")).?.get("claimed").?.bool);
+    try testing.expect(!(try noteSet(&arch, "lantern")).?.get("claimed").?.bool);
+    try testing.expectEqual(@as(i64, 7), (try noteSet(&arch, "starlite")).?.get("total").?.integer);
+    try testing.expectEqual(want, (try noteSet(&arch, "starlite")).?.get("reward").?.integer);
+}
+
+
+test "notes: landmark caches can drop one, never twice; deleting the account takes them" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var tok: [64]u8 = undefined;
+    try h.player("Scavenger", "human", &tok);
+    const pid = try h.playerId("Scavenger");
+
+    // A pharmacy a round, half an hour apart: a quarter of the searches turn up a note, and each
+    // one is in its reward and in the table exactly once.
+    var seen: u32 = 0;
+    for (0..48) |round| {
+        h.advance(31 * 60 * 1000);
+        var key: [16]u8 = undefined;
+        const key_s = try std.fmt.bufPrint(&key, "p{d}", .{round});
+        var item: [200]u8 = undefined;
+        var arr: [220]u8 = undefined;
+        const places = try std.fmt.bufPrint(&arr, "[{s}]", .{try placeJson(&item, key_s, "pharmacy", 5, "")});
+        var w = try locationWith(&h, &tok, base_lat, base_lon, places);
+        w.deinit();
+        const window = @divFloor(h.ctx.now(), game.landmarks.window_ms);
+        var o = try h.ok("/api/open", &tok, "{{\"id\":\"l.{s}.{d}\"}}", .{ key_s, window });
+        defer o.deinit();
+        seen += @intCast(try o.len("loot.notes"));
+    }
+    try testing.expect(seen >= 3);
+    try testing.expect(seen <= 48);
+    try testing.expectEqual(@as(?i64, seen), try h.ctx.db.scalar("SELECT COUNT(*) FROM player_notes WHERE player_id = ?", .{pid}));
+    // A pharmacy's notes are Project Lantern's or the roadside ones.
+    try testing.expectEqual(@as(?i64, 0), try h.ctx.db.scalar("SELECT COUNT(*) FROM player_notes WHERE note_id LIKE 'hunger.%' OR note_id LIKE 'zero.%'", .{}));
+
+    var del = try h.call("DELETE", "/api/account", &tok, "");
+    defer del.deinit();
+    try testing.expectEqual(@as(u16, 200), del.status);
+    try testing.expectEqual(@as(?i64, 0), try h.ctx.db.scalar("SELECT COUNT(*) FROM player_notes", .{}));
 }
