@@ -9,7 +9,7 @@ Picking a faction decides how you see your own city, every time you open the gam
   threats, and hazard-tape and embossed label-tape (Dymo-style) chrome. It reads as practical,
   human, something written by hand by someone who means to live.
 - **Zombies see the Heat**: your streets as thermal sense. A dark, blood-warm void with roads as
-  faint warm veins. Living things show as heat blooms in magenta, orange and white-hot. Text is
+  faint warm veins. Living things show as heat blooms in crimson, orange and white-hot. Text is
   lowercase and sensory. It reads as predatory, hungry, alive in the wrong way.
 
 Same layout and controls for both. Different paint, different voice, different map.
