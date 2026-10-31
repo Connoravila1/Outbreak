@@ -16,7 +16,7 @@ export function mix(a: string, b: string, t: number): string {
 
 /** Thermal gradient map: void -> cold -> vein -> warm -> hot -> white-hot. */
 const RAMP: [number, string][] = [
-  [0, '#110A1A'], [0.2, '#2A2560'], [0.4, '#5B2A6E'], [0.58, '#C02A7C'], [0.78, '#FF6B2C'], [1, '#FFF0C2'],
+  [0, '#120809'], [0.2, '#2E1215'], [0.4, '#6B1A22'], [0.58, '#D12A3A'], [0.78, '#FF6B2C'], [1, '#FFF0C2'],
 ];
 export function heatColor(h: number): string {
   const v = clamp(h);
