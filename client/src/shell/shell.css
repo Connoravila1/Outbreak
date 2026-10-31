@@ -158,3 +158,6 @@
 .overlay .card { max-width: 360px; width: 100%; }
 :root[data-lens='heat'] .callsign { letter-spacing: .04em; }
 :root[data-lens='heat'] .hostiles { letter-spacing: .08em; padding: 0 12px; }
+.ring .ring-face { position: absolute; inset: 5px; border-radius: 50%; overflow: hidden; line-height: 0; }
+.ring .ring-face svg { position: static; transform: none; }
+.ring .lvl-badge { position: absolute; inset: auto -3px -3px auto; min-width: 18px; height: 18px; padding: 0 3px; box-sizing: border-box; border-radius: 9px; display: grid; place-items: center; font-size: 11px; background: var(--accent); color: var(--accent-ink); border: 1.5px solid var(--text); }

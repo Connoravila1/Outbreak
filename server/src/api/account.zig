@@ -180,11 +180,32 @@ pub fn chooseFaction(req: *Req, jw: *Stringify) HandlerError!void {
     try jw.write(.{ .me = try views.meView(req, &fresh) });
 }
 
+/// Avatar fields (all small integers) and their exclusive upper bounds; keep in step with client/src/avatar/spec.ts.
+const avatar_limits = [_]struct { key: []const u8, count: i64 }{
+    .{ .key = "body", .count = 3 },  .{ .key = "skin", .count = 8 },   .{ .key = "face", .count = 6 },
+    .{ .key = "hair", .count = 10 }, .{ .key = "hcol", .count = 8 },   .{ .key = "facial", .count = 4 },
+    .{ .key = "scar", .count = 4 },
+};
+
+/// Known keys only, each an in-range integer.
+fn avatarValid(obj: std.json.ObjectMap) bool {
+    var it = obj.iterator();
+    while (it.next()) |e| {
+        const limit = for (avatar_limits) |l| {
+            if (std.mem.eql(u8, l.key, e.key_ptr.*)) break l.count;
+        } else return false;
+        if (e.value_ptr.* != .integer) return false;
+        if (e.value_ptr.integer < 0 or e.value_ptr.integer >= limit) return false;
+    }
+    return true;
+}
+
 pub fn setAvatar(req: *Req, jw: *Stringify) HandlerError!void {
     const body = try req.json(struct { avatar: std.json.Value });
     if (body.avatar != .object) return req.fail(400, "bad_request", "The avatar must be an object.");
+    if (!avatarValid(body.avatar.object)) return req.fail(400, "bad_request", "The avatar has unknown fields or values out of range.");
     const text = try Stringify.valueAlloc(req.arena, body.avatar, .{});
-    if (text.len > 4096) return req.fail(400, "bad_request", "The avatar is too large.");
+    if (text.len > 300) return req.fail(400, "bad_request", "The avatar is too large.");
     var p = (try model.load(req, req.pid)).?;
     p.avatar = text;
     try model.save(req, &p);

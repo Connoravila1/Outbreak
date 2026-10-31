@@ -8,6 +8,7 @@ import { Bitten } from './Bitten';
 import { SplitLens } from './SplitLens';
 import { Callsign } from './Callsign';
 import { Kit } from './Kit';
+import { Creator } from '../avatar/Creator';
 import { RecoveryCode } from './Recovery';
 import { Briefing } from './Briefing';
 import { Recover } from './Recover';
@@ -17,7 +18,7 @@ import './onboarding.css';
 /** After onboarding: the one moment we ask to send alerts. */
 function askNotify() { void requestNotifyPermission().then((ok) => { if (ok) void scheduleDailyReset(); }); }
 
-type Step = 'broadcast' | 'recover' | 'locate' | 'bitten' | 'split' | 'callsign' | 'kit' | 'recovery' | 'briefing';
+type Step = 'broadcast' | 'recover' | 'locate' | 'bitten' | 'split' | 'callsign' | 'avatar' | 'kit' | 'recovery' | 'briefing';
 
 /** First launch: broadcast, permission, the bite, the choosing, identity, kit, briefing. */
 export function Onboarding() {
@@ -36,7 +37,8 @@ export function Onboarding() {
     case 'locate': return <Locate onDone={() => go(accountExists ? 'split' : 'bitten')} />;
     case 'bitten': return <Bitten onDone={() => go('split')} />;
     case 'split': return p ? <SplitLens center={p} onChosen={chose} /> : <Locate onDone={() => go('split')} />;
-    case 'callsign': return <Callsign faction={chosen ?? 'human'} accountExists={accountExists} onDone={() => { void loadCatalog().then(() => go('kit')); }} />;
+    case 'callsign': return <Callsign faction={chosen ?? 'human'} accountExists={accountExists} onDone={() => { void loadCatalog().then(() => go('avatar')); }} />;
+    case 'avatar': return <div class="ob-screen"><div class="ob-card wide"><Creator faction={chosen ?? 'human'} level={1} initial={me.value?.avatar} later onDone={() => go('kit')} /></div></div>;
     case 'kit': return <Kit onDone={() => go('recovery')} />;
     case 'recovery': return <RecoveryCode onDone={() => go('briefing')} />;
     case 'briefing': return <Briefing onDone={() => { lensOverride.value = null; phase.value = 'app'; askNotify(); }} />;

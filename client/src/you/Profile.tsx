@@ -1,13 +1,18 @@
-import { faction, me } from '../state/store';
+import { useState } from 'preact/hooks';
+import { faction, lens, me } from '../state/store';
 import { record } from '../state/record';
 import { say } from '../ui/voice';
-import { Icon } from '../ui/Icon';
+import { Sheet } from '../ui/Sheet';
+import { Avatar } from '../avatar/Avatar';
+import { Creator } from '../avatar/Creator';
+import { hasAvatar } from '../avatar/spec';
 import { Meter, Section } from '../ui/kit';
 import { LevelRing } from '../shell/TopBar';
 import { STAT_KEYS, STAT_LABEL } from '../gear/util';
 
 export function Profile() {
   const m = me.value;
+  const [editing, setEditing] = useState(false);
   if (!m) return null;
   const f = faction.value;
   const server = m.record;
@@ -16,12 +21,19 @@ export function Profile() {
   return (
     <>
       <div class="id-card card">
-        <div class="avatar" aria-hidden="true"><Icon name={f === 'zombie' ? 'fangs' : 'person'} size={34} /></div>
+        <div class="avatar-frame"><Avatar spec={m.avatar} faction={f ?? 'human'} level={m.level} lens={lens.value} size={72} label={`${m.callsign} portrait`} /></div>
         <div class="id-main">
           <p class="display callsign-big">{m.callsign}</p>
-          <p class="dim voice">{f === 'zombie' ? say('Zombie', 'infected') : say('Human', 'living')} · {say('avatar coming soon', 'a face, later')}</p>
+          <p class="dim voice">{f === 'zombie' ? say('Zombie', 'infected') : say('Human', 'living')} </p>
+          <button type="button" class="btn" onClick={() => setEditing(true)}>{hasAvatar(m.avatar) ? say('Edit', 'change') : say('Create avatar', 'make a face')}</button>
         </div>
       </div>
+
+      {editing && (
+        <Sheet title={say('Avatar', 'face')} onClose={() => setEditing(false)} tall>
+          <Creator faction={f ?? 'human'} level={m.level} initial={m.avatar} onDone={() => setEditing(false)} onCancel={() => setEditing(false)} />
+        </Sheet>
+      )}
 
       <div class="lvl-block">
         <LevelRing level={m.level} xp={m.xp} next={m.xp_next} />
