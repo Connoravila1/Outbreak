@@ -11,10 +11,12 @@ import './events.css';
 
 const DAY = 86_400_000;
 
-/** "Thu 12:00" in the player's own clock. */
+/** "Today 19:00", "Tomorrow 19:00" or "Tue 3 Nov 19:00" in the player's own clock (the list spans weeks). */
 function whenText(at: number, now: number): string {
   const d = new Date(at);
-  const day = at - now < DAY ? say('Today', 'today') : d.toLocaleDateString(undefined, { weekday: 'short' });
+  const days = Math.round((new Date(d).setHours(0, 0, 0, 0) - new Date(now).setHours(0, 0, 0, 0)) / DAY);
+  const day = days <= 0 ? say('Today', 'today') : days === 1 ? say('Tomorrow', 'tomorrow')
+    : d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
   return `${day} ${d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`;
 }
 
