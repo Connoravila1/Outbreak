@@ -100,14 +100,27 @@ pub fn rollItem(rng: *Rng, roll: ItemRoll) Item {
 
 // --- Consumables ------------------------------------------------------------------------------
 
-/// Drop weights by consumable. Flags are bought, never dropped.
-const consumable_weights = [_]f64{ 38, 20, 4, 6, 6, 6, 6, 6, 0 };
+/// Drop weights by consumable. Flags are bought, never dropped. XP tokens are found only in
+/// caches, airdrops and landmark caches (PvE wins and the like roll with none).
+const consumable_weights = [_]f64{ 38, 20, 4, 6, 6, 6, 6, 6, 0, 0 };
+
+/// Weight of an XP token beside the base table's 92: about 10% of a cache's consumables, 15% of an
+/// airdrop's.
+pub const cache_token_weight = 10;
+pub const airdrop_token_weight = 16;
 
 pub fn rollConsumable(rng: *Rng) Consumable {
     return @enumFromInt(rng.weighted(&consumable_weights));
 }
 
-fn rollConsumableWeighted(rng: *Rng, weights: *const [9]f64) Consumable {
+/// A consumable from a cache or airdrop: the usual table plus XP tokens at `token_weight`.
+fn rollConsumableTokens(rng: *Rng, token_weight: f64) Consumable {
+    var w = consumable_weights;
+    w[@intFromEnum(Consumable.xp_token)] = token_weight;
+    return @enumFromInt(rng.weighted(&w));
+}
+
+fn rollConsumableWeighted(rng: *Rng, weights: *const [10]f64) Consumable {
     return @enumFromInt(rng.weighted(weights));
 }
 
@@ -187,7 +200,7 @@ pub fn rollCache(rng: *Rng, level: u32, loot_mult: f32) Drop {
         if (rng.chance(cache_item_chance * loot_mult)) {
             d.addItem(rollItem(rng, .{ .level = level }));
         } else {
-            d.addConsumable(rollConsumable(rng));
+            d.addConsumable(rollConsumableTokens(rng, cache_token_weight));
         }
     }
     return d;
@@ -202,7 +215,7 @@ pub fn rollAirdrop(rng: *Rng, level: u32, loot_mult: f32) Drop {
         if (rng.chance(0.75 * loot_mult)) {
             d.addItem(rollItem(rng, .{ .level = level, .min_rarity = .uncommon, .legendary_mult = airdrop_legendary_mult }));
         } else {
-            d.addConsumable(rollConsumable(rng));
+            d.addConsumable(rollConsumableTokens(rng, airdrop_token_weight));
         }
     }
     return d;
@@ -449,10 +462,50 @@ test "landmark caches: two rolls, +25% salvage, biased by kind" {
 
 test "consumable drops never include flags and favour small heals" {
     var rng = Rng.init(10);
-    var counts = [_]u32{0} ** 9;
+    var counts = [_]u32{0} ** 10;
     for (0..50_000) |_| counts[@intFromEnum(rollConsumable(&rng))] += 1;
     try testing.expectEqual(@as(u32, 0), counts[@intFromEnum(Consumable.flag)]);
+    try testing.expectEqual(@as(u32, 0), counts[@intFromEnum(Consumable.xp_token)]);
     try testing.expect(counts[0] > counts[1] and counts[1] > counts[2] and counts[2] > 0);
+}
+
+test "XP tokens drop from caches, airdrops and landmark caches, never from fights" {
+    var rng = Rng.init(12);
+    const n = 100_000;
+    var cache_cons: f64 = 0;
+    var cache_tok: f64 = 0;
+    var air_cons: f64 = 0;
+    var air_tok: f64 = 0;
+    var lm_tok = [_]f64{0} ** data.place_kinds.len;
+    var lm_cons = [_]f64{0} ** data.place_kinds.len;
+    for (0..n) |_| {
+        const c = rollCache(&rng, 10, 1.0);
+        for (c.consumableSlice()) |k| {
+            cache_cons += 1;
+            if (k == .xp_token) cache_tok += 1;
+        }
+        const a = rollAirdrop(&rng, 12, 1.0);
+        for (a.consumableSlice()) |k| {
+            air_cons += 1;
+            if (k == .xp_token) air_tok += 1;
+        }
+        for (data.place_kinds, 0..) |row, i| {
+            const l = rollLandmark(&rng, 10, 1.0, row);
+            for (l.consumableSlice()) |k| {
+                lm_cons[i] += 1;
+                if (k == .xp_token) lm_tok[i] += 1;
+            }
+        }
+        const pve = rollPve(&rng, .{ .player_level = 10, .enemy_level = 10, .archetype = .screamer });
+        for (pve.consumableSlice()) |k| try testing.expect(k != .xp_token);
+    }
+    try testing.expectApproxEqAbs(10.0 / 102.0, cache_tok / cache_cons, 0.006);
+    try testing.expectApproxEqAbs(16.0 / 108.0, air_tok / air_cons, 0.015);
+    // Pharmacies hold none; every other place a few percent.
+    for (data.place_kinds, 0..) |row, i| {
+        try testing.expectEqual(row.consumable_weights[@intFromEnum(Consumable.flag)], 0);
+        if (row.id == .pharmacy) try testing.expectEqual(@as(f64, 0), lm_tok[i]) else try testing.expect(lm_tok[i] > 0);
+    }
 }
 
 test "scrap value and upgrade cost, hand computed" {

@@ -96,6 +96,8 @@ pub fn noteRef(idx: u16) NoteRef {
 
 /// Something a payout unlocked beyond items: a cosmetic (`kind` "color" or "frame") or a title.
 pub const UnlockRef = struct { kind: []const u8, id: []const u8, name: []const u8 };
+/// A cosmetic found with a payout. A duplicate was turned into `salvage` (already counted in the payout's).
+pub const CosmeticFind = struct { id: []const u8, kind: []const u8, duplicate: bool, salvage: u32 };
 
 pub const RewardsView = struct {
     xp: u32 = 0,
@@ -108,6 +110,8 @@ pub const RewardsView = struct {
     auto_scrapped: u32 = 0,
     /// Notes found with this payout.
     notes: []const NoteRef = &.{},
+    /// Cosmetics found with this payout (rare drops).
+    cosmetics: []const CosmeticFind = &.{},
     /// Achievements this payout completed (their salvage is paid on top, not counted in `salvage`).
     achievements: []const ach_db.EarnedView = &.{},
     /// Cosmetics and titles this payout unlocked (event rewards).
@@ -191,6 +195,8 @@ pub const MeView = struct {
     level: u8,
     xp: u32,
     xp_next: u32,
+    /// What an XP token is worth to this player now.
+    token_xp: u32,
     title: []const u8,
     hp: i32,
     max_hp: i32,
@@ -351,6 +357,7 @@ pub fn meView(req: *Req, p: *Player) HandlerError!MeView {
         .level = p.level,
         .xp = p.xp,
         .xp_next = progression.xpToNext(p.level),
+        .token_xp = progression.tokenXp(p.level),
         .title = p.title(),
         .hp = p.hp,
         .max_hp = comp.stats.hp,

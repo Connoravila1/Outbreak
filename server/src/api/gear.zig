@@ -132,6 +132,15 @@ pub fn use(req: *Req, jw: *Stringify) HandlerError!void {
             try model.setBuff(req, p.id, model.Buffs.names[idx], now + buff_ms);
         },
         .flag => unreachable,
+        .xp_token => {
+            // A lump of XP at the player's level, paid as it is; the normal level-up flow follows.
+            _ = try model.takeConsumable(req, p.id, c);
+            var acc = rewards.Acc{ .xp = progression.tokenXp(p.level), .flat_xp = true };
+            const rw = try rewards.apply(req, &p, &acc, null);
+            try missions.event(req, &p, .{ .kind = .consumable_use });
+            try jw.write(.{ .rewards = rw, .me = try views.meFresh(req, p.id) });
+            return;
+        },
     }
     _ = try model.takeConsumable(req, p.id, c);
     try model.save(req, &p);

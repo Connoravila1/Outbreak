@@ -1,12 +1,14 @@
 import { useState } from 'preact/hooks';
 import { api, errorMessage, type Faction } from '../api';
-import { applyMe, lens } from '../state/store';
+import { applyMe, catalog, lens } from '../state/store';
 import { say } from '../ui/voice';
+import { Icon } from '../ui/Icon';
 import { Avatar } from './Avatar';
 import { COUNT, HAIRS, NAMES, SKINS, avatarDefaults, cleanAvatar, type AvatarKey, type AvatarSpec } from './spec';
 import './avatar.css';
 
 const TABS: { key: AvatarKey; label: [string, string] }[] = [
+  { key: 'look', label: ['Look', 'strain'] },
   { key: 'body', label: ['Build', 'frame'] },
   { key: 'skin', label: ['Skin', 'flesh'] },
   { key: 'face', label: ['Face', 'face'] },
@@ -34,6 +36,9 @@ export function Creator({ faction, level, initial, onDone, later, onCancel }: Pr
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const lz = lens.value;
+  // Looks come from the catalog: names and the level each opens at. Not offered while making a first face.
+  const looks = catalog.value?.avatar_looks ?? [];
+  const tabs = later || !looks.length ? TABS.filter((t) => t.key !== 'look') : TABS;
 
   const save = async (s: AvatarSpec) => {
     setBusy(true); setErr(null);
@@ -59,7 +64,7 @@ export function Creator({ faction, level, initial, onDone, later, onCancel }: Pr
       <button type="button" class="btn av-rand" onClick={() => setSpec(avatarDefaults())}>{say('Randomize', 'shuffle')}</button>
 
       <div class="av-tabs" role="tablist" aria-label={say('Categories', 'categories')}>
-        {TABS.map((t) => (
+        {tabs.map((t) => (
           <button type="button" key={t.key} role="tab" id={`avt-${t.key}`} aria-selected={tab === t.key} aria-controls="av-panel" class="av-tab" onClick={() => setTab(t.key)}>
             {say(...t.label)}
           </button>
@@ -68,12 +73,20 @@ export function Creator({ faction, level, initial, onDone, later, onCancel }: Pr
       <div class="av-opts" role="tabpanel" id="av-panel" aria-labelledby={`avt-${tab}`}>
         {Array.from({ length: COUNT[tab] }, (_, i) => {
           const on = spec[tab] === i;
-          const name = NAMES[tab][i];
+          const lk = tab === 'look' ? looks[i] : undefined;
+          const name = lk ? lk.names[faction] : NAMES[tab][i];
+          const locked = !!lk && level < lk.level;
+          if (tab === 'look' && !lk) return null;
           const swatch = tab === 'skin' ? SKINS[i].hex : tab === 'hcol' ? HAIRS[i].hex : null;
           return (
-            <button type="button" key={i} class={'av-opt' + (on ? ' on' : '')} aria-pressed={on} aria-label={`${cur.label[0]}: ${name}`} title={name} onClick={() => set(tab, i)}>
+            <button
+              type="button" key={i} class={'av-opt' + (on ? ' on' : '') + (locked ? ' locked' : '')} aria-pressed={on} aria-disabled={locked || undefined}
+              aria-label={`${cur.label[0]}: ${name}${locked ? `. ${say(`Level ${lk!.level}`, `level ${lk!.level}`)}` : ''}`} title={locked ? say(`Opens at level ${lk!.level}`, `opens at level ${lk!.level}`) : name}
+              onClick={() => { if (!locked) set(tab, i); }}
+            >
               {swatch ? <span class="av-sw" style={{ background: swatch }} /> : <Avatar spec={{ ...spec, [tab]: i }} faction={faction} level={level} lens={lz} size={56} />}
               <span class="av-name">{name}</span>
+              {locked && <span class="av-lock"><Icon name="padlock" size={12} /> {say(`Level ${lk!.level}`, `level ${lk!.level}`)}</span>}
             </button>
           );
         })}

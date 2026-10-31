@@ -252,7 +252,7 @@ pub fn chooseFaction(req: *Req, jw: *Stringify) HandlerError!void {
 const avatar_limits = [_]struct { key: []const u8, count: i64 }{
     .{ .key = "body", .count = 3 },  .{ .key = "skin", .count = 8 }, .{ .key = "face", .count = 6 },
     .{ .key = "hair", .count = 10 }, .{ .key = "hcol", .count = 8 }, .{ .key = "facial", .count = 4 },
-    .{ .key = "scar", .count = 4 },
+    .{ .key = "scar", .count = 4 }, .{ .key = "look", .count = data.avatar_looks.len },
 };
 
 /// Known keys only, each an in-range integer.
@@ -275,6 +275,10 @@ pub fn setAvatar(req: *Req, jw: *Stringify) HandlerError!void {
     const text = try Stringify.valueAlloc(req.arena, body.avatar, .{});
     if (text.len > 300) return req.fail(400, "bad_request", "The avatar is too large.");
     var p = (try model.load(req, req.pid)).?;
+    // A faction treatment opens with its title tier.
+    if (body.avatar.object.get("look")) |v| {
+        if (data.avatar_looks[@intCast(v.integer)].level > p.level) return req.fail(409, "look_locked", "That look is not unlocked yet.");
+    }
     p.avatar = text;
     try model.save(req, &p);
     try jw.write(.{ .me = try views.meView(req, &p) });
@@ -299,7 +303,7 @@ fn pairView(p: data.Pair) PairView {
     return .{ .human = p.human, .zombie = p.zombie };
 }
 
-pub const catalog_version = 3;
+pub const catalog_version = 4;
 
 const StanceRow = struct { id: data.Stance, names: PairView, text: []const u8 };
 const stance_rows = [_]StanceRow{
@@ -423,6 +427,7 @@ pub fn catalog(req: *Req, jw: *Stringify) HandlerError!void {
             .names = pairView(c.name),
             .text = c.text,
             .price = c.price,
+            .found = c.found,
             .survey = c.survey,
             .heat = c.heat,
             .unlock = if (by) |i| game.achievements.list[i].id else null,
@@ -463,6 +468,11 @@ pub fn catalog(req: *Req, jw: *Stringify) HandlerError!void {
     for (data.event_exchange) |x| try jw.write(.{ .sku = x.sku, .names = pairView(x.name), .text = x.text, .price = x.price, .limit = x.limit });
     try jw.endArray();
     try jw.endObject();
+
+    try jw.objectField("avatar_looks");
+    try jw.beginArray();
+    for (data.avatar_looks, 0..) |l, i| try jw.write(.{ .index = i, .level = l.level, .names = pairView(l.name) });
+    try jw.endArray();
 
     try jw.objectField("levels");
     try jw.beginObject();

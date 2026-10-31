@@ -91,7 +91,7 @@ degrees (WGS84). `faction` is `"human"` or `"zombie"`. Slots are `"weapon" | "ar
 | POST | `/api/auth/unlink/{provider}` | | `{me}` — 404 `not_linked`; 409 `last_identity` for the only identity |
 | DELETE | `/api/account` | | `{ok}` — deletes the player and everything owned (auth) |
 | GET | `/api/me` | | `Me` |
-| POST | `/api/avatar` | `{avatar:{...}}` | `{me}` |
+| POST | `/api/avatar` | `{avatar:{...}}` | `{me}` — fields `body skin face hair hcol facial scar look`, all small integers in range (400 otherwise); `look` is the faction treatment (0 automatic, 1-6 from `catalog.avatar_looks`), 409 `look_locked` above the player's level |
 
 **Accounts.** A player with no row in `identities(provider, subject, player_id, email, created_at)`
 is a guest; its only credential is the bearer token. `POST /api/auth/{provider}` verifies the
@@ -166,7 +166,7 @@ fight it missed and never notifies about one it already showed. The latest schem
 | POST | `/api/unequip` | `{slot}` | `{me}` |
 | POST | `/api/scrap` | `{uids:[...]}` | `{salvage_gained, me}` |
 | POST | `/api/upgrade` | `{uid}` | `{me}` |
-| POST | `/api/use` | `{consumable}` | `{me}` |
+| POST | `/api/use` | `{consumable}` | `{me}`; an XP token (`xp_token`) answers `{rewards, me}` with `rewards.xp` and any `level_up` (409 `none_left`) |
 | POST | `/api/abilities` | `{equipped:[ids]}` | `{me}` |
 | POST | `/api/missions/claim` | `{id}` | `{rewards, me}` |
 | POST | `/api/store/buy` | `{sku}` | `{rewards?, me}` |
@@ -311,6 +311,8 @@ garrison (an Echo already rolled from it is withdrawn), and their sessions get n
 
 ### Dev only (`--dev`)
 `POST /api/dev/grant {xp?, salvage?, item?:{base, rarity}, consumable?:{id, n}, note?: id | "all"}`,
+`POST /api/dev/cosmetic_odds {scale}` (multiplies the chance of a found cosmetic: 1 is the designed rate, 1000
+makes every airdrop, landmark or elite win carry one),
 `POST /api/dev/heal`, `POST /api/dev/reset_cooldowns`, `POST /api/dev/bot_contact` (stages an
 immediate Contact against a generated opponent so PvP can be tested alone; `POST /api/dev/down` puts the caller in Downed; `POST /api/dev/spawn_raid {hp?}` puts a raid boss at the stronghold of the cell the caller stands in, so raids can be tried on any day), `POST /api/dev/event {type, hours?, kind?}` and `POST /api/dev/event_stop` (the same as `admin event start` and `stop`).
 
@@ -340,7 +342,8 @@ Me = { id, callsign: string|null, must_rename: boolean, faction: Faction|null, l
        terms: { current: number, accepted: number /* 0: never */, needs_accept: boolean },
        notes: { found: number, total: number /* notes this faction can find */ },
        titles_extra: string[] /* cosmetic titles from claimed note sets and achievements */,
-       cosmetics: {owned:[ids], color:id|null, frame:id|null}, achievements: {earned, total} }
+       cosmetics: {owned:[ids], color:id|null, frame:id|null}, achievements: {earned, total},
+       token_xp: number /* what an XP token is worth now */ }
 
 Mission = { id, kind, text, target, progress, rewards: Rewards, claimed: boolean }
 
@@ -388,7 +391,11 @@ consumables:[{id, names, text, price}], abilities:[{id, level, names, text}],
 enemies:[{id, names, text}], levels:{xp_to_next:[...], titles:{human:[], zombie:[]},
 unlocks:[{level, key, text}]}, store:[{sku, name, price, text}],
 achievements:[{id, group, names, text, metric, need, salvage, title:{human,zombie}|null, cosmetic:id|null}],
-cosmetics:[{id, kind:"color"|"frame", names, text, price, survey, heat, unlock:achievementId|null}]}`.
+cosmetics:[{id, kind:"color"|"frame", names, text, price, found, survey, heat, unlock:achievementId|null}],
+avatar_looks:[{index, level, names:{human, zombie}}]}`. `found` marks the drop-only cosmetics (price 0, no `unlock`).
+`Rewards` also carries `cosmetics:[{id, kind, duplicate, salvage}]`: the cosmetics found with that payout, where a
+`duplicate` was already owned and became `salvage` (counted in `Rewards.salvage`). Caches, airdrops, landmark
+caches, elite wins and raid kills can carry one; a new one is owned at once.
 
 `levels.unlocks` is the one unlock table (`data.unlocks`): `key` is a stable name (`store`, `contact`, `raids`, ...), `text` is
 what the level-up screen lists. Several rows can share a level (level 5 has three). The client keys its first-time

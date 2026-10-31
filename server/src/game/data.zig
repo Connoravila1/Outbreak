@@ -39,7 +39,7 @@ pub const Ability = enum {
     undying,
 };
 
-pub const Consumable = enum { heal_s, heal_m, revive, buff_atk, buff_def, buff_spd, buff_xp, buff_loot, flag };
+pub const Consumable = enum { heal_s, heal_m, revive, buff_atk, buff_def, buff_spd, buff_xp, buff_loot, flag, xp_token };
 
 pub const Archetype = enum { shambler, runner, bloater, brute, horde, screamer, abomination };
 
@@ -271,7 +271,7 @@ pub const ConsumableRow = struct {
     /// Effect, in plain words.
     text: []const u8,
     flavour: Pair,
-    /// Store price in salvage.
+    /// Store price in salvage; 0 means it is found, never sold.
     price: u32,
 };
 
@@ -285,6 +285,7 @@ pub const consumables = [_]ConsumableRow{
     .{ .id = .buff_xp, .name = pair("Field Manual", "Hive Memory"), .text = "+25% XP for 30 minutes.", .price = 60, .flavour = pair("Dog-eared. Someone wrote down what worked.", "A borrowed past. The hive remembers how.") },
     .{ .id = .buff_loot, .name = pair("Lucky Coin", "Carrion Scent"), .text = "+50% cache and loot chance for 30 minutes.", .price = 60, .flavour = pair("Heads, you eat tonight.", "Rub it on. The good meat finds you.") },
     .{ .id = .flag, .name = pair("Territory Flag", "Infestation Marker"), .text = "Claim a Stronghold for your clan.", .price = 300, .flavour = pair("Plant it. Say this ground is ours.", "A pulsing growth. This ground is ours.") },
+    .{ .id = .xp_token, .name = pair("Veteran's Logbook", "Fresh Brain"), .text = "Gain as much XP as one standard win at your level. Found in caches, never sold.", .price = 0, .flavour = pair("Someone's last logbook, every page of it earned. Read it and you have lived it.", "Still firing. Whatever it knew is yours now.") },
 };
 
 pub fn consumable(c: Consumable) ConsumableRow {
@@ -305,8 +306,8 @@ pub const PlaceRow = struct {
     item_chance: f32,
     /// Relative weight of a weapon / armor / utility base when an item drops.
     slot_weights: [3]f32 = .{ 1, 1, 1 },
-    /// Relative weights of consumables, in `Consumable` order (flags never drop).
-    consumable_weights: [9]f64,
+    /// Relative weights of consumables, in `Consumable` order (flags never drop; the last is the XP token).
+    consumable_weights: [10]f64,
     min_rarity: Rarity = .common,
     legendary_mult: f32 = 1.0,
     /// Extra salvage on top of the +25% every landmark cache pays.
@@ -314,31 +315,31 @@ pub const PlaceRow = struct {
 };
 
 pub const place_kinds = [_]PlaceRow{
-    .{ .id = .pharmacy, .name = pair("Pharmacy", "Sick Ward"), .item_chance = 0.15, .consumable_weights = .{ 28, 30, 14, 2, 4, 2, 2, 2, 0 }, .text = pair(
+    .{ .id = .pharmacy, .name = pair("Pharmacy", "Sick Ward"), .item_chance = 0.15, .consumable_weights = .{ 28, 30, 14, 2, 4, 2, 2, 2, 0, 0 }, .text = pair(
         "Bandages, kits and the odd trauma kit.",
         "the sick are fed here. fresh kills, and a vial that raises the dead.",
     ) },
-    .{ .id = .grocery, .name = pair("Grocery", "Larder"), .item_chance = 0.20, .consumable_weights = .{ 50, 24, 2, 3, 3, 3, 4, 4, 0 }, .salvage_extra = 0.25, .text = pair(
+    .{ .id = .grocery, .name = pair("Grocery", "Larder"), .item_chance = 0.20, .consumable_weights = .{ 50, 24, 2, 3, 3, 3, 4, 4, 0, 3 }, .salvage_extra = 0.25, .text = pair(
         "Food and first aid, and plenty to scrap.",
         "meat on the hook. scraps worth chewing.",
     ) },
-    .{ .id = .hardware, .name = pair("Hardware Store", "Scrap Heap"), .item_chance = 0.60, .slot_weights = .{ 4, 1, 1 }, .consumable_weights = .{ 30, 15, 2, 8, 8, 6, 3, 6, 0 }, .salvage_extra = 0.25, .text = pair(
+    .{ .id = .hardware, .name = pair("Hardware Store", "Scrap Heap"), .item_chance = 0.60, .slot_weights = .{ 4, 1, 1 }, .consumable_weights = .{ 30, 15, 2, 8, 8, 6, 3, 6, 0, 5 }, .salvage_extra = 0.25, .text = pair(
         "Weapons off the rack and salvage for upgrades.",
         "claws and bone, heaped high. good for sharpening.",
     ) },
-    .{ .id = .fuel, .name = pair("Gas Station", "Fume Pit"), .item_chance = 0.25, .consumable_weights = .{ 14, 6, 1, 18, 18, 18, 4, 14, 0 }, .salvage_extra = 0.25, .text = pair(
+    .{ .id = .fuel, .name = pair("Gas Station", "Fume Pit"), .item_chance = 0.25, .consumable_weights = .{ 14, 6, 1, 18, 18, 18, 4, 14, 0, 3 }, .salvage_extra = 0.25, .text = pair(
         "Energy drinks, painkillers and whatever was left in the trunks.",
         "the fumes sharpen everything. glands, still twitching.",
     ) },
-    .{ .id = .police, .name = pair("Police Station", "Barracks"), .item_chance = 0.70, .slot_weights = .{ 1, 4, 1 }, .consumable_weights = .{ 20, 20, 6, 8, 10, 6, 4, 4, 0 }, .min_rarity = .uncommon, .legendary_mult = 2.0, .text = pair(
+    .{ .id = .police, .name = pair("Police Station", "Barracks"), .item_chance = 0.70, .slot_weights = .{ 1, 4, 1 }, .consumable_weights = .{ 20, 20, 6, 8, 10, 6, 4, 4, 0, 8 }, .min_rarity = .uncommon, .legendary_mult = 2.0, .text = pair(
         "Riot gear and better. The lockers are rarely empty.",
         "hardened hides on racks. the best are kept back.",
     ) },
-    .{ .id = .outfitter, .name = pair("Outfitter", "Shed Skins"), .item_chance = 0.65, .slot_weights = .{ 0.5, 3, 3 }, .consumable_weights = .{ 30, 16, 2, 4, 8, 8, 3, 4, 0 }, .text = pair(
+    .{ .id = .outfitter, .name = pair("Outfitter", "Shed Skins"), .item_chance = 0.65, .slot_weights = .{ 0.5, 3, 3 }, .consumable_weights = .{ 30, 16, 2, 4, 8, 8, 3, 4, 0, 5 }, .text = pair(
         "Jackets, packs and the gear that goes with them.",
         "cast-off hides and strains, still warm.",
     ) },
-    .{ .id = .diner, .name = pair("Diner", "Feeding Ground"), .item_chance = 0.20, .consumable_weights = .{ 36, 26, 2, 3, 3, 3, 16, 3, 0 }, .text = pair(
+    .{ .id = .diner, .name = pair("Diner", "Feeding Ground"), .item_chance = 0.20, .consumable_weights = .{ 36, 26, 2, 3, 3, 3, 16, 3, 0, 6 }, .text = pair(
         "A hot meal and a map on the wall: food, and a field manual or two.",
         "the table is still set. a meal, and a memory.",
     ) },
@@ -461,6 +462,21 @@ pub const titles = struct {
     pub const zombie = [_][]const u8{ "Turned", "Lurcher", "Lurker", "Stalker", "Ravager", "Mauler", "Alpha", "Dread", "Blight", "Plaguebringer", "Patient Zero" };
 };
 
+/// A faction treatment for the avatar (DESIGN.md section 14). Look 0 is the automatic one, drawn by
+/// level; the others are chosen in the avatar editor once the player's level reaches `level` (a
+/// title tier, so they open with a new title). The client draws them; the server checks the level.
+pub const AvatarLook = struct { level: u8, name: Pair };
+
+pub const avatar_looks = [_]AvatarLook{
+    .{ .level = 1, .name = pair("Standard issue", "As it comes") },
+    .{ .level = 5, .name = pair("Scavenged scarf", "Veined") },
+    .{ .level = 10, .name = pair("Riot visor", "Torn skin") },
+    .{ .level = 20, .name = pair("Field paint", "Bared bone") },
+    .{ .level = 30, .name = pair("Hardened kit", "Fungal bloom") },
+    .{ .level = 35, .name = pair("Command coat", "Burning eyes") },
+    .{ .level = 50, .name = pair("Last Hope sash", "Spore crown") },
+};
+
 /// `key` is the stable name of an unlock; the client keys its first-time explainers on it.
 pub const Unlock = struct { level: u8, key: []const u8, text: []const u8 };
 
@@ -472,17 +488,23 @@ pub const unlocks = [_]Unlock{
     .{ .level = 5, .key = "contact", .text = "PvP protection ends: real-world fights begin" },
     .{ .level = 5, .key = "missions", .text = "Weekly missions" },
     .{ .level = 5, .key = "echoes", .text = "Echoes" },
+    .{ .level = 5, .key = "look_1", .text = "A new avatar look" },
     .{ .level = 7, .key = "ability_7", .text = "New ability: Aimed Shot / Pounce" },
     .{ .level = 8, .key = "airdrops", .text = "Airdrops become visible" },
     .{ .level = 10, .key = "clans", .text = "Clans" },
+    .{ .level = 10, .key = "look_2", .text = "A new avatar look" },
     .{ .level = 12, .key = "ability_slot_2", .text = "Ability slot 2, and Barricade / Calcify" },
     .{ .level = 15, .key = "territory", .text = "Territory: plant flags at Strongholds" },
     .{ .level = 18, .key = "ability_18", .text = "New ability: Adrenaline / Bloodlust" },
     .{ .level = 20, .key = "raids", .text = "Raids" },
+    .{ .level = 20, .key = "look_3", .text = "A new avatar look" },
     .{ .level = 25, .key = "ability_slot_3", .text = "Ability slot 3, and Molotov / Infectious Bite" },
     .{ .level = 30, .key = "legendary", .text = "Legendary drop rate +50%" },
+    .{ .level = 30, .key = "look_4", .text = "A new avatar look" },
     .{ .level = 33, .key = "ability_33", .text = "New ability: Overwatch / Swarm" },
+    .{ .level = 35, .key = "look_5", .text = "A new avatar look" },
     .{ .level = 42, .key = "ability_42", .text = "New ability: Last Stand / Undying" },
+    .{ .level = 50, .key = "look_6", .text = "A new avatar look" },
 };
 
 pub const Sku = struct {
@@ -701,6 +723,26 @@ pub fn findExchange(sku: []const u8) ?u8 {
 /// The level the Exchange opens at.
 pub const exchange_min_level: u8 = 10;
 
+test "every avatar look has an unlock line at its level" {
+    for (avatar_looks[1..], 1..) |l, i| {
+        var key: [8]u8 = undefined;
+        const want = std.fmt.bufPrint(&key, "look_{d}", .{i}) catch unreachable;
+        const u = for (unlocks) |u| {
+            if (std.mem.eql(u8, u.key, want)) break u;
+        } else return error.MissingUnlock;
+        try std.testing.expectEqual(l.level, u.level);
+    }
+}
+
+test "avatar looks open on title tiers, in order" {
+    try std.testing.expectEqual(@as(u8, 1), avatar_looks[0].level);
+    for (avatar_looks[1..], 1..) |l, i| {
+        try std.testing.expect(l.level % 5 == 0 and l.level <= max_level);
+        try std.testing.expect(l.level > avatar_looks[i - 1].level);
+        try std.testing.expect(l.name.human.len > 0 and l.name.zombie.len > 0);
+    }
+}
+
 test "tables line up with their enums" {
     for (rarities, 0..) |r, i| try std.testing.expectEqual(i, @intFromEnum(r.id));
     for (perks, 0..) |r, i| try std.testing.expectEqual(i, @intFromEnum(r.id));
@@ -765,6 +807,7 @@ test "spawn weights add to 100 without the raid boss" {
 
 test "store prices agree with consumable prices" {
     for (consumables) |c| {
+        if (c.price == 0) continue; // found, never sold (the XP token)
         const idx = findSku(@tagName(c.id)).?;
         try std.testing.expectEqual(c.price, store[idx].price);
     }

@@ -30,6 +30,7 @@ const GO: Record<string, { tab: TabId; anchor?: string }> = {
   clans: { tab: 'war' },
   territory: { tab: 'map' },
   raids: { tab: 'map' },
+  look_1: { tab: 'you' }, look_2: { tab: 'you' }, look_3: { tab: 'you' }, look_4: { tab: 'you' }, look_5: { tab: 'you' }, look_6: { tab: 'you' },
 };
 
 /** The ability (or abilities) that arrive at a level, as "Name: what it does". */
@@ -53,7 +54,18 @@ const abilityCard = (h: string, z: string): Copy => (level, f) => {
   };
 };
 
+/** A faction look opened with a title: named from the catalog, worn from the avatar editor. */
+const lookCard: Copy = (level) => {
+  const l = catalog.value?.avatar_looks?.find((x) => x.level === level);
+  const h = l?.names.human ?? 'a new look', z = l?.names.zombie ?? 'a new look';
+  return {
+    h: ['A new look', `Your new title opens a look for your portrait: ${h}. Change it in the avatar editor on the You tab whenever you like.`, 'Open the You tab'],
+    z: ['a new face', `the change goes deeper. ${z.toLowerCase()} is yours to wear now. change it from your portrait on the you tab.`, 'see yourself'],
+  };
+};
+
 const COPY: Record<string, Copy> = {
+  look_1: lookCard, look_2: lookCard, look_3: lookCard, look_4: lookCard, look_5: lookCard, look_6: lookCard,
   store: () => ({
     h: ['The Store', 'Salvage buys heals, buffs and more room in your pack. You earn it by scrapping spare gear and winning fights. Spend a little on a heal so one bad fight does not end your day.', 'Open the Store'],
     z: ['trade', 'salvage buys what your body will not make: meals, strength, room to carry. tear down a spare claw, then trade for something to eat.', 'go and trade'],

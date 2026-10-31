@@ -87,6 +87,13 @@ const CATALOG: Catalog = {
     { id: 'revive', names: names('Trauma Kit', 'Mutagen Vial'), text: 'Revive from Downed at 100%, or full heal', price: 120 },
     { id: 'buff_atk', names: names('Adrenaline Shot', 'Rage Gland'), text: '+15% ATK for 30 min', price: 60 },
     { id: 'flag', names: names('Territory Flag', 'Infestation Marker'), text: 'Claim a Stronghold for your clan', price: 300 },
+    { id: 'xp_token', names: names("Veteran's Logbook", 'Fresh Brain'), text: 'Gain as much XP as one standard win at your level. Found in caches, never sold.', price: 0 },
+  ],
+  avatar_looks: [
+    { index: 0, level: 1, names: names('Standard issue', 'As it comes') }, { index: 1, level: 5, names: names('Scavenged scarf', 'Veined') },
+    { index: 2, level: 10, names: names('Riot visor', 'Torn skin') }, { index: 3, level: 20, names: names('Field paint', 'Bared bone') },
+    { index: 4, level: 30, names: names('Hardened kit', 'Fungal bloom') }, { index: 5, level: 35, names: names('Command coat', 'Burning eyes') },
+    { index: 6, level: 50, names: names('Last Hope sash', 'Spore crown') },
   ],
   abilities: [
     { id: 'second_wind', level: 3, names: names('Second Wind', 'Devour'), text: 'Once per fight, below 35% HP, heal 30% max HP' },
@@ -110,12 +117,14 @@ const CATALOG: Catalog = {
       { level: 1, key: 'start', text: 'Starter kit, map, PvE, caches' },
       { level: 2, key: 'store', text: 'The Store' }, { level: 3, key: 'ability_slot_1', text: 'Ability slot 1 and your first ability' },
       { level: 4, key: 'upgrading', text: 'Item upgrading' }, { level: 5, key: 'contact', text: 'PvP protection ends: real-world fights begin' },
-      { level: 5, key: 'missions', text: 'Weekly missions' }, { level: 5, key: 'echoes', text: 'Echoes' },
+      { level: 5, key: 'missions', text: 'Weekly missions' }, { level: 5, key: 'echoes', text: 'Echoes' }, { level: 5, key: 'look_1', text: 'A new avatar look' },
       { level: 7, key: 'ability_7', text: 'New ability: Aimed Shot / Pounce' }, { level: 8, key: 'airdrops', text: 'Airdrops become visible' },
-      { level: 10, key: 'clans', text: 'Clans' }, { level: 12, key: 'ability_slot_2', text: 'Ability slot 2, and Barricade / Calcify' },
+      { level: 10, key: 'clans', text: 'Clans' }, { level: 10, key: 'look_2', text: 'A new avatar look' }, { level: 12, key: 'ability_slot_2', text: 'Ability slot 2, and Barricade / Calcify' },
       { level: 15, key: 'territory', text: 'Territory: plant flags at Strongholds' }, { level: 18, key: 'ability_18', text: 'New ability: Adrenaline / Bloodlust' },
-      { level: 20, key: 'raids', text: 'Raids' }, { level: 25, key: 'ability_slot_3', text: 'Ability slot 3, and Molotov / Infectious Bite' },
-      { level: 30, key: 'legendary', text: 'Legendary drop rate +50%' },
+      { level: 20, key: 'raids', text: 'Raids' }, { level: 20, key: 'look_3', text: 'A new avatar look' },
+      { level: 25, key: 'ability_slot_3', text: 'Ability slot 3, and Molotov / Infectious Bite' },
+      { level: 30, key: 'legendary', text: 'Legendary drop rate +50%' }, { level: 30, key: 'look_4', text: 'A new avatar look' },
+      { level: 35, key: 'look_5', text: 'A new avatar look' }, { level: 50, key: 'look_6', text: 'A new avatar look' },
     ],
   },
   store: [
@@ -262,7 +271,7 @@ function buildMe(): Me {
   const myClan = db.clan ? allClans().find((c) => c.id === db.clan!.id) : null;
   return {
     id: 'mock-1', callsign: db.callsign, must_rename: !!db.mustRename, faction: db.faction, level: db.level, xp: db.xp,
-    xp_next: CATALOG.levels.xp_to_next[db.level - 1], title: titles[Math.min(titles.length - 1, Math.floor(db.level / 5))],
+    xp_next: CATALOG.levels.xp_to_next[db.level - 1], token_xp: 20 + 6 * db.level, title: titles[Math.min(titles.length - 1, Math.floor(db.level / 5))],
     hp: Math.min(db.hp, total.hp), max_hp: total.hp, downed_until: null,
     stats: { hp: total.hp, atk: Math.round(total.atk), def: Math.round(total.def), spd: Math.round(total.spd) },
     base_stats: { hp: base.hp, atk: Math.round(base.atk), def: Math.round(base.def), spd: Math.round(base.spd) },
@@ -437,6 +446,20 @@ function lootRewards(xp: number, items: number, legendaryBias = 0): Rewards {
   }
   if (Math.random() < 0.5) { db.consumables.heal_s = (db.consumables.heal_s ?? 0) + 1; r.consumables.heal_s = 1; }
   return r;
+}
+
+/** The rarer finds of a cache: an XP token now and then, and from an airdrop a found cosmetic (a repeat is salvage). */
+function giveFinds(r: Rewards, airdrop: boolean) {
+  if (Math.random() < (airdrop ? 0.16 : 0.1)) { db.consumables.xp_token = (db.consumables.xp_token ?? 0) + 1; r.consumables.xp_token = 1; }
+  if (!airdrop || Math.random() >= 0.08) return;
+  const pool = MOCK_COSMETICS.filter((c) => c.found);
+  const c = pool[Math.floor(Math.random() * pool.length)];
+  const col = collection();
+  const duplicate = col.owned.includes(c.id);
+  const salvage = duplicate ? (c.kind === 'color' ? 150 : 250) : 0;
+  if (!duplicate) col.owned.push(c.id);
+  db.salvage += salvage; r.salvage += salvage;
+  r.cosmetics = [...(r.cosmetics ?? []), { id: c.id, kind: c.kind, duplicate, salvage }];
 }
 
 /** Hold a note (a given one, else a roll at `chance`) and list it in `r`. */
@@ -625,7 +648,13 @@ function route(method: string, path: string, body: any, authed: boolean): unknow
       return mine();
     }
     case 'GET /api/me': guard(); return buildMe();
-    case 'POST /api/avatar': guard(); db.avatar = body.avatar as Record<string, unknown>; save(); return mine();
+    case 'POST /api/avatar': {
+      guard();
+      const av = body.avatar as Record<string, unknown>;
+      const look = CATALOG.avatar_looks?.[Number(av.look ?? 0)];
+      if (av.look != null && (!look || look.level > db.level)) throw new HttpError(409, 'look_locked', 'That look is not unlocked yet.');
+      db.avatar = av; save(); return mine();
+    }
     case 'POST /api/location': {
       guard();
       mockSimulated = body.mock === true;
@@ -691,6 +720,7 @@ function route(method: string, path: string, body: any, authed: boolean): unknow
       db.mprog[1]++;
       const loot = lootRewards(10 + 2 * db.level, 0.55);
       giveNote(loot, null, id.startsWith('a:') ? 0.35 : 0.12, true);
+      giveFinds(loot, id.startsWith('a:'));
       grantXp(loot); checkAchievements(loot); save();
       return { loot, me: buildMe() };
     }
@@ -767,6 +797,12 @@ function route(method: string, path: string, body: any, authed: boolean): unknow
       guard();
       const id = String(need(body, 'consumable'));
       if (!(db.consumables[id] > 0)) throw new HttpError(400, 'none', 'You have none.');
+      if (id === 'xp_token') {
+        const r = emptyRewards(20 + 6 * db.level);
+        db.consumables[id]--; if (db.consumables[id] <= 0) delete db.consumables[id];
+        grantXp(r); checkAchievements(r); save();
+        return { me: buildMe(), rewards: r };
+      }
       const m = buildMe();
       const heal = id === 'heal_s' ? 0.25 : id === 'heal_m' ? 0.6 : id === 'revive' ? 1 : 0;
       if (heal) {

@@ -18,6 +18,8 @@
 :root[data-lens='survey'] .portrait.frame-echo { --fa: var(--survey-blue); --fb: color-mix(in srgb, var(--survey-blue) 55%, transparent); }
 :root[data-lens='survey'] .portrait.frame-dayzero { --fa: #9B1C1C; --fb: var(--ink); }
 :root[data-lens='survey'] .portrait.frame-gilt { --fa: #8A6D0B; --fb: color-mix(in srgb, #8A6D0B 55%, transparent); }
+:root[data-lens='survey'] .portrait.frame-fence { --fa: var(--ink); --fb: var(--survey-brown); }
+:root[data-lens='survey'] .portrait.frame-flare { --fa: var(--grease); --fb: var(--ink); }
 
 :root[data-lens='heat'] .portrait { --fa: var(--hot); --fb: color-mix(in srgb, var(--vein) 80%, transparent); }
 :root[data-lens='heat'] .portrait.frame-grease { --fa: var(--hot); }
@@ -31,6 +33,8 @@
 :root[data-lens='heat'] .portrait.frame-echo { --fa: var(--white-hot); --fb: var(--cold); }
 :root[data-lens='heat'] .portrait.frame-dayzero { --fa: var(--hot); --fb: var(--white-hot); }
 :root[data-lens='heat'] .portrait.frame-gilt { --fa: #F2E28B; --fb: var(--warm); }
+:root[data-lens='heat'] .portrait.frame-fence { --fa: var(--warm); --fb: var(--hot); }
+:root[data-lens='heat'] .portrait.frame-flare { --fa: var(--white-hot); --fb: var(--hot); }
 :root[data-lens='heat'] .portrait.framed .frame-ring { filter: drop-shadow(0 0 3px color-mix(in srgb, var(--hot) 70%, transparent)); }
 
 /* In a frame the plate loses its own glow so the ring is the one bright thing. */

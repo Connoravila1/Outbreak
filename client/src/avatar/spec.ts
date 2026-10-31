@@ -1,4 +1,7 @@
-/** The avatar is a plain object of small integers (about 70 bytes serialized; the server allows 300). */
+/** The avatar is a plain object of small integers (about 80 bytes serialized; the server allows 300).
+ *  `look` is the faction treatment: 0 is the automatic one drawn by level, the rest unlock with titles
+ *  (names and levels come from the catalog; the server refuses one above the player's level). Saves
+ *  from before it existed have no `look` and read as 0. */
 export interface AvatarSpec {
   body: number;
   skin: number;
@@ -7,13 +10,14 @@ export interface AvatarSpec {
   hcol: number;
   facial: number;
   scar: number;
+  look: number;
 }
 
-export const KEYS = ['body', 'skin', 'face', 'hair', 'hcol', 'facial', 'scar'] as const;
+export const KEYS = ['body', 'skin', 'face', 'hair', 'hcol', 'facial', 'scar', 'look'] as const;
 export type AvatarKey = (typeof KEYS)[number];
 
 /** Option counts; must match the limits in server/src/api/account.zig. */
-export const COUNT: Record<AvatarKey, number> = { body: 3, skin: 8, face: 6, hair: 10, hcol: 8, facial: 4, scar: 4 };
+export const COUNT: Record<AvatarKey, number> = { body: 3, skin: 8, face: 6, hair: 10, hcol: 8, facial: 4, scar: 4, look: 7 };
 
 /** Skin tones across the real range. heat is the thermal value the tone reads as in the Heat lens. */
 export const SKINS = [
@@ -47,6 +51,8 @@ export const NAMES: Record<AvatarKey, readonly string[]> = {
   hcol: HAIRS.map((h) => h.name),
   facial: ['None', 'Stubble', 'Moustache', 'Beard'],
   scar: ['None', 'Cheek scar', 'Split brow', 'Burn'],
+  /** Placeholders: the real names come from the catalog (`avatar_looks`). */
+  look: ['Automatic', 'Look 1', 'Look 2', 'Look 3', 'Look 4', 'Look 5', 'Look 6'],
 };
 
 function rng(seed: number) {
@@ -75,6 +81,7 @@ export function avatarDefaults(seed: number | string = Math.random() * 429496729
     hcol: r() < 0.12 ? 6 + pick(2) : pick(6),
     facial: r() < 0.65 ? 0 : 1 + pick(3),
     scar: r() < 0.7 ? 0 : 1 + pick(3),
+    look: 0,
   };
 }
 
@@ -90,9 +97,25 @@ export function cleanAvatar(raw: unknown): AvatarSpec {
   return out;
 }
 
+/** An avatar made before faction looks existed is still a whole one. */
 export function hasAvatar(raw: unknown): boolean {
-  return !!raw && typeof raw === 'object' && KEYS.every((k) => typeof (raw as Record<string, unknown>)[k] === 'number');
+  return !!raw && typeof raw === 'object' && KEYS.every((k) => k === 'look' || typeof (raw as Record<string, unknown>)[k] === 'number');
 }
+
+/** The gear a Human wears for each look, as the tiers the drawing pieces understand:
+ *  face (dirt, cheek bandage, brow wrap), body (neckwear, straps, pouches, pad) and head (helmet, lamp). */
+export const HUMAN_LOOKS: readonly { face: number; body: number; head: number }[] = [
+  { face: 0, body: 0, head: 0 }, // automatic: by level, never read
+  { face: 1, body: 0, head: 0 }, // scavenged scarf
+  { face: 2, body: 4, head: 0 }, // riot visor
+  { face: 0, body: 2, head: 0 }, // field paint
+  { face: 0, body: 5, head: 3 }, // hardened kit
+  { face: 2, body: 0, head: 0 }, // command coat
+  { face: 6, body: 2, head: 0 }, // last hope sash
+];
+
+/** The infection stage a Zombie shows for each look (the same 0..4 scale as `decayStage`). */
+export const ZOMBIE_LOOK_STAGE: readonly number[] = [0, 1, 2, 3, 3, 4, 4];
 
 /** Human gear unlocks every 5 levels (title tier). */
 export const humanTier = (level: number) => Math.max(0, Math.floor(level / 5));

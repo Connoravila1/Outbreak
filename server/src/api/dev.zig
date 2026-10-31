@@ -56,6 +56,13 @@ pub fn grant(req: *Req, jw: *Stringify) HandlerError!void {
     try jw.write(.{ .me = try views.meFresh(req, p.id) });
 }
 
+/// Scale the chance of a found cosmetic (a dev server only), so the drop can be seen on demand.
+pub fn cosmeticOdds(req: *Req, jw: *Stringify) HandlerError!void {
+    const body = try req.json(struct { scale: f64 });
+    req.ctx.cosmetic_odds = @max(0.0, body.scale);
+    try jw.write(.{ .scale = req.ctx.cosmetic_odds });
+}
+
 pub fn heal(req: *Req, jw: *Stringify) HandlerError!void {
     var p = (try model.load(req, req.pid)).?;
     p.downed_until = null;

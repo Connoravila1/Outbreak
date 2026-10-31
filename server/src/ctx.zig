@@ -61,6 +61,8 @@ pub const Ctx = struct {
     live: live_mod.Live,
     auth: auth_mod.Verifier,
     rng: game.rng.Rng,
+    /// Dev servers and tests scale the chance of a found cosmetic here (1 is the designed rate).
+    cosmetic_odds: f64 = 1.0,
     /// Tests pin the clock here.
     clock_ms: ?i64 = null,
     shares: SharesCache = .{},

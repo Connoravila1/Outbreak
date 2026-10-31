@@ -116,6 +116,7 @@ const routes = [_]Route{
     .{ .method = .post, .path = "/api/raid/attack", .access = .faction, .handler = social.raidAttack },
 
     .{ .method = .post, .path = "/api/dev/grant", .access = .faction, .handler = dev.grant, .dev_only = true },
+    .{ .method = .post, .path = "/api/dev/cosmetic_odds", .access = .faction, .handler = dev.cosmeticOdds, .dev_only = true },
     .{ .method = .post, .path = "/api/dev/heal", .access = .faction, .handler = dev.heal, .dev_only = true },
     .{ .method = .post, .path = "/api/dev/down", .access = .faction, .handler = dev.down, .dev_only = true },
     .{ .method = .post, .path = "/api/dev/spawn_raid", .access = .faction, .handler = dev.spawnRaid, .dev_only = true },
