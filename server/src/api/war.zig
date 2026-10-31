@@ -46,8 +46,8 @@ pub fn war(req: *Req, jw: *Stringify) HandlerError!void {
     {
         var st = try req.ctx.db.query(
             \\SELECT p.callsign, p.level, SUM(w.points) AS pts FROM war_player w JOIN players p ON p.id = w.player_id
-            \\WHERE w.week = ? AND p.faction = ? GROUP BY w.player_id ORDER BY pts DESC, p.id LIMIT 10
-        , .{ week, p.fac() });
+            \\WHERE w.week = ? AND p.faction = ? AND p.banned_until <= ? GROUP BY w.player_id ORDER BY pts DESC, p.id LIMIT 10
+        , .{ week, p.fac(), req.now });
         defer st.finalize();
         while (try st.step()) {
             const level: u8 = @intCast(st.int(1));
@@ -75,20 +75,20 @@ pub fn leaderboard(req: *Req, jw: *Stringify) HandlerError!void {
         try req.ctx.db.query(
             \\SELECT p.callsign, p.level, p.faction, w.wins AS v, c.tag FROM contact_week w
             \\JOIN players p ON p.id = w.player_id LEFT JOIN clans c ON c.id = p.clan_id
-            \\WHERE w.week = ? AND w.wins > 0 AND p.faction IS NOT NULL ORDER BY v DESC, p.id LIMIT 50
-        , .{warstate.week(req.now)})
+            \\WHERE w.week = ? AND w.wins > 0 AND p.faction IS NOT NULL AND p.banned_until <= ? ORDER BY v DESC, p.id LIMIT 50
+        , .{ warstate.week(req.now), req.now })
     else if (weekly)
         try req.ctx.db.query(
             \\SELECT p.callsign, p.level, p.faction, SUM(w.points) AS v, c.tag FROM war_player w
             \\JOIN players p ON p.id = w.player_id LEFT JOIN clans c ON c.id = p.clan_id
-            \\WHERE w.week = ? AND p.faction IS NOT NULL GROUP BY w.player_id ORDER BY v DESC, p.id LIMIT 50
-        , .{warstate.week(req.now)})
+            \\WHERE w.week = ? AND p.faction IS NOT NULL AND p.banned_until <= ? GROUP BY w.player_id ORDER BY v DESC, p.id LIMIT 50
+        , .{ warstate.week(req.now), req.now })
     else
         try req.ctx.db.query(
             \\SELECT p.callsign, p.level, p.faction, p.level AS v, c.tag FROM players p
-            \\LEFT JOIN clans c ON c.id = p.clan_id WHERE p.faction IS NOT NULL
+            \\LEFT JOIN clans c ON c.id = p.clan_id WHERE p.faction IS NOT NULL AND p.banned_until <= ?
             \\ORDER BY p.level DESC, p.xp DESC, p.id LIMIT 50
-        , .{});
+        , .{req.now});
     defer st.finalize();
     var list: std.ArrayList(BoardEntry) = .empty;
     while (try st.step()) {

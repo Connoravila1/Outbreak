@@ -31,6 +31,7 @@ The server is authoritative over every outcome. The client renders state and sen
   - `src/live.zig` — in-memory state: latest position per player (never persisted, expires in
     2 min, or 4 min when it came from a Patrol check-in), active echoes, rate limits, and reported landmarks per geohash-6 area (12 h TTL, capped, never persisted).
   - `src/tick.zig` — every 5 s: PvP contact matching, raid/war housekeeping.
+  - `src/names.zig` — the name blocklist (callsigns, clan names, tags). `src/api/report.zig` — player reports. `src/admin.zig` — the `outbreak-server admin ...` moderation commands, run against the SQLite file directly (no network surface); see `docs/MODERATING.md`.
   - `src/sim.zig` — balance simulator (`zig build sim`): simulates players and prints pacing.
 - **Concurrency**: one global mutex around game state and the single SQLite connection. Correct
   and fast enough for thousands of players; revisit only with evidence.
@@ -73,7 +74,7 @@ degrees (WGS84). `faction` is `"human"` or `"zombie"`. Slots are `"weapon" | "ar
 | GET | `/api/catalog` | | static game data (below); cacheable by `version` |
 | GET | `/api/factions` | | `{human:{share, players}, zombie:{...}, underdog:"human"|"zombie"|null, underdog_bonus}` |
 | POST | `/api/register` | `{}` (optional `{callsign}`) | `{token, me}` — creates a **guest**: a player with no sign-in identity |
-| POST | `/api/callsign` | `{callsign}` | `{me}` — once only, same rules as before; 409 `callsign_set`, `callsign_taken`; 400 `callsign_invalid` |
+| POST | `/api/callsign` | `{callsign}` | `{me}` — once only (again after a moderator reset it, while `me.must_rename`); 409 `callsign_set`, `callsign_taken`; 400 `callsign_invalid` (also for a name on the blocklist: message "That name is not allowed here. Please pick another name.") |
 | POST | `/api/faction` | `{faction}` | `{me}` — once only; 409 `already_chosen`. Works before or after the callsign |
 | POST | `/api/auth/{google\|apple}` | `{id_token, nonce?, switch?}` + optional `Authorization` of the current player | `{token, me, created}` — see below |
 | POST | `/api/auth/link/{google\|apple}` | `{id_token, nonce?}` (auth) | `{me}` — 409 `identity_in_use` (taken by another player), 409 `already_linked` (this player already has that provider) |
@@ -171,6 +172,34 @@ them.
 | POST | `/api/stronghold/claim` | `{id, stance?}` | `{battles:[Battle], claimed, me}` |
 | POST | `/api/raid/attack` | `{id, stance?}` | `Battle` |
 
+### Reports and suspensions
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| POST | `/api/report` | `{kind:"player"\|"clan"\|"message", target, reason:"name"\|"harassment"\|"cheating"\|"other", note?}` | `{ok}` |
+
+`target` is the callsign for `player`, the clan id for `clan`, the message id for `message` (only
+visible to, and so reportable by, members of that clan). `note` is at most 140 characters. Errors:
+404 `not_found`, 400 `bad_request` (own callsign, bad reason, long note), 409 `already_reported` (one open
+report per reporter per target), 429 `report_limit` (five an hour). Reports are stored in `reports`
+and read with `outbreak-server admin reports`; there is no endpoint that lists them. Clan creation
+with a blocked name or tag answers 400 `name_not_allowed` with the same plain message.
+
+**Suspended accounts.** Every authenticated endpoint answers **403** to a suspended player:
+
+```json
+{"error":"banned","message":"This account is suspended.","reason":"Cheating with a GPS spoofer","until":1793793600000}
+```
+
+`until` is unix ms, or `null` for a permanent suspension. The token stays valid (so the client can
+keep showing the reason); a suspension that has run out simply stops applying. Suspended players are
+left out of the leaderboards and war top lists, their stored snapshot is never chosen as an Echo or
+garrison (an Echo already rolled from it is withdrawn), and their sessions get nothing else.
+`players.banned_until` is `0` for none and the largest integer for permanent.
+
+**Forced rename.** `admin rename` replaces the callsign with `Survivor####` and sets
+`players.must_rename`; `Me.must_rename` is then `true` until the player posts a new callsign to
+`POST /api/callsign`. The client shows the callsign screen at once.
+
 ### Dev only (`--dev`)
 `POST /api/dev/grant {xp?, salvage?, item?:{base, rarity}, consumable?:{id, n}, note?: id | "all"}`,
 `POST /api/dev/heal`, `POST /api/dev/reset_cooldowns`, `POST /api/dev/bot_contact` (stages an
@@ -186,7 +215,7 @@ Item = { uid: string, base: string, slot: Slot, rarity: "common"|"uncommon"|"rar
          stats: Stats /* final, incl. rarity+upgrade */, power: number, scrap_value: number,
          upgrade_cost: number|null /* null at +10 */ }
 
-Me = { id, callsign: string|null, faction: Faction|null, level, xp, xp_next, title,
+Me = { id, callsign: string|null, must_rename: boolean, faction: Faction|null, level, xp, xp_next, title,
        hp, max_hp, downed_until: number|null, stats: Stats /* total */, base_stats: Stats,
        salvage, inventory_cap, equipped: {weapon: uid|null, armor: uid|null, utility: uid|null},
        items: Item[], consumables: Record<string, number>,

@@ -35,6 +35,9 @@ export function setToken(token: string | null) {
 
 let onUnauthorized: (() => void) | null = null;
 export function setUnauthorizedHandler(h: () => void) { onUnauthorized = h; }
+/** Called for the 403 `banned` answer, which any authed request can get. */
+let onBanned: ((b: T.Banned) => void) | null = null;
+export function setBannedHandler(h: (b: T.Banned) => void) { onBanned = h; }
 
 async function request<R>(method: 'GET' | 'POST' | 'DELETE', path: string, body?: unknown, base?: string): Promise<R> {
   const headers: Record<string, string> = { Accept: 'application/json' };
@@ -59,6 +62,10 @@ async function request<R>(method: 'GET' | 'POST' | 'DELETE', path: string, body?
   if (!res.ok) {
     const e = (data ?? {}) as Partial<T.ApiErrorBody>;
     if (res.status === 401 && onUnauthorized) onUnauthorized();
+    if (res.status === 403 && e.error === 'banned' && onBanned) {
+      const b = data as Partial<T.Banned>;
+      onBanned({ reason: b.reason ?? '', until: typeof b.until === 'number' ? b.until : null });
+    }
     throw new ApiError(res.status, e.error ?? 'http_' + res.status, e.message ?? `Server error (${res.status}).`);
   }
   return data as R;
@@ -125,6 +132,9 @@ export const api = {
   sendClanChat: (text: string) => post<{ messages: T.ClanMessage[] }>('/api/clan/chat', { text }),
   claimStronghold: (id: string, stance?: T.Stance) =>
     post<{ battles: T.Battle[]; claimed: boolean; me: T.Me }>('/api/stronghold/claim', { id, ...(stance ? { stance } : {}) }),
+  /** Tell the server's owner about a player, a clan (by id) or a clan chat message (by id). */
+  report: (kind: T.ReportKind, target: string, reason: T.ReportReason, note?: string) =>
+    post<{ ok: boolean }>('/api/report', { kind, target, reason, ...(note ? { note } : {}) }),
   raidAttack: (id: string, stance?: T.Stance) => post<T.Battle>('/api/raid/attack', { id, ...(stance ? { stance } : {}) }),
 
   // dev only (--dev)

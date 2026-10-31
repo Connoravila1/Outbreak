@@ -24,11 +24,23 @@ pub fn windowOf(now: i64) i64 {
     return @divFloor(now, window_ms);
 }
 
+/// True when the Echo is a snapshot of a player suspended after it was rolled.
+pub fn sourceSuspended(req: *Req, e: live.Echo) HandlerError!bool {
+    const src = e.source orelse return false;
+    const banned = try req.ctx.db.scalar("SELECT banned_until > ? FROM players WHERE id = ?", .{ req.now, src });
+    return banned != null and banned.? != 0;
+}
+
 /// The echo to show this player now, rolling it the first time the window is seen.
 pub fn current(req: *Req, p: *const model.Player, pos: live.Pos) HandlerError!?live.Echo {
     const ctx = req.ctx;
     const window = windowOf(req.now);
-    if (ctx.live.echoFor(p.id, window)) |e| return if (e.none) null else e;
+    if (ctx.live.echoFor(p.id, window)) |e| {
+        if (e.none) return null;
+        // An Echo already rolled from someone suspended since is withdrawn.
+        if (try sourceSuspended(req, e)) return null;
+        return e;
+    }
 
     var echo = live.Echo{ .owner = p.id, .window = window, .none = true, .expires_at = (window + 1) * window_ms };
     defer ctx.live.putEcho(echo) catch {};
@@ -61,6 +73,9 @@ pub fn current(req: *Req, p: *const model.Player, pos: live.Pos) HandlerError!?l
     return echo;
 }
 
+/// A suspended player's snapshot is never served (the extra parameter is the current time).
+pub const not_banned = " AND NOT EXISTS (SELECT 1 FROM players b WHERE b.id = snapshots.player_id AND b.banned_until > ?)";
+
 const Picked = struct { player_id: i64, build: snapshot.Build };
 
 fn pickSnapshot(req: *Req, faction: data.Faction, not_pid: i64, level: u8, rng: *rng_mod.Rng) HandlerError!?Picked {
@@ -68,14 +83,14 @@ fn pickSnapshot(req: *Req, faction: data.Faction, not_pid: i64, level: u8, rng: 
     const hi = @as(i64, level) + level_band;
     const db = &req.ctx.db;
     const count = (try db.scalar(
-        "SELECT COUNT(*) FROM snapshots WHERE faction = ? AND player_id != ? AND level BETWEEN ? AND ?",
-        .{ faction, not_pid, lo, hi },
+        "SELECT COUNT(*) FROM snapshots WHERE faction = ? AND player_id != ? AND level BETWEEN ? AND ?" ++ not_banned,
+        .{ faction, not_pid, lo, hi, req.now },
     )) orelse 0;
     if (count == 0) return null;
     const skip: i64 = rng.below(@intCast(@min(count, 1000)));
     var st = try db.query(
-        "SELECT player_id, level, items, abilities FROM snapshots WHERE faction = ? AND player_id != ? AND level BETWEEN ? AND ? ORDER BY player_id LIMIT 1 OFFSET ?",
-        .{ faction, not_pid, lo, hi, skip },
+        "SELECT player_id, level, items, abilities FROM snapshots WHERE faction = ? AND player_id != ? AND level BETWEEN ? AND ? " ++ not_banned ++ " ORDER BY player_id LIMIT 1 OFFSET ?",
+        .{ faction, not_pid, lo, hi, req.now, skip },
     );
     defer st.finalize();
     if (!try st.step()) return null;

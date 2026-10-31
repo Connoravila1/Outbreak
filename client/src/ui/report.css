@@ -1,0 +1,19 @@
+/* ----- Report sheet and the small Report controls ----- */
+.rep-btn {
+  flex: none; min-height: 36px; padding: 0 8px; background: transparent; border: 0; cursor: pointer;
+  color: var(--text-dim); font-size: var(--fs-12); text-decoration: underline; text-underline-offset: 3px;
+}
+.rep-btn:hover, .rep-btn:focus-visible { color: var(--text); }
+:root[data-lens='heat'] .rep-btn { text-transform: lowercase; letter-spacing: .08em; text-decoration: none; }
+.rp-title { font-size: var(--fs-20); margin: 0; }
+.rp-target { margin: 4px 0 12px; font-size: var(--fs-16); font-weight: 700; overflow-wrap: anywhere; }
+.rp-reasons { border: 0; padding: 0; margin: 0 0 4px; display: grid; gap: 0; }
+.rp-reasons legend { padding: 0; margin-bottom: 4px; font-size: var(--fs-14); }
+.rp-reason { display: flex; align-items: center; gap: 12px; min-height: var(--tap); border-bottom: 1px solid var(--line); font-size: var(--fs-16); }
+.rp-reason input { width: 22px; height: 22px; accent-color: var(--accent); flex: none; }
+.rp-note { width: 100%; resize: none; font: inherit; }
+.rp-count { font-size: var(--fs-12); text-align: right; margin: 2px 0 0; }
+.rp-actions { display: flex; gap: 10px; margin-top: 12px; }
+.rp-actions .btn { flex: 1; }
+.rp-sent { display: grid; gap: 12px; }
+.rp-hide { padding: 6px 0; }

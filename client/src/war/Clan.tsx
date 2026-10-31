@@ -5,6 +5,8 @@ import { say } from '../ui/voice';
 import { Icon } from '../ui/Icon';
 import { Action, ErrorLine, pushToast, Section } from '../ui/kit';
 import { ago, usePoll } from '../ui/hooks';
+import { ReportButton } from '../ui/ReportSheet';
+import { hiddenChat, openReport, showAllChat } from '../state/moderation';
 
 const CLAN_LEVEL = 10;
 const CREATE_COST = 500;
@@ -72,6 +74,7 @@ function Browse() {
                 <b><span class="tag">[{c.tag}]</span> {c.name}</b>
                 <span class="dim num">{c.members} / {MAX_MEMBERS} · {say('level total', 'combined level')} {c.level_sum}</span>
               </div>
+              <ReportButton label={`${c.name} clan`} onClick={() => openReport({ kind: 'clan', id: c.id, label: `[${c.tag}] ${c.name}` })} />
               <Action id={'why-join-' + c.id} reason={reason} busy={busy === c.id} onClick={() => join(c.id, { id: c.id })}>Join</Action>
             </li>
           );
@@ -115,13 +118,17 @@ function Chat() {
     catch (ex) { setErr(errorMessage(ex)); } finally { setBusy(false); }
   };
   const mine = me.value?.callsign;
+  const hidden = hiddenChat.value;
+  const shown = msgs.filter((m) => !hidden.includes(m.callsign.toLowerCase()));
   return (
     <Section title={say('Clan chat', 'the pack speaks')}>
       <ul class="chat" ref={box} aria-live="polite" aria-label="Clan chat">
-        {msgs.length === 0 && <li class="empty dim">{say('Quiet. Say something.', 'quiet.')}</li>}
-        {msgs.map((m) => (
+        {shown.length === 0 && <li class="empty dim">{say('Quiet. Say something.', 'quiet.')}</li>}
+        {shown.map((m) => (
           <li key={m.id} class={'msg' + (m.callsign === mine ? ' mine' : '')}>
-            <span class="msg-h"><b>{m.callsign}</b> <span class="dim">{ago(m.at)}</span></span>
+            <span class="msg-h"><b>{m.callsign}</b> <span class="dim">{ago(m.at)}</span>
+              {m.callsign !== mine && m.callsign !== '[deleted]' && <ReportButton label={`message from ${m.callsign}`} onClick={() => openReport({ kind: 'message', id: m.id, label: m.callsign, callsign: m.callsign })} />}
+            </span>
             <span class="msg-t">{m.text}</span>
           </li>
         ))}
@@ -131,6 +138,9 @@ function Chat() {
         <button class="btn primary" disabled={busy || !text.trim()} aria-disabled={busy || !text.trim()} type="submit" aria-label="Send"><Icon name="chat-bubble" size={22} /></button>
       </form>
       <p class="dim chat-count num">{text.length} / {CHAT_MAX}</p>
+      {hidden.length > 0 && (
+        <p class="dim chat-hidden">{hidden.length === 1 ? say('1 player hidden.', '1 voice muted.') : say(`${hidden.length} players hidden.`, `${hidden.length} voices muted.`)} <button class="rep-btn" onClick={showAllChat}>{say('Show all', 'unmute')}</button></p>
+      )}
       <ErrorLine text={err} />
     </Section>
   );
@@ -161,6 +171,7 @@ function Page() {
           <b class="code num">{clan.code}</b>
           <button class="btn" onClick={copy}><Icon name="scroll-unfurled" size={20} />{copied ? say('Copied', 'copied') : say('Copy', 'copy')}</button>
         </div>
+        <p class="dim clan-report"><ReportButton label={`${clan.name} clan`} onClick={() => openReport({ kind: 'clan', id: clan.id, label: `[${clan.tag}] ${clan.name}` })} /></p>
         <p class="dim"><Icon name="castle" size={16} /> {clan.strongholds} {say(clan.strongholds === 1 ? 'stronghold held' : 'strongholds held', clan.strongholds === 1 ? 'held ground' : 'held grounds')}</p>
         <ul class="perk-list">
           {perks.length === 0 ? <li class="dim">{say('No perks yet. Hold adjacent strongholds.', 'no gifts yet. hold ground side by side.')}</li> : perks.map((p) => <li key={p}>{p}</li>)}
@@ -176,6 +187,7 @@ function Page() {
               </span>
               <span class="role label-tape">{mb.role}</span>
               <span class="rk-val num">{mb.weekly_points}<small> pts</small></span>
+              {mb.callsign !== mine && <ReportButton label={mb.callsign} onClick={() => openReport({ kind: 'player', id: mb.callsign, label: mb.callsign, callsign: mb.callsign })} />}
             </li>
           ))}
         </ul>

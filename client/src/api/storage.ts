@@ -90,6 +90,8 @@ export const KEYS = {
   stance: 'outbreak.stance',
   /** Ids of the found notes the player has opened. */
   notesSeen: 'outbreak.notesSeen',
+  /** Callsigns whose clan chat messages this player chose to hide (lowercase). */
+  hiddenChat: 'outbreak.hiddenChat',
 } as const;
 
 /** Device settings that outlive a sign-out: they are about the phone, not the player. */

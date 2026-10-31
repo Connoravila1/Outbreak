@@ -87,6 +87,8 @@ export interface Me {
   id: string;
   /** Null until the player chooses one. */
   callsign: string | null;
+  /** A moderator reset the callsign: the player must choose a new one before playing. */
+  must_rename: boolean;
   faction: Faction | null;
   level: number;
   xp: number;
@@ -322,3 +324,9 @@ export interface ClanDetail {
 export interface ClanMessage { id: string; callsign: string; text: string; at: number }
 
 export interface ApiErrorBody { error: string; message: string }
+
+/** The 403 `banned` answer: why, and until when (null: for good). */
+export interface Banned { reason: string; until: number | null }
+
+export type ReportKind = 'player' | 'clan' | 'message';
+export type ReportReason = 'name' | 'harassment' | 'cheating' | 'other';

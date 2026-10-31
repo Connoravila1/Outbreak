@@ -166,6 +166,8 @@ pub const MeView = struct {
     id: []const u8,
     /// Null until the player picks one.
     callsign: ?[]const u8,
+    /// A moderator reset the callsign; the player must choose a new one.
+    must_rename: bool,
     faction: ?data.Faction,
     level: u8,
     xp: u32,
@@ -314,6 +316,7 @@ pub fn meView(req: *Req, p: *Player) HandlerError!MeView {
     return .{
         .id = try std.fmt.allocPrint(a, "{d}", .{p.id}),
         .callsign = if (p.callsign.len > 0) p.callsign else null,
+        .must_rename = ((try req.ctx.db.scalar("SELECT must_rename FROM players WHERE id = ?", .{p.id})) orelse 0) != 0,
         .faction = p.faction,
         .level = p.level,
         .xp = p.xp,

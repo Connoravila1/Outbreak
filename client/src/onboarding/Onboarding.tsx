@@ -26,6 +26,7 @@ type Step = 'broadcast' | 'signin' | 'locate' | 'bitten' | 'split' | 'commit' | 
 function resumeStep(): Step {
   const m = me.value;
   if (!m) return 'broadcast';
+  if (m.faction && m.must_rename) return 'callsign';
   if (!m.faction) return 'locate';
   return m.account.guest ? 'save' : 'callsign';
 }
@@ -37,6 +38,8 @@ export function Onboarding() {
   const [chosen, setChosen] = useState<Faction | null>(me.value?.faction ?? null);
   // Resumed accounts have seen the bite already.
   const [skipBite] = useState(!!me.value);
+  // A moderator reset this callsign: choose again, then straight back into the game.
+  const [renaming] = useState(!!me.value?.must_rename);
 
   const go = (s: Step) => setStep(s);
   const chose = (f: Faction) => { setChosen(f); lensOverride.value = f === 'human' ? 'survey' : 'heat'; go('commit'); };
@@ -44,7 +47,7 @@ export function Onboarding() {
   /** A sign-in succeeded: continue from wherever that character stands. */
   const signedIn = (d: Done) => {
     const m = d.me;
-    if (m.faction && m.callsign) { void loadCatalog(); enterApp(); } else if (m.faction) { setChosen(m.faction); go('callsign'); } else go('locate');
+    if (m.faction && m.callsign && !m.must_rename) { void loadCatalog(); enterApp(); } else if (m.faction) { setChosen(m.faction); go('callsign'); } else go('locate');
   };
 
   const p = position.value;
@@ -56,7 +59,7 @@ export function Onboarding() {
     case 'split': return p ? <SplitLens center={p} onChosen={chose} /> : <Locate onDone={() => go('split')} />;
     case 'commit': return <Commit faction={chosen ?? 'human'} onDone={() => go(me.value?.account.guest ? 'save' : 'callsign')} />;
     case 'save': return <Save onDone={signedIn} onGuest={() => go('callsign')} />;
-    case 'callsign': return <Callsign faction={chosen ?? 'human'} onDone={() => { void loadCatalog().then(() => go('avatar')); }} />;
+    case 'callsign': return <Callsign faction={chosen ?? 'human'} renaming={renaming} onDone={() => { void loadCatalog().then(() => (renaming ? enterApp() : go('avatar'))); }} />;
     case 'avatar': return <div class="ob-screen"><div class="ob-card wide"><Creator faction={chosen ?? 'human'} level={1} initial={me.value?.avatar} later onDone={() => go('kit')} /></div></div>;
     case 'kit': return <Kit onDone={() => go('briefing')} />;
     case 'briefing': return <Briefing onDone={enterApp} />;

@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const server = @import("server");
+const game = @import("game");
 
 const log = std.log.scoped(.main);
 
@@ -19,6 +20,7 @@ const Config = struct {
 const usage =
     \\usage: outbreak-server [--port 8080] [--bind 0.0.0.0] [--data ./data] [--dev]
     \\                       [--google-client-ids ID,ID,...] [--apple-audiences ID,ID,...]
+    \\       outbreak-server admin [--data ./data] <command>    (moderation; "admin help" lists the commands)
     \\environment: OUTBREAK_PORT, OUTBREAK_BIND, OUTBREAK_DATA, OUTBREAK_DEV (1 or true),
     \\             OUTBREAK_GOOGLE_CLIENT_IDS, OUTBREAK_APPLE_AUDIENCES
     \\Sign-in: the Google client IDs are the web, Android and iOS OAuth clients (web first); the Apple
@@ -79,7 +81,64 @@ fn parseConfig(init: std.process.Init) !Config {
     return cfg;
 }
 
+/// `outbreak-server admin [--data DIR] <command> ...`: moderation on the database directly.
+fn adminMain(init: std.process.Init) !void {
+    const io = init.io;
+    const gpa = init.gpa;
+    var data_dir: []const u8 = init.environ_map.get("OUTBREAK_DATA") orelse "./data";
+    var rest: std.ArrayList([]const u8) = .empty;
+    defer rest.deinit(gpa);
+    var args = init.minimal.args.iterate();
+    _ = args.next();
+    _ = args.next();
+    while (args.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--data")) {
+            data_dir = args.next() orelse return error.MissingValue;
+        } else try rest.append(gpa, arg);
+    }
+
+    var aw: std.Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+    const stdout = std.Io.File.stdout();
+    const stdout_err = std.Io.File.stderr();
+    if (rest.items.len == 0 or std.mem.eql(u8, rest.items[0], "help") or std.mem.eql(u8, rest.items[0], "--help")) {
+        try stdout.writeStreamingAll(io, server.admin.usage);
+        return;
+    }
+
+    const db_path = try std.fmt.allocPrintSentinel(gpa, "{s}/outbreak.db", .{data_dir}, 0);
+    defer gpa.free(db_path);
+    // Opening would create an empty database; a wrong --data should say so instead.
+    std.Io.Dir.cwd().access(io, db_path, .{}) catch {
+        const msg = try std.fmt.allocPrint(gpa, "No database at {s}. Pass --data with the folder the server uses.\n", .{db_path});
+        defer gpa.free(msg);
+        try stdout_err.writeStreamingAll(io, msg);
+        std.process.exit(1);
+    };
+    var db = try server.db.Db.open(db_path);
+    defer db.close();
+
+    var seed_bytes: [8]u8 = undefined;
+    io.random(&seed_bytes);
+    var rng = game.rng.Rng.init(std.mem.readInt(u64, &seed_bytes, .little));
+    const now = std.Io.Clock.real.now(io).toMilliseconds();
+    var failed = false;
+    server.admin.run(gpa, &db, now, &rng, rest.items, &aw.writer) catch |e| switch (e) {
+        error.Failed => failed = true,
+        else => return e,
+    };
+    try stdout.writeStreamingAll(io, aw.written());
+    if (failed) std.process.exit(1);
+}
+
 pub fn main(init: std.process.Init) !void {
+    {
+        var probe = init.minimal.args.iterate();
+        _ = probe.next();
+        if (probe.next()) |first| {
+            if (std.mem.eql(u8, first, "admin")) return adminMain(init);
+        }
+    }
     const cfg = parseConfig(init) catch |e| {
         std.debug.print("{s}\n{s}", .{ @errorName(e), usage });
         std.process.exit(2);

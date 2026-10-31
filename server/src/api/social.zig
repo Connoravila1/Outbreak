@@ -10,6 +10,7 @@ const rewards = @import("../rewards.zig");
 const warstate = @import("../warstate.zig");
 const snapshot = @import("../snapshot.zig");
 const account = @import("account.zig");
+const names = @import("../names.zig");
 const world = @import("world.zig");
 const raids = @import("../raids.zig");
 
@@ -131,7 +132,7 @@ pub fn createClan(req: *Req, jw: *Stringify) HandlerError!void {
     const tag = std.mem.trim(u8, body.tag, " ");
     if (!validClanText(name, 3, 24, true)) return req.fail(400, "bad_request", "Clan names are 3 to 24 letters, digits, spaces, _ or -.");
     if (!validClanText(tag, 2, 4, false)) return req.fail(400, "bad_request", "Clan tags are 2 to 4 letters or digits.");
-    if (!account.callsignAllowed(name) or !account.callsignAllowed(tag)) return req.fail(400, "bad_request", "That name is not allowed.");
+    if (!account.callsignAllowed(name) or !account.callsignAllowed(tag)) return req.fail(400, "name_not_allowed", names.rejection);
     if (p.salvage < clan_cost) return req.fail(409, "not_enough_salvage", "Founding a clan costs 500 salvage.");
 
     const db = &req.ctx.db;
@@ -288,8 +289,8 @@ pub fn claimStronghold(req: *Req, jw: *Stringify) HandlerError!void {
         // The holding clan's garrison: Echoes of up to three of its members, fought in sequence.
         var st = try db.query(
             \\SELECT s.level, s.items, s.abilities, s.faction FROM snapshots s
-            \\JOIN players p ON p.id = s.player_id WHERE p.clan_id = ? ORDER BY s.level DESC, s.player_id LIMIT 3
-        , .{hid});
+            \\JOIN players p ON p.id = s.player_id WHERE p.clan_id = ? AND p.banned_until <= ? ORDER BY s.level DESC, s.player_id LIMIT 3
+        , .{ hid, req.now });
         defer st.finalize();
         while (try st.step()) {
             const foe = snapshot.Build.decode(@enumFromInt(st.int(3)), @intCast(st.int(0)), st.text(1), st.text(2));

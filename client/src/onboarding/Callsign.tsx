@@ -14,7 +14,7 @@ export function validateCallsign(raw: string): string | null {
 }
 
 /** "What do they call you?" The name is chosen once, after the faction is committed. */
-export function Callsign({ faction, onDone }: { faction: Faction; onDone: () => void }) {
+export function Callsign({ faction, onDone, renaming }: { faction: Faction; onDone: () => void; renaming?: boolean }) {
   const [name, setName] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -38,8 +38,9 @@ export function Callsign({ faction, onDone }: { faction: Faction; onDone: () => 
   return (
     <div class={'ob-screen ob-callsign ' + faction}>
       <form class="ob-card" onSubmit={submit} noValidate>
-        <p class="eyebrow">{say('Identity', 'name')}</p>
-        <h1 class="ob-h display breathe">{say('What do they call you?', 'what do they call you?')}</h1>
+        <p class="eyebrow">{renaming ? say('Callsign reset', 'name taken back') : say('Identity', 'name')}</p>
+        <h1 class="ob-h display breathe">{renaming ? say('Choose a new callsign.', 'choose a new name.') : say('What do they call you?', 'what do they call you?')}</h1>
+        {renaming && <p class="ob-hint">{say('Your old callsign broke the naming rules, so it was reset. Pick another; your progress is kept.', 'the old name broke the rules and was taken. pick another. you keep everything.')}</p>}
         <label class="sr-only" for="cs">Callsign</label>
         <input id="cs" class="field big" value={name} maxLength={16} autoFocus autocomplete="off" autocapitalize="off" spellcheck={false}
           placeholder={say('Callsign', 'a name')}

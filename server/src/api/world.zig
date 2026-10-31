@@ -499,7 +499,7 @@ fn engageEcho(req: *Req, jw: *Stringify, p: *Player, pos: live.Pos, id: []const 
     const window = echo_mod.windowOf(req.now);
     const e = ctx.live.echoFor(p.id, window) orelse return req.fail(404, "not_found", "That echo has faded.");
     var expect = e.id();
-    if (e.none or !std.mem.eql(u8, std.mem.sliceTo(&expect, 0), id) or e.expires_at <= req.now) {
+    if (e.none or !std.mem.eql(u8, std.mem.sliceTo(&expect, 0), id) or e.expires_at <= req.now or try echo_mod.sourceSuspended(req, e)) {
         return req.fail(404, "not_found", "That echo has faded.");
     }
     if (!withinReach(pos, e.lat, e.lon)) return req.fail(409, "too_far", "Get closer to engage.");

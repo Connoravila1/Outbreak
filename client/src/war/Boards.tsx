@@ -4,6 +4,8 @@ import { me } from '../state/store';
 import { say } from '../ui/voice';
 import { Icon } from '../ui/Icon';
 import { ErrorLine, Section, Seg } from '../ui/kit';
+import { ReportButton } from '../ui/ReportSheet';
+import { openReport } from '../state/moderation';
 
 type Board = 'weekly' | 'contacts' | 'level';
 
@@ -34,6 +36,7 @@ export function Leaderboard() {
                 <span class="dim">{say('Level', 'level')} {e.level} · {e.title} · <Icon name={e.faction === 'human' ? 'shield' : 'biohazard'} size={12} /> {e.faction === 'human' ? 'Human' : 'Zombie'}</span>
               </span>
               <span class="rk-val num">{e.value.toLocaleString()}<small>{board === 'weekly' ? ' pts' : board === 'contacts' ? say(' wins', ' kills') : ''}</small></span>
+              {e.callsign !== mine && <ReportButton label={e.callsign} onClick={() => openReport({ kind: 'player', id: e.callsign, label: e.callsign, callsign: e.callsign })} />}
             </li>
           ))}
         </ol>
