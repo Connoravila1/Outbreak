@@ -1,7 +1,7 @@
 # OUTBREAK: Humanity's Last Stand — Game Design
 
-This is the game. It realizes the original design (`Original_Outbreak_GDD_v1.docx`, written by the
-creator's father) as a shippable real-world GPS faction RPG. Where this document departs from the
+This is the game. It builds on the original design document (`Original_Outbreak_GDD_v1.docx`) and
+turns it into a shippable real-world GPS faction RPG. Where this document departs from the
 original, the reason is given. Numbers here are the source of truth for the server's game data;
 change them here first.
 
