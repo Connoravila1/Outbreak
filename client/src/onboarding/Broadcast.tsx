@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'preact/hooks';
-import { tick, unlockAudio } from '../audio/fx';
+import { broadcast, tick, unlockAudio } from '../audio/fx';
 import { reducedMotion } from '../state/store';
 
 const LINES = [
@@ -47,7 +47,7 @@ export function Broadcast({ onDone, onRecover }: { onDone: () => void; onRecover
     <div class={'ob-screen broadcast' + (cut ? ' cut' : '')}>
       {!started ? (
         <div class="bc-start">
-          <button class="bc-tap" onClick={() => { unlockAudio(); setStarted(true); }} autoFocus>
+          <button class="bc-tap" onClick={() => { unlockAudio(); broadcast(); setStarted(true); }} autoFocus>
             <span class="bc-dot" aria-hidden="true" />
             Tap to listen
           </button>

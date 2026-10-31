@@ -6,7 +6,7 @@ import { Icon } from '../ui/Icon';
 import { Action, ErrorLine, Meter } from '../ui/kit';
 import { enqueueLevelUp } from '../battle/session';
 import { showRewards } from '../ui/RewardsSheet';
-import { clunk } from '../audio/fx';
+import { claim as claimSound } from '../audio/fx';
 
 function rewardBits(m: Mission): string {
   const r = m.rewards;
@@ -28,7 +28,7 @@ export function MissionCard({ m, weekly }: { m: Mission; weekly?: boolean }) {
     try {
       const r = await api.claimMission(m.id);
       applyMe(r.me);
-      clunk();
+      claimSound();
       showRewards(say('Mission done', 'taken'), r.rewards);
       enqueueLevelUp(r.rewards.level_up, r.me);
     } catch (e) { setErr(errorMessage(e)); } finally { setBusy(false); }

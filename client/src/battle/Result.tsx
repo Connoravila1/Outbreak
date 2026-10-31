@@ -46,7 +46,7 @@ function XpBar({ b, fast }: { b: Battle; fast: boolean }) {
   const { from, to, gain } = xpSpan(b);
   const [w, setW] = useState(from);
   useEffect(() => {
-    const t = window.setTimeout(() => setW(to), 80);
+    const t = window.setTimeout(() => { setW(to); if (gain > 0) fx.xpFill(1300); }, 80);
     return () => clearTimeout(t);
   }, []);
   return (
@@ -98,7 +98,7 @@ export function Result({ battle, onContinue }: { battle: Battle; onContinue: () 
   }, [step]);
 
   useEffect(() => {
-    if (step === 0) { if (won) fx.levelUp(); else fx.dodge(); return; }
+    if (step === 0) { if (won) fx.held(); else fx.fell(); return; }
     const flipped = step - 3; // items flipped so far
     if (step > 3 && flipped >= 1 && flipped <= n) {
       const it = r.items[flipped - 1];

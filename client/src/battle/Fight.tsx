@@ -73,7 +73,7 @@ export function Fight({ battle, onDone }: { battle: Battle; onDone: () => void }
   const ids = useRef(1);
   const live = useRef(true);
 
-  useEffect(() => () => { live.current = false; timers.current.forEach(clearTimeout); }, []);
+  useEffect(() => { fx.engage(); return () => { live.current = false; timers.current.forEach(clearTimeout); }; }, []);
 
   useEffect(() => {
     if (i > 0) apply(turns[i - 1], i > 1 ? turns[i - 2] : null);
@@ -144,8 +144,10 @@ export function Fight({ battle, onDone }: { battle: Battle; onDone: () => void }
       }
       // sound lands with the blow
       if (crit) fx.crit();
-      else if (t.ev === 'hit' || t.ev === 'dot') fx.hit();
+      else if (t.ev === 'dot') fx.dotTick();
+      else if (t.ev === 'hit') fx.hit();
       else if (t.ev === 'dodge') fx.dodge();
+      if (add.some((f) => f.kind === 'heal')) fx.healTick();
     });
 
     if (!rm && crit) {

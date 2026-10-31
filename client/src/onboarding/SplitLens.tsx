@@ -157,7 +157,7 @@ export function SplitLens({ center, onChosen }: Props) {
     if (!lean || stage !== 'choose' || holdRaf.current) return;
     unlockAudio();
     const t0 = performance.now();
-    heart.current = heartbeatLoop(64, 0.8);
+    heart.current = heartbeatLoop(64, 0.8, undefined, { riser: true });
     const step = (t: number) => {
       const k = Math.min(1, (t - t0) / HOLD_MS);
       setHold(k);

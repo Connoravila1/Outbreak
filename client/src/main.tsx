@@ -19,13 +19,15 @@ document.documentElement.dataset.lens = 'neutral';
 // app and the store are imported only afterwards.
 async function main() {
   await hydrateStorage();
-  const [{ App }, { installMock, mockRequested }, { initNative }] = await Promise.all([
+  const [{ App }, { installMock, mockRequested }, { initNative }, { initAudio }] = await Promise.all([
     import('./app'),
     import('./dev/mock'),
     import('./native/lifecycle'),
+    import('./audio/director'),
   ]);
   if (mockRequested()) installMock();
   initNative();
+  initAudio();
   render(<App />, document.getElementById('app')!);
 }
 void main();

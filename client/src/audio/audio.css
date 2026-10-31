@@ -1,0 +1,4 @@
+.vol-box { display: grid; gap: 4px; padding: 2px 0 6px 14px; border-left: 2px solid color-mix(in srgb, var(--muted, #7c8288) 40%, transparent); margin: 0 0 6px; }
+.vol-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 48px; }
+.vol-row .tg-text { display: grid; gap: 2px; }
+.vol-row input[type="range"] { flex: 0 0 44%; min-width: 120px; accent-color: var(--hazard, var(--hot, #f2be1a)); height: 32px; }
