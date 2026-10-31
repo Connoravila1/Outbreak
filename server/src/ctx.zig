@@ -93,7 +93,10 @@ pub const Ctx = struct {
 
 pub const Method = enum { get, post, delete, options, other };
 
-pub const Failure = struct { status: u16, code: []const u8, message: []const u8 };
+/// A suspension, sent with a 403 so the client can say why and until when (null: for good).
+pub const Ban = struct { until: ?i64, reason: []const u8 };
+
+pub const Failure = struct { status: u16, code: []const u8, message: []const u8, ban: ?Ban = null };
 
 /// Handlers return `error.Api` after `Req.fail` has recorded the HTTP error to send.
 pub const HandlerError = error{ Api, OutOfMemory, Sqlite, WriteFailed };
@@ -122,6 +125,16 @@ pub const Req = struct {
 
     pub fn fail(self: *Req, status: u16, code: []const u8, message: []const u8) error{Api} {
         self.failure = .{ .status = status, .code = code, .message = message };
+        return error.Api;
+    }
+
+    pub fn failBanned(self: *Req, until: i64, reason: []const u8) error{Api} {
+        self.failure = .{
+            .status = 403,
+            .code = "banned",
+            .message = "This account is suspended.",
+            .ban = .{ .until = if (until == std.math.maxInt(i64)) null else until, .reason = reason },
+        };
         return error.Api;
     }
 

@@ -123,6 +123,8 @@ interface DB {
   rec: PlayerRecord;
   stance?: Stance; bestiary?: Record<string, number>;
   notes?: Held[]; noteClaims?: string[];
+  /** Moderation: a forced callsign change, reports sent (to dedupe), and a suspension. */
+  mustRename?: boolean; reported?: string[]; banned?: { reason: string; until: number | null } | null;
 }
 function fresh(): DB {
   return {
@@ -208,7 +210,7 @@ function buildMe(): Me {
   const slots = slotsAt(db.level);
   const myClan = db.clan ? allClans().find((c) => c.id === db.clan!.id) : null;
   return {
-    id: 'mock-1', callsign: db.callsign, faction: db.faction, level: db.level, xp: db.xp,
+    id: 'mock-1', callsign: db.callsign, must_rename: !!db.mustRename, faction: db.faction, level: db.level, xp: db.xp,
     xp_next: CATALOG.levels.xp_to_next[db.level - 1], title: titles[Math.min(titles.length - 1, Math.floor(db.level / 5))],
     hp: Math.min(db.hp, total.hp), max_hp: total.hp, downed_until: null,
     stats: { hp: total.hp, atk: Math.round(total.atk), def: Math.round(total.def), spd: Math.round(total.spd) },
@@ -470,6 +472,7 @@ function seedChat() {
 function checkCallsign(cs: string) {
   if (cs.length < 3 || cs.length > 16) throw new HttpError(400, 'callsign_invalid', 'Callsigns are 3 to 16 characters: letters, digits, _ and -.');
   if (!/^[A-Za-z0-9_-]+$/.test(cs)) throw new HttpError(400, 'callsign_invalid', 'Callsigns are 3 to 16 characters: letters, digits, _ and -.');
+  if (/shit|fuck|cunt/i.test(cs)) throw new HttpError(400, 'callsign_invalid', 'That name is not allowed here. Please pick another name.');
   if (cs.toLowerCase() === 'taken') throw new HttpError(409, 'callsign_taken', 'That callsign is taken.');
 }
 /** Characters that live "on the server": identity key -> saved DB. */
@@ -500,12 +503,15 @@ function mockSignIn(body: any, authed: boolean, link: boolean): unknown {
 }
 
 // ---------- routing ----------
-class HttpError { constructor(public status: number, public error: string, public message: string) {} }
+class HttpError { constructor(public status: number, public error: string, public message: string, public extra: Record<string, unknown> = {}) {} }
 const need = (b: any, k: string) => { if (b?.[k] == null) throw new HttpError(400, 'bad_request', `Missing ${k}.`); return b[k]; };
 const findItem = (uid: string) => { const it = db.items.find((i) => i.uid === uid); if (!it) throw new HttpError(404, 'no_item', 'No such item.'); return it; };
 
 function route(method: string, path: string, body: any, authed: boolean): unknown {
-  const guard = () => { if (!authed || !db.exists) throw new HttpError(401, 'unauthorized', 'Sign in again.'); };
+  const guard = () => {
+    if (!authed || !db.exists) throw new HttpError(401, 'unauthorized', 'Sign in again.');
+    if (db.banned && (db.banned.until === null || db.banned.until > Date.now())) throw new HttpError(403, 'banned', 'This account is suspended.', db.banned);
+  };
   const mine = () => ({ me: buildMe() });
   switch (`${method} ${path}`) {
     case 'GET /api/health': return { ok: true, version: 'mock', players_online: 41, providers: { google: false, apple: false, dev: true, google_web_client_id: null, apple_web_service_id: null } };
@@ -519,10 +525,10 @@ function route(method: string, path: string, body: any, authed: boolean): unknow
     }
     case 'POST /api/callsign': {
       guard();
-      if (db.callsign) throw new HttpError(409, 'callsign_set', 'Your callsign is permanent.');
+      if (db.callsign && !db.mustRename) throw new HttpError(409, 'callsign_set', 'Your callsign is permanent.');
       const cs = String(need(body, 'callsign')).trim();
       checkCallsign(cs);
-      db.callsign = cs; save();
+      db.callsign = cs; db.mustRename = false; save();
       return mine();
     }
     case 'POST /api/recover': {
@@ -738,6 +744,18 @@ function route(method: string, path: string, body: any, authed: boolean): unknow
       entries.push({ rank: 8, callsign: db.callsign ?? 'You', level: db.level, title: buildMe().title, faction: db.faction ?? 'human', value: weekly ? db.warPoints : contacts ? db.rec.contacts_won ?? 0 : db.level, clan_tag: null });
       return { entries: entries.sort((a, b) => b.value - a.value).map((e, i) => ({ ...e, rank: i + 1 })) };
     }
+    case 'POST /api/report': {
+      guard();
+      const kind = String(need(body, 'kind')), target = String(need(body, 'target')), reason = String(need(body, 'reason'));
+      if (!['name', 'harassment', 'cheating', 'other'].includes(reason)) throw new HttpError(400, 'bad_request', 'Choose a reason: name, harassment, cheating or other.');
+      if (!['player', 'clan', 'message'].includes(kind)) throw new HttpError(400, 'bad_request', 'Report a player, a clan or a message.');
+      const key = kind + ':' + target.toLowerCase();
+      db.reported = db.reported ?? [];
+      if (db.reported.includes(key)) throw new HttpError(409, 'already_reported', 'You already reported this. It is waiting to be reviewed.');
+      if (db.reported.length >= 5) throw new HttpError(429, 'report_limit', 'You have sent several reports already. Try again in an hour.');
+      db.reported.push(key); save();
+      return { ok: true };
+    }
     case 'GET /api/feed': guard(); return { events: db.feed.map((e) => ({ ...e, battle: undefined })) };
     case 'GET /api/clans': {
       guard();
@@ -804,6 +822,11 @@ function route(method: string, path: string, body: any, authed: boolean): unknow
 export function installMock() {
   // Handy from the console: __mockContact() stages a Contact on the next poll.
   (window as unknown as { __mockContact: () => void }).__mockContact = () => { db.contactPending = true; save(); };
+  // Console: __mockBan(days?, reason?) suspends this account, __mockUnban() lifts it, __mockRename() forces a new callsign.
+  const w = window as unknown as Record<string, unknown>;
+  w.__mockBan = (days?: number, reason = 'Using a GPS spoofer.') => { db.banned = { reason, until: days ? Date.now() + days * 86400e3 : null }; save(); };
+  w.__mockUnban = () => { db.banned = null; save(); };
+  w.__mockRename = () => { db.callsign = 'Survivor4821'; db.mustRename = true; save(); };
   (window as unknown as { __mockRoute: typeof route }).__mockRoute = (m, p, b) => route(m, p, b, true);
   setFetcher(async (url, init) => {
     await new Promise((r) => setTimeout(r, 60 + Math.random() * 120));
@@ -814,7 +837,7 @@ export function installMock() {
       const data = route(init.method ?? 'GET', u.pathname, body, auth);
       return new Response(JSON.stringify(data), { status: 200 });
     } catch (e) {
-      if (e instanceof HttpError) return new Response(JSON.stringify({ error: e.error, message: e.message }), { status: e.status });
+      if (e instanceof HttpError) return new Response(JSON.stringify({ error: e.error, message: e.message, ...e.extra }), { status: e.status });
       throw e;
     }
   });

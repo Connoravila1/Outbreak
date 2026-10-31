@@ -55,7 +55,7 @@ export async function boot() {
   try {
     const m = await api.me();
     me.value = m;
-    const ready = !!m.faction && !!m.callsign;
+    const ready = !!m.faction && !!m.callsign && !m.must_rename;
     phase.value = ready ? 'app' : 'onboarding';
     if (ready) void loadCatalog();
   } catch (e) {

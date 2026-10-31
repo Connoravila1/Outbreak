@@ -12,6 +12,7 @@ const war = @import("api/war.zig");
 const dev = @import("api/dev.zig");
 const auth = @import("api/auth.zig");
 const notes = @import("api/notes.zig");
+const report = @import("api/report.zig");
 
 const Ctx = ctx_mod.Ctx;
 const Req = ctx_mod.Req;
@@ -95,6 +96,7 @@ const routes = [_]Route{
     .{ .method = .get, .path = "/api/clan", .access = .faction, .handler = social.clan },
     .{ .method = .get, .path = "/api/clan/chat", .access = .faction, .handler = social.chat },
     .{ .method = .post, .path = "/api/clan/chat", .access = .faction, .handler = social.chat },
+    .{ .method = .post, .path = "/api/report", .access = .faction, .handler = report.report },
     .{ .method = .post, .path = "/api/stronghold/claim", .access = .faction, .handler = social.claimStronghold },
     .{ .method = .post, .path = "/api/raid/attack", .access = .faction, .handler = social.raidAttack },
 
@@ -168,6 +170,10 @@ fn handleLocked(ctx: *Ctx, method_text: []const u8, path: []const u8, query: []c
     const result = run(&req, rt, token) catch |e| {
         if (e == error.Api) {
             const f = req.failure.?;
+            if (f.ban) |b| {
+                const json = Stringify.valueAlloc(gpa, .{ .@"error" = f.code, .message = f.message, .reason = b.reason, .until = b.until }, .{}) catch return static_500;
+                return .{ .status = f.status, .json = json };
+            }
             return errorResponse(gpa, f.status, f.code, f.message);
         }
         std.log.err("{s} {s}: {s}", .{ method_text, path, @errorName(e) });
@@ -176,14 +182,14 @@ fn handleLocked(ctx: *Ctx, method_text: []const u8, path: []const u8, query: []c
     return .{ .status = 200, .json = gpa.dupe(u8, result) catch return static_500 };
 }
 
-const Who = struct { id: i64, has_faction: bool, has_callsign: bool, last_seen: i64 };
+const Who = struct { id: i64, has_faction: bool, has_callsign: bool, last_seen: i64, banned_until: i64, ban_reason: []const u8 };
 
 fn authenticate(req: *Req, token: []const u8) HandlerError!?Who {
     const hash = account.hashHex(token);
-    var st = try req.ctx.db.query("SELECT id, faction, last_seen, callsign <> '' FROM players WHERE token_hash = ?", .{@as([]const u8, &hash)});
+    var st = try req.ctx.db.query("SELECT id, faction, last_seen, callsign <> '', banned_until, ban_reason FROM players WHERE token_hash = ?", .{@as([]const u8, &hash)});
     defer st.finalize();
     if (!try st.step()) return null;
-    return .{ .id = st.int(0), .has_faction = !st.isNull(1), .has_callsign = st.int(3) != 0, .last_seen = st.int(2) };
+    return .{ .id = st.int(0), .has_faction = !st.isNull(1), .has_callsign = st.int(3) != 0, .last_seen = st.int(2), .banned_until = st.int(4), .ban_reason = try st.dupe(req.arena, 5) };
 }
 
 /// Auth, rate limit, then the handler inside a transaction. Returns the JSON (arena memory).
@@ -203,6 +209,7 @@ fn run(req: *Req, rt: Route, token: ?[]const u8) HandlerError![]const u8 {
         const tok = token orelse return req.fail(401, "unauthorized", "Missing token.");
         const who = (try authenticate(req, tok)) orelse return req.fail(401, "unauthorized", "Unknown token.");
         req.pid = who.id;
+        if (who.banned_until > req.now) return req.failBanned(who.banned_until, who.ban_reason);
         if (rt.access == .faction and !who.has_callsign) return req.fail(409, "no_callsign", "Choose a callsign first.");
         if (rt.access == .faction and !who.has_faction) return req.fail(409, "no_faction", "Choose a faction first.");
         if (ctx.opts.limits and !ctx.opts.dev) {

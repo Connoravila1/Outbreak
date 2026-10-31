@@ -11,7 +11,7 @@ import { WarTab } from './tabs/WarTab';
 import { YouTab } from './tabs/YouTab';
 import { Onboarding } from './onboarding/Onboarding';
 import { SimPanel } from './location/SimPanel';
-import { boot, loadCatalog, phase, tab, lens } from './state/store';
+import { boot, loadCatalog, phase, tab, lens, me } from './state/store';
 import { isDesktop, startLocation } from './location';
 import { startPolling, stopPolling } from './state/poll';
 import { BattleHost } from './battle/BattleHost';
@@ -19,7 +19,10 @@ import { Toasts } from './ui/kit';
 import { RewardsSheet } from './ui/RewardsSheet';
 import { GuestNudge } from './you/GuestNudge';
 import { NoteReader } from './notes/Reader';
-import { setUnauthorizedHandler, setToken } from './api';
+import { setUnauthorizedHandler, setBannedHandler, setToken } from './api';
+import { Banned } from './shell/Banned';
+import { ReportSheet } from './ui/ReportSheet';
+import { banned } from './state/moderation';
 import { Icon } from './ui/Icon';
 import { ServerAddress } from './onboarding/ServerAddress';
 import { isNative } from './native/platform';
@@ -63,6 +66,7 @@ function Shell() {
       <RewardsSheet />
       <BattleHost />
       <NoteReader />
+      <ReportSheet />
       <GuestNudge />
       <PatrolSheet />
       <PatrolReport />
@@ -93,17 +97,22 @@ async function start() {
 export function App() {
   useEffect(() => {
     setUnauthorizedHandler(() => { setToken(null); });
+    setBannedHandler((b) => { banned.value = b; });
     void start();
   }, []);
   const p = phase.value;
   void lens.value;
+  // A moderator reset the callsign while the app was open: choose a new one before playing on.
+  const renaming = p === 'app' && !!me.value?.must_rename;
+  useEffect(() => { if (renaming) phase.value = 'onboarding'; }, [renaming]);
   return (
     <div class="stage">
       <main class={'phone' + (desktop.value ? ' framed' : '')}>
-        {p === 'boot' && <Boot />}
-        {p === 'server' && <ServerAddress onDone={() => { phase.value = 'boot'; void start(); }} />}
-        {p === 'onboarding' && <Onboarding />}
-        {p === 'app' && <Shell />}
+        {banned.value && <Banned />}
+        {!banned.value && p === 'boot' && <Boot />}
+        {!banned.value && p === 'server' && <ServerAddress onDone={() => { phase.value = 'boot'; void start(); }} />}
+        {!banned.value && p === 'onboarding' && <Onboarding />}
+        {!banned.value && p === 'app' && <Shell />}
       </main>
       {desktop.value && <SimPanel />}
     </div>

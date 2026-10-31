@@ -44,6 +44,35 @@ only and are deliberately never written to disk; after a restart players reappea
 location update. The world seed is created on first start and stored in the database, so keep the
 database if you want the same world.
 
+## Moderation
+
+Moderation is a command on the same binary. It works on the database file directly, so it is safe
+while the server runs (SQLite WAL, with a busy timeout), and there is no admin page on the network.
+`--data` is the same folder the server uses (default `./data`, or `OUTBREAK_DATA`).
+
+    outbreak-server admin --data /opt/outbreak/data reports
+
+| Command | What it does |
+|---|---|
+| `reports` | Open reports in two tables: one row per target with a count and the reasons, then every report (ID, time, target, reason, reporter, note; a message report shows the message id and what was said). |
+| `player <callsign>` | Account summary: faction, level, sign-in type (guest or provider; no email), clan, record, suspension, reports about and by them. No positions and no fight history. |
+| `rename <callsign>` | Replaces the callsign with `Survivor####` and flags the player to choose a new one on their next launch (the app asks at once if it is open). |
+| `clan-rename <tag>` | Replaces a clan's name and tag with `Clan ###` / `C###`. |
+| `delete-message <id>` | Removes one clan chat message. The ids are in `reports`. |
+| `ban <callsign> [--days N] [--reason "text"]` | Suspends the account (for good unless `--days`). The player sees the reason and end date; every request from their phone gets 403; their Echo stops being served and they leave the leaderboards. |
+| `unban <callsign>` | Lifts a suspension. |
+| `resolve <report-id>` | Closes one report without acting on it. |
+| `help` | Prints the list. |
+
+`rename`, `clan-rename`, `delete-message` and `ban` also close the open reports about what they acted
+on. Callsigns are not case sensitive; a clan tag may be given with or without brackets. Every command
+prints what it did in plain words and exits with status 1 and a sentence when something is wrong
+(unknown callsign, a bad number). Times are UTC. Step by step guide: `docs/MODERATING.md`.
+
+Players can report from the leaderboards, clan rosters, clan list and clan chat
+(`POST /api/report`, five an hour, one open report per reporter per target). Names are checked
+against the list in `src/names.zig` when a callsign or clan is created.
+
 ## Backup
 
 Online, while the server runs:

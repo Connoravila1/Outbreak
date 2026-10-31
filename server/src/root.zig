@@ -9,10 +9,14 @@ pub const ctx = @import("ctx.zig");
 pub const api = @import("api.zig");
 pub const tick = @import("tick.zig");
 pub const http = @import("http.zig");
+pub const admin = @import("admin.zig");
+pub const names = @import("names.zig");
 
 test {
     _ = @import("api_tests.zig");
     _ = @import("api/account.zig");
+    _ = @import("admin.zig");
+    _ = @import("names.zig");
     _ = @import("jwt.zig");
     _ = @import("auth.zig");
     _ = @import("fight.zig");

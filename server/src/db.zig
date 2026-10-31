@@ -487,6 +487,32 @@ const migrations = [_][:0]const u8{
     \\  PRIMARY KEY (player_id, set_id)
     \\);
     ,
+    // Moderation: suspensions (banned_until is 0 for none, the largest integer for permanent), a
+    // forced callsign change, and player reports. A report keeps a text label of its target so it
+    // stays readable after the target is renamed or deleted.
+    \\ALTER TABLE players ADD COLUMN banned_until INTEGER NOT NULL DEFAULT 0;
+    \\ALTER TABLE players ADD COLUMN ban_reason TEXT NOT NULL DEFAULT '';
+    \\ALTER TABLE players ADD COLUMN must_rename INTEGER NOT NULL DEFAULT 0;
+    \\CREATE TABLE reports (
+    \\  id INTEGER PRIMARY KEY,
+    \\  reporter_id INTEGER REFERENCES players(id) ON DELETE SET NULL,
+    \\  kind TEXT NOT NULL,
+    \\  target_key TEXT NOT NULL,
+    \\  target_player_id INTEGER REFERENCES players(id) ON DELETE SET NULL,
+    \\  target_clan_id INTEGER REFERENCES clans(id) ON DELETE SET NULL,
+    \\  message_id INTEGER,
+    \\  label TEXT NOT NULL,
+    \\  excerpt TEXT NOT NULL DEFAULT '',
+    \\  reason TEXT NOT NULL,
+    \\  note TEXT NOT NULL DEFAULT '',
+    \\  status TEXT NOT NULL DEFAULT 'open',
+    \\  created_at INTEGER NOT NULL,
+    \\  resolved_at INTEGER
+    \\);
+    \\CREATE UNIQUE INDEX reports_open_once ON reports(reporter_id, target_key) WHERE status = 'open';
+    \\CREATE INDEX reports_target ON reports(status, target_key);
+    \\CREATE INDEX reports_reporter ON reports(reporter_id, created_at);
+    ,
 };
 
 // --- Tests -------------------------------------------------------------------------------------------

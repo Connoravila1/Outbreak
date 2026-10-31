@@ -6,6 +6,7 @@ const game = @import("game");
 const ctx_mod = @import("../ctx.zig");
 const model = @import("../model.zig");
 const views = @import("../views.zig");
+const name_rules = @import("../names.zig");
 const warstate = @import("../warstate.zig");
 
 const data = game.data;
@@ -60,40 +61,9 @@ fn normalizeCode(buf: []u8, text: []const u8) []const u8 {
 
 // --- Callsigns --------------------------------------------------------------------------------------
 
-const blocked = [_][]const u8{
-    "nigg",  "faggot", "retard",    "cunt",   "fuck",     "shit",  "bitch",   "whore", "slut",  "rapist",
-    "nazi",  "hitler", "kike",      "chink",  "tranny",   "pussy", "asshole", "twat",  "penis", "vagina",
-    "dildo", "porn",   "pedophile", "molest", "jihadist", "kkk",
-};
-
-/// Letters only, lowercase, common look-alike digits folded back, so "Sh1t_Head" is caught.
-fn foldForFilter(buf: []u8, name: []const u8) []const u8 {
-    var n: usize = 0;
-    for (name) |c| {
-        const f: u8 = switch (c) {
-            '0' => 'o',
-            '1' => 'i',
-            '3' => 'e',
-            '4' => 'a',
-            '5' => 's',
-            '7' => 't',
-            '_', '-' => continue,
-            else => std.ascii.toLower(c),
-        };
-        if (n == buf.len) break;
-        buf[n] = f;
-        n += 1;
-    }
-    return buf[0..n];
-}
-
+/// The blocklist lives in names.zig.
 pub fn callsignAllowed(name: []const u8) bool {
-    var buf: [32]u8 = undefined;
-    const folded = foldForFilter(&buf, name);
-    for (blocked) |b| {
-        if (std.mem.indexOf(u8, folded, b) != null) return false;
-    }
-    return true;
+    return name_rules.allowed(name);
 }
 
 fn callsignValid(name: []const u8) bool {
@@ -127,7 +97,7 @@ pub fn health(req: *Req, jw: *Stringify) HandlerError!void {
 /// it is malformed, not allowed or taken.
 fn vetCallsign(req: *Req, name: []const u8) HandlerError![]const u8 {
     if (!callsignValid(name)) return req.fail(400, "callsign_invalid", "Callsigns are 3 to 16 characters: letters, digits, _ and -.");
-    if (!callsignAllowed(name)) return req.fail(400, "callsign_invalid", "That callsign is not allowed.");
+    if (!callsignAllowed(name)) return req.fail(400, "callsign_invalid", name_rules.rejection);
     const lc = try std.ascii.allocLowerString(req.arena, name);
     if ((try req.ctx.db.scalar("SELECT id FROM players WHERE callsign_lc = ?", .{lc})) != null) {
         return req.fail(409, "callsign_taken", "That callsign is taken.");
@@ -185,11 +155,12 @@ pub fn setCallsign(req: *Req, jw: *Stringify) HandlerError!void {
     const body = try req.json(struct { callsign: []const u8 });
     const name = std.mem.trim(u8, body.callsign, " ");
     const db = &req.ctx.db;
-    if ((try db.scalar("SELECT id FROM players WHERE id = ? AND callsign <> ''", .{req.pid})) != null) {
+    // A callsign is permanent, unless a moderator reset it (`admin rename`).
+    if ((try db.scalar("SELECT id FROM players WHERE id = ? AND callsign <> '' AND must_rename = 0", .{req.pid})) != null) {
         return req.fail(409, "callsign_set", "Your callsign is permanent.");
     }
     const lc = try vetCallsign(req, name);
-    try db.run("UPDATE players SET callsign = ?, callsign_lc = ? WHERE id = ?", .{ name, lc, req.pid });
+    try db.run("UPDATE players SET callsign = ?, callsign_lc = ?, must_rename = 0 WHERE id = ?", .{ name, lc, req.pid });
     try jw.write(.{ .me = try views.meFresh(req, req.pid) });
 }
 

@@ -567,7 +567,29 @@ deferred, cosmetic-only if ever added).
   linked to an account at any time (a gentle, dismissible reminder appears on the You tab and once
   at levels 3 and 10). Settings, Account shows what is linked and offers Link, Sign out (a guest is
   warned it will lose the character) and Delete account (type DELETE; erases everything). The
-  callsign is chosen once, after the faction. There is no password and no recovery code.
+  callsign is chosen once, after the faction (a moderator can reset it; see Community rules). There is
+  no password and no recovery code.
+
+### Community rules
+
+Players write four kinds of text: callsigns, clan names, clan tags and clan chat. The rules are few
+and plain.
+
+- **Names** (callsigns, clan names and tags) may not contain slurs or obvious obscenities, including
+  look-alike spellings such as `Sh1t`. The list is short and lives in one file (`server/src/names.zig`);
+  it blocks whole words for most terms so innocent names such as "Scunthorpe" pass. A rejected name
+  says so plainly and asks for another.
+- **Reports.** A player can report a callsign (from a leaderboard or a clan roster), a clan, or a clan
+  chat message, with a reason (offensive name, harassment, cheating, other) and an optional note of up
+  to 140 characters. One open report per reporter per target, five reports an hour. Reporting never
+  reveals the reporter to the reported, and reporting a player offers to hide their clan messages on
+  that phone. Reports say nothing about fights or places: opponents in Contact stay anonymous, and
+  there is no way to report one.
+- **Action** is the server owner's, from the command line on the server (`outbreak-server admin`, see
+  `docs/MODERATING.md`): reset a callsign (the player must choose a new one on next launch), reset a
+  clan's name and tag, delete a chat message, or suspend an account for some days or for good. A
+  suspended player sees a plain screen with the reason and the end date; their Echo is no longer
+  offered to others and they leave the leaderboards. Lifting a suspension restores everything.
 
 ## 15. Notifications
 

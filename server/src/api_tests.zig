@@ -2685,3 +2685,227 @@ test "notes: landmark caches can drop one, never twice; deleting the account tak
     try testing.expectEqual(@as(u16, 200), del.status);
     try testing.expectEqual(@as(?i64, 0), try h.ctx.db.scalar("SELECT COUNT(*) FROM player_notes", .{}));
 }
+
+// --- Moderation ------------------------------------------------------------------------------------------------
+
+const admin = @import("admin.zig");
+
+/// Run an admin command against the harness's database, discarding what it prints.
+fn adminCmd(h: *Harness, line: []const []const u8) !void {
+    var buf: [64]u8 = undefined;
+    var sink = std.Io.Writer.Discarding.init(&buf);
+    var rng = game.rng.Rng.init(99);
+    try admin.run(testing.allocator, &h.ctx.db, h.ctx.now(), &rng, line, &sink.writer);
+}
+
+test "names: blocked callsigns and clan names are refused plainly, innocent ones pass" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+
+    var bad = try h.post("/api/register", null, "{\"callsign\":\"xX_Fuck_Xx\"}");
+    defer bad.deinit();
+    try testing.expectEqual(@as(u16, 400), bad.status);
+    try testing.expectEqualStrings("That name is not allowed here. Please pick another name.", try bad.str("message"));
+    var leet = try h.post("/api/register", null, "{\"callsign\":\"TheCuntKing\"}");
+    defer leet.deinit();
+    try testing.expectEqual(@as(u16, 400), leet.status);
+    var fine = try h.post("/api/register", null, "{\"callsign\":\"Scunthorpe\"}");
+    defer fine.deinit();
+    try testing.expectEqual(@as(u16, 200), fine.status);
+
+    var a: [64]u8 = undefined;
+    try h.player("Founder", "human", &a);
+    try h.reachLevel(&a, 10);
+    var gr = try h.ok("/api/dev/grant", &a, "{{\"salvage\":1000}}", .{});
+    gr.deinit();
+    var rude = try h.post("/api/clans", &a, "{\"name\":\"Nazi Hunters\",\"tag\":\"NH\"}");
+    defer rude.deinit();
+    try testing.expectEqual(@as(u16, 400), rude.status);
+    try testing.expectEqualStrings("name_not_allowed", try rude.errorCode());
+    var rude_tag = try h.post("/api/clans", &a, "{\"name\":\"Fine Name\",\"tag\":\"f4g\"}");
+    defer rude_tag.deinit();
+    try testing.expectEqual(@as(u16, 400), rude_tag.status);
+    var ok_clan = try h.post("/api/clans", &a, "{\"name\":\"Scunthorpe Rangers\",\"tag\":\"SCR\"}");
+    defer ok_clan.deinit();
+    try testing.expectEqual(@as(u16, 200), ok_clan.status);
+}
+
+test "reports: player, clan and message, deduped and rate limited" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var a: [64]u8 = undefined;
+    var b: [64]u8 = undefined;
+    try h.player("Reporter", "human", &a);
+    try h.player("Rowdy", "human", &b);
+    for ([_][]const u8{ &a, &b }) |t| try h.reachLevel(t, 10);
+    var gr = try h.ok("/api/dev/grant", &a, "{{\"salvage\":500}}", .{});
+    gr.deinit();
+    var made = try h.ok("/api/clans", &a, "{{\"name\":\"Last Light\",\"tag\":\"LL\"}}", .{});
+    defer made.deinit();
+    const clan_id = try testing.allocator.dupe(u8, try made.str("clan.id"));
+    defer testing.allocator.free(clan_id);
+    var joined = try h.ok("/api/clans/join", &b, "{{\"code\":\"{s}\"}}", .{try made.str("clan.code")});
+    joined.deinit();
+    var msg = try h.ok("/api/clan/chat", &b, "{{\"text\":\"rude words\"}}", .{});
+    defer msg.deinit();
+    const msg_id = try testing.allocator.dupe(u8, try msg.str("messages.0.id"));
+    defer testing.allocator.free(msg_id);
+
+    var r1 = try h.ok("/api/report", &a, "{{\"kind\":\"player\",\"target\":\"rowdy\",\"reason\":\"harassment\",\"note\":\"keeps pinging me\"}}", .{});
+    r1.deinit();
+    var dup = try h.post("/api/report", &a, "{\"kind\":\"player\",\"target\":\"Rowdy\",\"reason\":\"cheating\"}");
+    defer dup.deinit();
+    try testing.expectEqual(@as(u16, 409), dup.status);
+    try testing.expectEqualStrings("already_reported", try dup.errorCode());
+    // Someone else may report the clan; the message report names the author.
+    var r2 = try h.ok("/api/report", &b, "{{\"kind\":\"clan\",\"target\":\"{s}\",\"reason\":\"name\"}}", .{clan_id});
+    r2.deinit();
+    var r3 = try h.ok("/api/report", &a, "{{\"kind\":\"message\",\"target\":\"{s}\",\"reason\":\"harassment\"}}", .{msg_id});
+    r3.deinit();
+
+    var self = try h.post("/api/report", &a, "{\"kind\":\"player\",\"target\":\"reporter\",\"reason\":\"other\"}");
+    defer self.deinit();
+    try testing.expectEqual(@as(u16, 400), self.status);
+    var nobody = try h.post("/api/report", &a, "{\"kind\":\"player\",\"target\":\"nobody\",\"reason\":\"other\"}");
+    defer nobody.deinit();
+    try testing.expectEqual(@as(u16, 404), nobody.status);
+    var reason = try h.post("/api/report", &a, "{\"kind\":\"player\",\"target\":\"rowdy\",\"reason\":\"smells\"}");
+    defer reason.deinit();
+    try testing.expectEqual(@as(u16, 400), reason.status);
+    var outsider: [64]u8 = undefined;
+    try h.player("Outsider", "zombie", &outsider);
+    var spy = try h.postf("/api/report", &outsider, "{{\"kind\":\"message\",\"target\":\"{s}\",\"reason\":\"other\"}}", .{msg_id});
+    defer spy.deinit();
+    try testing.expectEqual(@as(u16, 404), spy.status);
+
+    try testing.expectEqual(@as(?i64, 3), try h.ctx.db.scalar("SELECT COUNT(*) FROM reports WHERE status = 'open'", .{}));
+    try testing.expectEqual(@as(?i64, try h.playerId("Rowdy")), try h.ctx.db.scalar("SELECT target_player_id FROM reports WHERE kind = 'message'", .{}));
+
+    // Five an hour: two are used, three more go through, the sixth waits.
+    var toks: [4][64]u8 = undefined;
+    const callsigns = [_][]const u8{ "Target1", "Target2", "Target3", "Target4" };
+    for (callsigns, 0..) |c, i| try h.player(c, "zombie", &toks[i]);
+    for (callsigns[0..3]) |c| {
+        var r = try h.postf("/api/report", &a, "{{\"kind\":\"player\",\"target\":\"{s}\",\"reason\":\"cheating\"}}", .{c});
+        defer r.deinit();
+        try testing.expectEqual(@as(u16, 200), r.status);
+    }
+    var limited = try h.postf("/api/report", &a, "{{\"kind\":\"player\",\"target\":\"{s}\",\"reason\":\"cheating\"}}", .{callsigns[3]});
+    defer limited.deinit();
+    try testing.expectEqual(@as(u16, 429), limited.status);
+    try testing.expectEqualStrings("report_limit", try limited.errorCode());
+    h.advance(61 * 60 * 1000);
+    var later = try h.postf("/api/report", &a, "{{\"kind\":\"player\",\"target\":\"{s}\",\"reason\":\"cheating\"}}", .{callsigns[3]});
+    defer later.deinit();
+    try testing.expectEqual(@as(u16, 200), later.status);
+
+    // Once resolved, the same target can be reported again.
+    try adminCmd(&h, &.{ "resolve", "1" });
+    var again = try h.ok("/api/report", &a, "{{\"kind\":\"player\",\"target\":\"rowdy\",\"reason\":\"cheating\"}}", .{});
+    again.deinit();
+}
+
+test "ban: 403 with reason and end date everywhere, no Echo, no board, unban restores" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var a: [64]u8 = undefined;
+    var z: [64]u8 = undefined;
+    try h.player("Seeker", "human", &a);
+    try h.reachLevel(&a, 5);
+    try h.player("Ghoul", "zombie", &z);
+    try h.reachLevel(&z, 6);
+    var w = try h.location(&z, base_lat + 0.5, base_lon);
+    w.deinit();
+
+    try adminCmd(&h, &.{ "ban", "ghoul", "--days", "3", "--reason", "Cheating with a GPS spoofer" });
+    const until = wednesday + 3 * std.time.ms_per_day;
+
+    const paths = [_][2][]const u8{
+        .{ "GET", "/api/me" },
+        .{ "GET", "/api/war" },
+        .{ "GET", "/api/clan" },
+        .{ "GET", "/api/leaderboard?board=level" },
+        .{ "GET", "/api/notes" },
+        .{ "POST", "/api/location" },
+        .{ "POST", "/api/report" },
+        .{ "POST", "/api/callsign" },
+        .{ "POST", "/api/clan/chat" },
+        .{ "DELETE", "/api/account" },
+    };
+    for (paths) |p| {
+        var r = try h.call(p[0], p[1], &z, "{}");
+        defer r.deinit();
+        try testing.expectEqual(@as(u16, 403), r.status);
+        try testing.expectEqualStrings("banned", try r.errorCode());
+        try testing.expectEqualStrings("Cheating with a GPS spoofer", try r.str("reason"));
+        try testing.expectEqual(until, try r.int("until"));
+    }
+
+    // Off the boards, and never offered as an Echo.
+    var board = try h.get("/api/leaderboard?board=level", &a);
+    defer board.deinit();
+    for ((try board.at("entries")).array.items) |e| try testing.expect(!std.mem.eql(u8, e.object.get("callsign").?.string, "Ghoul"));
+    try h.ctx.db.run("UPDATE players SET last_pvp_at = 0", .{});
+    var tries: usize = 0;
+    while (tries < 40) : (tries += 1) {
+        h.advance(echoWindow());
+        var res = try h.location(&a, base_lat, base_lon);
+        defer res.deinit();
+        for ((try res.at("echoes")).array.items) |e| try testing.expectEqual(true, e.object.get("rogue").?.bool);
+    }
+
+    // A ban that has run out no longer applies.
+    h.advance(3 * std.time.ms_per_day);
+    var expired = try h.get("/api/me", &z);
+    defer expired.deinit();
+    try testing.expectEqual(@as(u16, 200), expired.status);
+
+    // A permanent ban has no end date; unban restores the account and its Echoes.
+    try adminCmd(&h, &.{ "ban", "ghoul" });
+    var perm = try h.get("/api/me", &z);
+    defer perm.deinit();
+    try testing.expectEqual(@as(u16, 403), perm.status);
+    try testing.expect((try perm.at("until")) == .null);
+    try adminCmd(&h, &.{ "unban", "ghoul" });
+    var me = try h.get("/api/me", &z);
+    defer me.deinit();
+    try testing.expectEqual(@as(u16, 200), me.status);
+    var real = false;
+    tries = 0;
+    while (tries < 60 and !real) : (tries += 1) {
+        h.advance(echoWindow());
+        var res = try h.location(&a, base_lat, base_lon);
+        defer res.deinit();
+        for ((try res.at("echoes")).array.items) |e| {
+            if (!e.object.get("rogue").?.bool) real = true;
+        }
+    }
+    try testing.expect(real);
+}
+
+test "rename: the player is flagged and may choose again once" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var a: [64]u8 = undefined;
+    try h.player("Badname", "human", &a);
+    try adminCmd(&h, &.{ "rename", "badname" });
+
+    var me = try h.get("/api/me", &a);
+    defer me.deinit();
+    try testing.expectEqual(true, (try me.at("must_rename")).bool);
+    try testing.expect(std.mem.startsWith(u8, try me.str("callsign"), "Survivor"));
+    var rude = try h.post("/api/callsign", &a, "{\"callsign\":\"Shit_Head\"}");
+    defer rude.deinit();
+    try testing.expectEqual(@as(u16, 400), rude.status);
+    var c = try h.ok("/api/callsign", &a, "{{\"callsign\":\"Better_Name\"}}", .{});
+    defer c.deinit();
+    try testing.expectEqualStrings("Better_Name", try c.str("me.callsign"));
+    try testing.expectEqual(false, (try c.at("me.must_rename")).bool);
+    var twice = try h.post("/api/callsign", &a, "{\"callsign\":\"Another\"}");
+    defer twice.deinit();
+    try testing.expectEqual(@as(u16, 409), twice.status);
+}
