@@ -94,10 +94,16 @@ export const KEYS = {
   notesSeen: 'outbreak.notesSeen',
   /** Callsigns whose clan chat messages this player chose to hide (lowercase). */
   hiddenChat: 'outbreak.hiddenChat',
+  /** When the age screen turned someone away (ms). It is about the phone, so it outlives a sign-out. */
+  ageBlock: 'outbreak.ageBlock',
+  /** The Play safe notice has been read on this phone. */
+  safety: 'outbreak.safety',
+  /** Launch counter, so the boot-screen safety reminder shows only now and then. */
+  launches: 'outbreak.launches',
 } as const;
 
 /** Device settings that outlive a sign-out: they are about the phone, not the player. */
-const KEEP: string[] = [KEYS.server, KEYS.sound, KEYS.haptics, KEYS.reducedMotion];
+const KEEP: string[] = [KEYS.server, KEYS.sound, KEYS.haptics, KEYS.reducedMotion, KEYS.ageBlock, KEYS.safety, KEYS.launches];
 
 /** Forget everything this device holds about the player (token, progress flags, simulator spot). */
 export function wipeLocal() {

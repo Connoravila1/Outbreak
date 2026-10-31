@@ -12,6 +12,8 @@ import { VolumeSliders } from '../audio/VolumeSliders';
 import { isNative } from '../native/platform';
 import { patrolStatus, refreshPatrol, stopPatrol } from '../native/patrol';
 import { patrolSheetOpen } from '../patrol/PatrolSheet';
+import { SafetyRules } from '../safety/Safety';
+import { Sheet } from '../ui/Sheet';
 
 function Toggle({ label, hint, checked, onChange }: { label: string; hint?: string; checked: boolean; onChange: (v: boolean) => void }) {
   return (
@@ -48,6 +50,7 @@ export function Settings() {
   const [probe, setProbe] = useState<Probe>(null);
   const [testing, setTesting] = useState(false);
   const [credits, setCredits] = useState(false);
+  const [safety, setSafety] = useState(false);
 
   const test = async () => {
     setTesting(true); setProbe(null);
@@ -79,10 +82,20 @@ export function Settings() {
       {!isNative && <Toggle label={say('GPS simulator', 'fake steps')} hint={isDesktop() ? undefined : say('For testing without walking.', 'for testing.')} checked={simActive.value} onChange={setSimActive} />}
 
       <div class="set-actions">
+        <button class="btn block" onClick={() => setSafety(true)}><Icon name="shield" size={20} />{say('Play safe', 'play safe')}</button>
+        <a class="btn block" href="terms.html" target="_blank" rel="noopener">{say('Terms of service', 'terms')}</a>
         <a class="btn block" href="privacy.html" target="_blank" rel="noopener">{say('Privacy policy', 'privacy')}</a>
         <button class="btn block" onClick={() => setCredits(true)}><Icon name="info" size={20} />{say('Credits', 'credits')}</button>
       </div>
       {credits && <Credits onClose={() => setCredits(false)} />}
+      {safety && (
+        <Sheet title={say('Play safe', 'play safe')} onClose={() => setSafety(false)} tall>
+          <div class="safety-sheet">
+            <SafetyRules />
+          </div>
+          <div class="sheet-actions"><button class="btn primary block" onClick={() => setSafety(false)}>{say('Got it', 'got it')}</button></div>
+        </Sheet>
+      )}
     </Section>
     </>
   );

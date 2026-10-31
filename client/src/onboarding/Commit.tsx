@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'preact/hooks';
 import { api, errorMessage, setToken, type Faction } from '../api';
 import { applyMe, me } from '../state/store';
+import { termsAccepted } from '../auth/session';
 import { say } from '../ui/voice';
 
 /** Quietly creates the guest survivor (if there is no account yet) and commits the faction. */
@@ -12,7 +13,7 @@ export function Commit({ faction, onDone }: { faction: Faction; onDone: () => vo
     (async () => {
       try {
         if (!me.value) {
-          const r = await api.register();
+          const r = await api.register(termsAccepted.value ?? 0);
           setToken(r.token);
           applyMe(r.me);
         }

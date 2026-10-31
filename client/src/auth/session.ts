@@ -10,10 +10,14 @@ const NONE: ProviderStatus = { google: false, apple: false, dev: false };
 
 /** What the server offers; null until /api/health has answered. */
 export const providers = signal<ProviderStatus | null>(null);
+/** The terms version the server has in force (from /api/health), and the one accepted on this run of onboarding. */
+export const termsVersion = signal<number | null>(null);
+export const termsAccepted = signal<number | null>(null);
 export async function loadProviders(): Promise<ProviderStatus> {
   try {
     const h = await api.health();
     providers.value = { ...NONE, ...(h.providers ?? {}) };
+    if (typeof h.terms_version === 'number') termsVersion.value = h.terms_version;
     applyTiles(h.tiles);
   } catch {
     providers.value = providers.value ?? NONE;
@@ -55,7 +59,7 @@ export async function send(p: Pending, doSwitch: boolean): Promise<Outcome> {
       applyMe(r.me);
       return { kind: 'done', me: r.me, created: false, switched: false };
     }
-    const r = await api.authSignIn(p.provider, p.creds, { switch: doSwitch });
+    const r = await api.authSignIn(p.provider, p.creds, { switch: doSwitch, terms: termsAccepted.value ?? undefined });
     setToken(r.token);
     applyMe(r.me);
     return { kind: 'done', me: r.me, created: r.created, switched: doSwitch };
@@ -77,6 +81,7 @@ export function authMessage(e: unknown, provider?: AuthProvider): string {
       case 'provider_unavailable': return say(`Could not reach ${name}. Try again in a moment.`, `${name.toLowerCase()} did not answer. try again.`);
       case 'token_expired': return say('That sign-in expired. Please try again.', 'that took too long. try again.');
       case 'identity_in_use': return say(`That ${name} account already belongs to another survivor.`, `that ${name.toLowerCase()} account is someone else's body.`);
+      case 'terms_required': return say('There is no survivor on that account yet. Go back and start from the beginning.', 'nothing under that name yet. go back. start at the start.');
       case 'already_linked': return say(`A different ${name} account is already linked here.`, `another ${name.toLowerCase()} account is already tied to this body.`);
     }
     return e.message;

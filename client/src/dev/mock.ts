@@ -12,6 +12,21 @@ import type {
 const KEY = 'outbreak.mock.db';
 const TOKEN = 'mock-token';
 const RECOVERY = 'MOCK-7QX2-K9PD-41LA';
+const TERMS_VERSION = 1;
+
+// In transit, as the server decides it: over 7 m/s on two fixes in a row, for a minute past the last.
+const transit = { lat: 0, lon: 0, at: 0, streak: 0, until: 0 };
+function observeTransit(lat: number, lon: number): boolean {
+  const now = Date.now();
+  if (transit.at && now - transit.at < 120e3) {
+    const dy = (lat - transit.lat) * 111_320, dx = (lon - transit.lon) * 111_320 * Math.cos((lat * Math.PI) / 180);
+    const speed = Math.hypot(dx, dy) / Math.max(1, (now - transit.at) / 1000);
+    if (speed > 7) { transit.streak++; if (transit.streak >= 2) transit.until = now + 60e3; } else transit.streak = 0;
+  }
+  Object.assign(transit, { lat, lon, at: now });
+  return transit.until > now;
+}
+const inTransit = () => transit.until > Date.now();
 /** Identities that "exist on the server" even after this device forgets them (survives account deletion of others). */
 const IDKEY = 'outbreak.mock.identities';
 
@@ -129,6 +144,8 @@ interface DB {
   /** Moderation: a forced callsign change, reports sent (to dedupe), and a suspension. */
   mustRename?: boolean; reported?: string[]; banned?: { reason: string; until: number | null } | null;
   col?: CollectionState;
+  /** The terms version accepted (0: none). */
+  terms?: number;
 }
 function fresh(): DB {
   return {
@@ -246,6 +263,7 @@ function buildMe(): Me {
     avatar: db.avatar ?? null, pvp_protected: db.level < 5, underdog_bonus: 0.15, war_points_week: db.warPoints,
     record: { ...db.rec, contacts_won: db.rec.contacts_won ?? 0, contacts_lost: db.rec.contacts_lost ?? 0, echoes_won: db.rec.echoes_won ?? 0 },
     contact_rank: contactRank(db.faction ?? 'human', db.rec.contacts_won ?? 0),
+    terms: { current: TERMS_VERSION, accepted: db.terms ?? 0, needs_accept: (db.terms ?? 0) < TERMS_VERSION },
     account: { guest: db.ids.length === 0, providers: db.ids.map((i) => i.provider), email: db.ids.find((i) => i.email)?.email ?? null },
     stance: db.stance ?? 'careful', bestiary: db.bestiary ?? {},
     notes: { found: (db.notes ?? []).length, total: visibleTotal(db.faction ?? 'human') },
@@ -304,7 +322,7 @@ function world(lat: number, lon: number, places: PlaceReport[] = []): WorldView 
   const { dlat, dlon } = dims(lat);
   const ci = Math.floor(lat / dlat), cj = Math.floor(lon / dlon);
   const w10 = Math.floor(now / 600e3), w30 = Math.floor(now / 1800e3);
-  const v: WorldView = { now, me: { hp: db.hp, max_hp: buildMe().max_hp, downed_until: null, level: db.level, xp: db.xp, xp_next: CATALOG.levels.xp_to_next[db.level - 1], salvage: db.salvage }, hostiles_near: false, enemies: [], caches: [], echoes: [], landmarks: [], time: mockTime(now, lon), strongholds: [], raids: [], events: [] };
+  const v: WorldView = { now, me: { hp: db.hp, max_hp: buildMe().max_hp, downed_until: null, level: db.level, xp: db.xp, xp_next: CATALOG.levels.xp_to_next[db.level - 1], salvage: db.salvage }, hostiles_near: false, in_transit: false, enemies: [], caches: [], echoes: [], landmarks: [], time: mockTime(now, lon), strongholds: [], raids: [], events: [] };
   const win4h = Math.floor(now / (4 * 3600e3));
   for (const p of places.slice(0, 40)) {
     if (!PLACE_KINDS.includes(p.kind)) continue;
@@ -523,7 +541,8 @@ function mockSignIn(body: any, authed: boolean, link: boolean): unknown {
     db.ids.push(ident); v[key] = db; putVault(v); save();
     return link ? { me: buildMe() } : { token: TOKEN, me: buildMe(), created: false };
   }
-  db = { ...fresh(), exists: true, ids: [ident] }; v[key] = db; putVault(v); save();
+  if (body.terms !== TERMS_VERSION) throw new HttpError(400, 'terms_required', 'Accept the terms of service to play.');
+  db = { ...fresh(), exists: true, ids: [ident], terms: TERMS_VERSION }; v[key] = db; putVault(v); save();
   return { token: TOKEN, me: buildMe(), created: true };
 }
 
@@ -539,14 +558,21 @@ function route(method: string, path: string, body: any, authed: boolean): unknow
   };
   const mine = () => ({ me: buildMe() });
   switch (`${method} ${path}`) {
-    case 'GET /api/health': return { ok: true, version: 'mock', players_online: 41, providers: { google: false, apple: false, dev: true, google_web_client_id: null, apple_web_service_id: null } };
+    case 'GET /api/health': return { ok: true, version: 'mock', players_online: 41, terms_version: TERMS_VERSION, providers: { google: false, apple: false, dev: true, google_web_client_id: null, apple_web_service_id: null } };
     case 'GET /api/catalog': return CATALOG;
     case 'GET /api/factions': return { human: { share: 0.62, players: 310 }, zombie: { share: 0.38, players: 190 }, underdog: 'zombie', underdog_bonus: 0.12 };
     case 'POST /api/register': {
+      if (body?.terms !== TERMS_VERSION) throw new HttpError(400, 'terms_required', 'Accept the terms of service to play.');
       const cs = typeof body?.callsign === 'string' ? body.callsign.trim() : '';
       if (cs) checkCallsign(cs);
-      db = { ...fresh(), exists: true, callsign: cs || null }; save();
+      db = { ...fresh(), exists: true, callsign: cs || null, terms: TERMS_VERSION }; save();
       return { token: TOKEN, recovery_code: RECOVERY, me: buildMe() };
+    }
+    case 'POST /api/terms': {
+      guard();
+      if (body?.version !== TERMS_VERSION) throw new HttpError(400, 'terms_required', 'Accept the terms of service to play.');
+      db.terms = TERMS_VERSION; save();
+      return mine();
     }
     case 'POST /api/callsign': {
       guard();
@@ -589,6 +615,8 @@ function route(method: string, path: string, body: any, authed: boolean): unknow
     case 'POST /api/location': {
       guard();
       const v = world(need(body, 'lat'), need(body, 'lon'), (body.places as PlaceReport[] | undefined) ?? []);
+      v.in_transit = observeTransit(body.lat, body.lon);
+      if (v.in_transit) v.hostiles_near = false;
       v.me.hp = buildMe().hp;
       db.mprog[2] += 18;
       db.rec.distance_m += 18;
@@ -606,6 +634,7 @@ function route(method: string, path: string, body: any, authed: boolean): unknow
     }
     case 'POST /api/engage': {
       guard();
+      if (inTransit()) throw new HttpError(409, 'in_transit', "You're moving too fast. Fights wait until you're on foot.");
       const id = String(need(body, 'id'));
       const m = /^e:(-?\d+):(-?\d+):(\d+):(\d+)$/.exec(id);
       const isEcho = id.startsWith('echo:');
@@ -637,6 +666,7 @@ function route(method: string, path: string, body: any, authed: boolean): unknow
     }
     case 'POST /api/open': {
       guard();
+      if (inTransit()) throw new HttpError(409, 'in_transit', "You're moving too fast. Fights wait until you're on foot.");
       const id = String(need(body, 'id'));
       if (db.defeated.includes(id)) throw new HttpError(404, 'gone', 'Already opened.');
       db.defeated.push(id);

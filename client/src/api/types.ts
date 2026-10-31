@@ -100,6 +100,9 @@ export interface ContactRank { name: string; tier: number; wins: number; next_at
 /** How this survivor signs back in. A guest has no providers: it lives only on this phone. */
 export interface AccountInfo { guest: boolean; providers: string[]; email: string | null }
 
+/** The terms of service: the version in force, the one this player accepted (0: none), and whether to ask again. */
+export interface TermsInfo { current: number; accepted: number; needs_accept: boolean }
+
 export interface Me {
   id: string;
   /** Null until the player chooses one. */
@@ -134,6 +137,7 @@ export interface Me {
   record: PlayerRecord;
   contact_rank: ContactRank;
   account: AccountInfo;
+  terms: TermsInfo;
   /** Saved default stance, used in Contact. */
   stance: Stance;
   /** Fights per enemy archetype; hints unlock at 3. */
@@ -199,6 +203,8 @@ export interface WorldView {
   now: number;
   me: MeLite;
   hostiles_near: boolean;
+  /** Moving faster than walking pace: the server refuses fights until the player is on foot. */
+  in_transit: boolean;
   enemies: WorldEnemy[];
   caches: WorldCache[];
   echoes: WorldEcho[];
@@ -323,7 +329,7 @@ export interface ProviderStatus {
 }
 /** A self-hosted tile source the server points the map at (absent: OpenFreeMap). */
 export interface TilesAdvert { pmtiles: string; glyphs?: string | null }
-export interface Health { ok: boolean; version: string; players_online: number; providers?: ProviderStatus; tiles?: TilesAdvert | null }
+export interface Health { ok: boolean; version: string; terms_version?: number; players_online: number; providers?: ProviderStatus; tiles?: TilesAdvert | null }
 export interface FactionShare { share: number; players: number }
 export interface Factions {
   human: FactionShare;
