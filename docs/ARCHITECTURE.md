@@ -28,7 +28,7 @@ The server is authoritative over every outcome. The client renders state and sen
     DESIGN.md), `stats.zig`, `combat.zig`, `loot.zig`, `progression.zig`, `geo.zig` (geohash,
     haversine), `spawns.zig` (deterministic world content), `missions.zig`, `war.zig`, `rng.zig`, `stance.zig` (stance, counters), `daynight.zig` (solar phase), `landmarks.zig` (place validation, windows, rate limit).
   - `src/live.zig` — in-memory state: latest position per player (never persisted, expires in
-    2 min), active echoes, rate limits, and reported landmarks per geohash-6 area (12 h TTL, capped, never persisted).
+    2 min, or 4 min when it came from a Patrol check-in), active echoes, rate limits, and reported landmarks per geohash-6 area (12 h TTL, capped, never persisted).
   - `src/tick.zig` — every 5 s: PvP contact matching, raid/war housekeeping.
   - `src/sim.zig` — balance simulator (`zig build sim`): simulates players and prints pacing.
 - **Concurrency**: one global mutex around game state and the single SQLite connection. Correct
@@ -110,9 +110,23 @@ accounts that have a recovery code but is no longer used by the client.
 | Method | Path | Body | Returns |
 |---|---|---|---|
 | POST | `/api/location` | `{lat, lon, acc, sanctuary, places?:[{key, kind, lat, lon, name?}]}` (<= 40) | `WorldView` — call every ~5 s in foreground |
+| POST | `/api/patrol` | `{lat, lon, acc?, sanctuary?}` | `{events:[{id, type, text, at}], hp, downed_until}` — Patrol check-in, see below |
 | POST | `/api/engage` | `{id, stance?}` (enemy spawn or echo id; stance `aggressive`/`careful`/`evasive`, default careful) | `Battle` |
 | POST | `/api/stance` | `{stance}` (default for Contact PvP) | `{me}` |
 | POST | `/api/open` | `{id}` (cache, airdrop or landmark id; 409 `landmark_limit`) | `{loot: Rewards, me}` |
+
+**Patrol mode.** `POST /api/patrol` is the background check-in (the phone's Patrol service sends
+one about every 60 s, bearer token as usual). It validates the position exactly like
+`/api/location` (speed limit, `sanctuary` optional, walking XP paid; a gap of up to 150 s still
+counts as walking) and stores it with `source = patrol`, which lives 4 minutes instead of 2, so a
+once-a-minute cadence keeps the player matchable. The 5 s Contact tick treats patrol-live and
+foreground players alike; eligibility is unchanged (level >= 5 and so on). Nothing is computed
+for the world around the player. The answer holds only the events not yet *notified*, each as
+`{id, type, text, at}` (no Battle, no Rewards), and `hp` / `downed_until`. Events have two flags:
+`notified` (a Patrol answer carried it) and `delivered` (`/api/location` carried it with its full
+Battle). Patrol sets only `notified`; `/api/location` sets both, so the app still plays every
+fight it missed and never notifies about one it already showed. The latest schema version adds `events.notified`
+(existing rows copy `delivered`).
 
 ### Gear and character
 | Method | Path | Body | Returns |
@@ -180,7 +194,7 @@ WorldView = { now, me: MeLite /* hp, max_hp, downed_until, level, xp, xp_next, s
   time: {phase: "day"|"night", changes_at: number},
   strongholds: {id, lat, lon, clan: {tag, name, faction}|null}[],
   raids: {id, boss, lat, lon, hp, max_hp, ends_at, fighters, can_attack_at}[],
-  events: Event[] /* undelivered; delivered once */ }
+  events: Event[] /* undelivered; delivered once, also if a Patrol check-in already notified them */ }
 
 Combatant = { name, faction, level, title, kind: "player"|"enemy"|"echo"|"rogue"|"boss",
               archetype: string|null, max_hp, hp_start, stats: Stats,

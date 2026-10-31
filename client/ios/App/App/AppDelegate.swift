@@ -7,7 +7,8 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     var window: UIWindow?
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
-        // Override point for customization after application launch.
+        // Patrol mode: the system relaunches the app on a significant location change; pick up where it left off.
+        if PatrolEngine.shared.active { PatrolEngine.shared.run() }
         return true
     }
 

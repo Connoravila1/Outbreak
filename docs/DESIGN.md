@@ -435,8 +435,9 @@ Tap an enemy within range → a sheet shows it (archetype, level, threat colour 
 
 ### PvP — Contact (the signature)
 
-Automatic, as in the original. While the app is open (later: in the background with Patrol mode),
-the server checks every 5 s for opposing players within **60 m** of each other.
+Automatic, as in the original. While the app is open, or while **Patrol mode** keeps the player
+present from the background (below), the server checks every 5 s for opposing players within
+**60 m** of each other.
 
 Conditions: both level ≥ 5, levels within ±12 (or the lower one is ≥ 30), neither Downed or in a
 sanctuary, no fight between that pair in the last 4 h, and neither in a PvP fight in the last 10 min.
@@ -448,6 +449,32 @@ equipped item names. Never callsign, never position, never direction. Afterwards
 
 **Hostile signal.** If an opposing active player is within 500 m, the HUD shows "Hostiles in the
 area" — no count, no direction. Tension without tracking.
+
+### Patrol mode (Contact with the app closed)
+
+Almost nobody has the app open at the same moment as an opposing player, so Contact would almost
+never happen. **Patrol** fixes that: the player turns it on from the map (Android first; iOS
+written, untested) for 1 h, 3 h, or until they stop it. The phone then sends a light check-in
+about once a minute and stays matchable; Contact resolves exactly as in the foreground (same
+conditions, same HP, XP, loot and war points), asynchronously, with nobody watching.
+
+- **Presence.** A Patrol check-in keeps the player live for **4 minutes** (a foreground position
+  lasts 2). It uses the same position checks as the foreground (speed limit, sanctuary flag) and
+  pays walking distance and XP the same way. Nothing else is computed for it: no spawns, enemies,
+  caches or landmarks.
+- **Results arrive as notifications.** The check-in returns only what a notification needs (id,
+  type, text, time) plus HP and Downed state. "CONTACT: A Zombie found you. You held." Tapping it
+  opens the app.
+- **Notified is not seen.** Events carry two flags: *notified* (a Patrol notification went out)
+  and *delivered* (the app showed it). The notification never consumes the event: when the app
+  opens, the world poll still delivers it with the full Battle, shown in a **"While you were
+  patrolling"** card (events that reached the app more than a minute after they happened) where each
+  Contact can be replayed with the normal fight playback. An event seen in the app is never
+  notified afterwards.
+- **Privacy is unchanged.** The opponent is anonymous, no position or direction is ever sent back,
+  and positions stay in memory only. The player sees a persistent notification while Patrol is on.
+- **Battery.** One position request per minute at most (only after 40 m of movement), one small
+  POST per minute; the interval is configurable for testing (15 s).
 
 ### Echoes — PvP for small populations
 
@@ -543,5 +570,5 @@ first; push (FCM/APNs) when there is a hosted server.
 
 ## 16. What's deferred, honestly
 
-Real-money store, ads, season pass, AR mode, background Patrol mode on iOS (Android first), push
+Real-money store, ads, season pass, AR mode, Patrol mode being proven on iOS (Android first), push
 via FCM/APNs, email/social login. The design leaves room for each.

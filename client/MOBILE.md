@@ -92,14 +92,76 @@ with `npm run icons:ios` (ImageMagick; from `assets/logo.png`). Fill the App Pri
 | Android back: closes the top sheet (`src/ui/back.ts`), otherwise minimizes | `src/native/lifecycle.ts` |
 | Sign in with Google / Apple via `@capgo/capacitor-social-login` (ID token only; the server verifies it). Needs the IDs, the iOS URL scheme in `Info.plist` and the Sign in with Apple entitlement (`ios/App/App/App.entitlements`): see `../docs/ACCOUNTS_SETUP.md` | `src/auth/social.ts` |
 
-## Next step: Patrol mode (background location)
+## Patrol mode (background location)
 
-Today nothing is read while the app is closed. Patrol mode needs:
+Patrol keeps the player in the world with the app closed. A native plugin (`Patrol`, JS wrapper
+`src/native/patrol.ts`) runs a background location service that posts a light check-in to
+`POST /api/patrol` (see `docs/ARCHITECTURE.md`); each event the server returns becomes a local
+notification, and the app replays the fights in "While you were patrolling" when it opens. The
+token and server URL are passed from JS at `Patrol.start`; native code never reads WebView storage.
 
-- Android: a foreground service of type `location` with a persistent notification, the
-  `ACCESS_BACKGROUND_LOCATION` permission (separate prompt, Play review), and a native plugin
-  that posts fixes to the server (or queues them for the next foreground poll).
-- iOS: the "Location updates" background mode (`UIBackgroundModes`), an "Always" authorization
-  request with `NSLocationAlwaysAndWhenInUseUsageDescription`, and significant-change or
-  continuous updates via CoreLocation.
-- Update the Locate copy ("Nothing is read while the app is closed") and the privacy disclosures.
+API: `Patrol.start({serverUrl, token, intervalSec?, durationSec?})` (`durationSec` 0 = until stopped),
+`stop()`, `status()` -> `{active, endsAt, intervalSec, lastCheckIn, lastError, fineLocation,
+backgroundLocation, notifications}`, `requestBackground()`, `openSettings()`.
+
+Interval: 60 s by default. For testing set `VITE_PATROL_INTERVAL_SEC=15` at build time, or
+`outbreak.patrol.interval` in app storage (clamped to 10..600 s).
+
+### Android
+
+`android/.../PatrolPlugin.java` (bridge, registered in `MainActivity`) and `PatrolService.java`.
+
+- Foreground service of type `location`, persistent low-importance notification "Outbreak is
+  patrolling - tap to open" with a Stop action. Survives the app being swiped away; stops itself
+  after the chosen duration, when the token is rejected (401), or if permission is withdrawn.
+- `LocationManager` only (no Play Services): PASSIVE + NETWORK + GPS providers, `minTime` 60 s,
+  `minDistance` 40 m, fixes worse than 150 m ignored. The check-in is driven by an inexact
+  `setAndAllowWhileIdle` alarm every `intervalSec` (re-announcing the last fix, so a standing-still
+  player stays matchable); a partial wake lock is held only for the POST. Failures back off
+  (interval x 2^n, capped at 10 min).
+- Notifications: "Patrol" (low, the service), "Contacts" (high, one per Contact: title CONTACT,
+  body "A Zombie found you. You held."), "Patrol updates" (level-ups, raids, patrol ending).
+- Permissions: `ACCESS_BACKGROUND_LOCATION`, `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_LOCATION`,
+  `POST_NOTIFICATIONS`, `WAKE_LOCK`. Flow: fine location (onboarding) -> notifications (asked at
+  Patrol start) -> an in-app explanation screen -> `requestBackground()` (Android 11+ opens the
+  location settings page: "Allow all the time"). If the player declines, Patrol still starts
+  because the service is started from the visible app, which keeps "while in use" location alive;
+  the UI says plainly that if Android ends the service, the player must reopen the app, because a
+  service cannot restart itself into the foreground from the background.
+- Play review: background location needs a declaration, a privacy-policy line and a short video.
+  Update the Data safety form ("location, collected in the background, not shared").
+- Expected cost: GPS/network fixes at most once a minute and only after 40 m of movement, plus one
+  small POST per minute (a few hundred bytes). The old prototype's equivalent service measured very
+  battery-efficient; measure this one on the Pixel with `adb shell dumpsys batterystats` over a 1 h
+  walk and a 1 h stationary run and record the numbers here.
+- Doze: with the phone stationary and the screen off, Android may batch the inexact alarm (up to
+  several minutes). The server keeps a patrol position for 4 minutes, so a stationary phone can drop
+  out of matching until the next check-in; moving phones are not affected.
+
+### iOS (written without a Mac: nothing below has been built or run)
+
+`ios/App/App/PatrolPlugin.swift` (engine + bridge) and `ViewController.swift` (registers the plugin;
+`Main.storyboard` now points at it). `CLLocationManager` with `allowsBackgroundLocationUpdates`,
+`pausesLocationUpdatesAutomatically`, 40 m distance filter, significant-change monitoring so the
+system can relaunch the app (`AppDelegate` resumes patrol), `URLSession` POSTs wrapped in a
+background task, and `UNUserNotificationCenter` local notifications (Contacts are time-sensitive).
+`Info.plist` gains `UIBackgroundModes: location` and `NSLocationAlwaysAndWhenInUseUsageDescription`.
+
+Verify on a Mac:
+
+1. The project builds: `PatrolPlugin.swift` and `ViewController.swift` were added to
+   `project.pbxproj` by hand; check both are in the App target's Sources, and that the storyboard's
+   view controller class is `ViewController` (module App). Fix the CAPBridgedPlugin conformance if
+   Capacitor 8's signature differs.
+2. Permission flow: When In Use first, then "Always" upgrade via `requestBackground()`; confirm the
+   iOS Always prompt appears (it may only appear once; otherwise the UI offers Settings).
+3. Background behaviour: lock the phone, walk, confirm check-ins reach the server and the blue
+   location indicator shows. Check that a stationary phone still checks in (the 15-minute stale
+   limit) or document that it cannot (iOS suspends a stationary app; the timer only runs while the
+   system keeps it alive).
+4. Termination: force-quit the app, move 500 m, confirm the significant-change relaunch resumes
+   patrol. (A user force-quit normally disables relaunch until the next manual open.)
+5. Notifications: a Contact arrives as a time-sensitive notification; tapping opens the app and the
+   "While you were patrolling" card plays it.
+6. App Review: background location needs a clear purpose string and review notes.
+7. Token storage: it is in UserDefaults for now; move it to the Keychain.
