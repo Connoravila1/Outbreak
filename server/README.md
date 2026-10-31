@@ -21,9 +21,18 @@ Zig 0.16 is required. SQLite is vendored in `vendor/sqlite/`; nothing else is do
 | `--bind`  | `OUTBREAK_BIND`  | `0.0.0.0`|
 | `--data`  | `OUTBREAK_DATA`  | `./data` |
 | `--dev`   | `OUTBREAK_DEV=1` | off      |
+| `--google-client-ids` | `OUTBREAK_GOOGLE_CLIENT_IDS` | none (Google sign-in off) |
+| `--apple-audiences`   | `OUTBREAK_APPLE_AUDIENCES`   | none (Apple sign-in off)  |
 
 Flags override environment variables. `--dev` enables `/api/dev/*` (grants, healing, staged
 contacts) and loosens rate limits. Never run it on a public server.
+
+Sign-in: `--google-client-ids` takes the OAuth client IDs as a comma list, **web first**, then the
+Android and iOS ones. `--apple-audiences` takes the iOS bundle id (`com.outbreak.game`) and the web
+Services ID. A provider with no IDs answers `503 provider_not_configured` and `/api/health` tells the
+client to hide its button. With `--dev` there is also a `dev` provider that needs no real account.
+`--google-jwks-url` / `--apple-jwks-url` override where signing keys are fetched (testing only).
+Step by step setup: `docs/ACCOUNTS_SETUP.md`.
 
 The server logs one line per request (method, path, status, milliseconds). Positions and tokens are
 never logged.

@@ -6,41 +6,59 @@ import { Broadcast } from './Broadcast';
 import { Locate } from './Locate';
 import { Bitten } from './Bitten';
 import { SplitLens } from './SplitLens';
+import { Commit } from './Commit';
+import { Save } from './Save';
+import { SignIn } from './SignIn';
 import { Callsign } from './Callsign';
 import { Kit } from './Kit';
 import { Creator } from '../avatar/Creator';
-import { RecoveryCode } from './Recovery';
 import { Briefing } from './Briefing';
-import { Recover } from './Recover';
+import type { Done } from '../auth/ProviderButtons';
 import { requestNotifyPermission, scheduleDailyReset } from '../native/notify';
 import './onboarding.css';
 
 /** After onboarding: the one moment we ask to send alerts. */
 function askNotify() { void requestNotifyPermission().then((ok) => { if (ok) void scheduleDailyReset(); }); }
 
-type Step = 'broadcast' | 'recover' | 'locate' | 'bitten' | 'split' | 'callsign' | 'avatar' | 'kit' | 'recovery' | 'briefing';
+type Step = 'broadcast' | 'signin' | 'locate' | 'bitten' | 'split' | 'commit' | 'save' | 'callsign' | 'avatar' | 'kit' | 'briefing';
 
-/** First launch: broadcast, permission, the bite, the choosing, identity, kit, briefing. */
+/** Where an account that already exists on the server picks up. */
+function resumeStep(): Step {
+  const m = me.value;
+  if (!m) return 'broadcast';
+  if (!m.faction) return 'locate';
+  return m.account.guest ? 'save' : 'callsign';
+}
+
+/** First launch: broadcast, permission, the bite, the choosing, saving the survivor, identity, kit, briefing. */
 export function Onboarding() {
-  // An account with no faction yet (quit mid-way) skips the cold open.
-  const [step, setStep] = useState<Step>(me.value && !me.value.faction ? 'locate' : 'broadcast');
-  const [chosen, setChosen] = useState<Faction | null>(null);
-  const accountExists = !!me.value;
+  // An account quit mid-way skips the cold open.
+  const [step, setStep] = useState<Step>(resumeStep);
+  const [chosen, setChosen] = useState<Faction | null>(me.value?.faction ?? null);
+  // Resumed accounts have seen the bite already.
+  const [skipBite] = useState(!!me.value);
 
   const go = (s: Step) => setStep(s);
-  const chose = (f: Faction) => { setChosen(f); lensOverride.value = f === 'human' ? 'survey' : 'heat'; go('callsign'); };
+  const chose = (f: Faction) => { setChosen(f); lensOverride.value = f === 'human' ? 'survey' : 'heat'; go('commit'); };
+  const enterApp = () => { lensOverride.value = null; phase.value = 'app'; askNotify(); };
+  /** A sign-in succeeded: continue from wherever that character stands. */
+  const signedIn = (d: Done) => {
+    const m = d.me;
+    if (m.faction && m.callsign) { void loadCatalog(); enterApp(); } else if (m.faction) { setChosen(m.faction); go('callsign'); } else go('locate');
+  };
 
   const p = position.value;
   switch (step) {
-    case 'broadcast': return <Broadcast onDone={() => go('locate')} onRecover={() => go('recover')} />;
-    case 'recover': return <Recover onBack={() => go('broadcast')} onRecovered={(hasFaction) => { if (hasFaction) { phase.value = 'app'; askNotify(); } else go('locate'); }} />;
-    case 'locate': return <Locate onDone={() => go(accountExists ? 'split' : 'bitten')} />;
+    case 'broadcast': return <Broadcast onDone={() => go('locate')} onSignIn={() => go('signin')} />;
+    case 'signin': return <SignIn onBack={() => go('broadcast')} onDone={signedIn} />;
+    case 'locate': return <Locate onDone={() => go(skipBite ? 'split' : 'bitten')} />;
     case 'bitten': return <Bitten onDone={() => go('split')} />;
     case 'split': return p ? <SplitLens center={p} onChosen={chose} /> : <Locate onDone={() => go('split')} />;
-    case 'callsign': return <Callsign faction={chosen ?? 'human'} accountExists={accountExists} onDone={() => { void loadCatalog().then(() => go('avatar')); }} />;
+    case 'commit': return <Commit faction={chosen ?? 'human'} onDone={() => go(me.value?.account.guest ? 'save' : 'callsign')} />;
+    case 'save': return <Save onDone={signedIn} onGuest={() => go('callsign')} />;
+    case 'callsign': return <Callsign faction={chosen ?? 'human'} onDone={() => { void loadCatalog().then(() => go('avatar')); }} />;
     case 'avatar': return <div class="ob-screen"><div class="ob-card wide"><Creator faction={chosen ?? 'human'} level={1} initial={me.value?.avatar} later onDone={() => go('kit')} /></div></div>;
-    case 'kit': return <Kit onDone={() => go('recovery')} />;
-    case 'recovery': return <RecoveryCode onDone={() => go('briefing')} />;
-    case 'briefing': return <Briefing onDone={() => { lensOverride.value = null; phase.value = 'app'; askNotify(); }} />;
+    case 'kit': return <Kit onDone={() => go('briefing')} />;
+    case 'briefing': return <Briefing onDone={enterApp} />;
   }
 }

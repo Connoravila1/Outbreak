@@ -23,7 +23,7 @@ export function Profile() {
       <div class="id-card card">
         <div class="avatar-frame"><Avatar spec={m.avatar} faction={f ?? 'human'} level={m.level} lens={lens.value} size={72} label={`${m.callsign} portrait`} /></div>
         <div class="id-main">
-          <p class="display callsign-big">{m.callsign}</p>
+          <p class="display callsign-big">{m.callsign ?? ''}</p>
           <p class="dim voice">{f === 'zombie' ? say('Zombie', 'infected') : say('Human', 'living')} </p>
           <button type="button" class="btn" onClick={() => setEditing(true)}>{hasAvatar(m.avatar) ? say('Edit', 'change') : say('Create avatar', 'make a face')}</button>
         </div>

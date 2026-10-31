@@ -4,6 +4,7 @@ const std = @import("std");
 const game = @import("game");
 const db_mod = @import("db.zig");
 const live_mod = @import("live.zig");
+const auth_mod = @import("auth.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -14,6 +15,8 @@ pub const Options = struct {
     dev: bool = false,
     /// Per-token rate limits (relaxed when `dev` is set).
     limits: bool = true,
+    /// Sign-in providers (client IDs, audiences).
+    auth: auth_mod.Config = .{},
 };
 
 /// Everything the server shares. One mutex guards the database, `live`, `rng` and `shares`.
@@ -25,6 +28,7 @@ pub const Ctx = struct {
     seed: u64,
     opts: Options,
     live: live_mod.Live,
+    auth: auth_mod.Verifier,
     rng: game.rng.Rng,
     /// Tests pin the clock here.
     clock_ms: ?i64 = null,
@@ -59,6 +63,7 @@ pub const Ctx = struct {
             .seed = seed,
             .opts = opts,
             .live = live_mod.Live.init(gpa),
+            .auth = .{ .config = opts.auth },
             .rng = game.rng.Rng.init(std.mem.readInt(u64, &seed_bytes, .little)),
         };
     }
@@ -86,7 +91,7 @@ pub const Ctx = struct {
     }
 };
 
-pub const Method = enum { get, post, options, other };
+pub const Method = enum { get, post, delete, options, other };
 
 pub const Failure = struct { status: u16, code: []const u8, message: []const u8 };
 
@@ -105,6 +110,15 @@ pub const Req = struct {
     /// Set by the router once the bearer token is checked.
     pid: i64 = 0,
     failure: ?Failure = null,
+    /// A transaction is open (the router opens one for authenticated routes; `.optional` routes
+    /// call `begin` once they have finished anything slow, such as fetching signing keys).
+    in_txn: bool = false,
+
+    pub fn begin(self: *Req) db_mod.Error!void {
+        if (self.in_txn) return;
+        try self.ctx.db.begin();
+        self.in_txn = true;
+    }
 
     pub fn fail(self: *Req, status: u16, code: []const u8, message: []const u8) error{Api} {
         self.failure = .{ .status = status, .code = code, .message = message };

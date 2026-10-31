@@ -12,6 +12,8 @@ import type {
 const KEY = 'outbreak.mock.db';
 const TOKEN = 'mock-token';
 const RECOVERY = 'MOCK-7QX2-K9PD-41LA';
+/** Identities that "exist on the server" even after this device forgets them (survives account deletion of others). */
+const IDKEY = 'outbreak.mock.identities';
 
 export function mockRequested(): boolean {
   try {
@@ -102,7 +104,9 @@ const CATALOG: Catalog = {
 
 // ---------- database ----------
 interface Clan { id: string; name: string; tag: string; faction: Faction; code: string; strongholds: number }
+interface Ident { provider: string; subject: string; email: string | null }
 interface DB {
+  exists: boolean; ids: Ident[];
   callsign: string | null; avatar?: Record<string, unknown> | null; faction: Faction | null; level: number; xp: number; hp: number; salvage: number;
   items: Item[]; eq: Record<Slot, string | null>; consumables: Record<string, number>; abil: string[]; buffs: { kind: string; until: number }[];
   defeated: string[]; n: number; mprog: number[]; mclaimed: boolean[]; wprog: number; wclaimed: boolean; streak: number;
@@ -112,7 +116,7 @@ interface DB {
 }
 function fresh(): DB {
   return {
-    callsign: null, faction: null, level: 1, xp: 0, hp: 100, salvage: 0, items: [], eq: { weapon: null, armor: null, utility: null },
+    exists: false, ids: [], callsign: null, faction: null, level: 1, xp: 0, hp: 100, salvage: 0, items: [], eq: { weapon: null, armor: null, utility: null },
     consumables: {}, abil: [], buffs: [], defeated: [], n: 1, mprog: [1, 0, 240], mclaimed: [false, false, false], wprog: 0, wclaimed: false,
     streak: 2, clan: null, chat: [], warPoints: 0, feed: [], contactPending: false, userClans: [],
     rec: { wins: 0, losses: 0, contacts: 0, echoes: 0, caches: 0, distance_m: 0 },
@@ -123,7 +127,14 @@ function load(): DB {
   return fresh();
 }
 let db = load();
-const save = () => { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch { /* ignore */ } };
+const save = () => {
+  try {
+    localStorage.setItem(KEY, JSON.stringify(db));
+    const v = vault();
+    for (const i of db.ids) v[idKey(i)] = db;
+    if (db.ids.length) putVault(v);
+  } catch { /* ignore */ }
+};
 
 const maxHp = (l: number) => 100 + 14 * (l - 1);
 const sum = (a: Stats, b: Stats): Stats => ({ hp: a.hp + b.hp, atk: a.atk + b.atk, def: a.def + b.def, spd: a.spd + b.spd });
@@ -187,7 +198,7 @@ function buildMe(): Me {
   const slots = slotsAt(db.level);
   const myClan = db.clan ? allClans().find((c) => c.id === db.clan!.id) : null;
   return {
-    id: 'mock-1', callsign: db.callsign ?? '', faction: db.faction, level: db.level, xp: db.xp,
+    id: 'mock-1', callsign: db.callsign, faction: db.faction, level: db.level, xp: db.xp,
     xp_next: CATALOG.levels.xp_to_next[db.level - 1], title: titles[Math.min(titles.length - 1, Math.floor(db.level / 5))],
     hp: Math.min(db.hp, total.hp), max_hp: total.hp, downed_until: null,
     stats: { hp: total.hp, atk: Math.round(total.atk), def: Math.round(total.def), spd: Math.round(total.spd) },
@@ -200,6 +211,7 @@ function buildMe(): Me {
     clan: db.clan && myClan ? { id: myClan.id, name: myClan.name, tag: myClan.tag, role: db.clan.role } : null,
     avatar: db.avatar ?? null, pvp_protected: db.level < 5, underdog_bonus: 0.15, war_points_week: db.warPoints,
     record: db.rec,
+    account: { guest: db.ids.length === 0, providers: db.ids.map((i) => i.provider), email: db.ids.find((i) => i.email)?.email ?? null },
   };
 }
 
@@ -250,7 +262,7 @@ function combatantMe(): Combatant {
   const m = buildMe();
   const f = m.faction ?? 'human';
   return {
-    name: m.callsign, faction: f, level: m.level, title: m.title, kind: 'player', archetype: null, max_hp: m.max_hp, hp_start: m.hp, stats: m.stats,
+    name: m.callsign ?? "You", faction: f, level: m.level, title: m.title, kind: 'player', archetype: null, max_hp: m.max_hp, hp_start: m.hp, stats: m.stats,
     abilities: m.abilities.equipped,
     gear: Object.values(m.equipped).filter(Boolean).map((uid) => { const it = m.items.find((i) => i.uid === uid)!; return it.unique ? CATALOG.uniques.find((u) => u.id === it.unique)!.names[f] : CATALOG.items.find((c) => c.id === it.base)!.names[f]; }),
   };
@@ -384,29 +396,82 @@ function seedChat() {
   ];
 }
 
+// ---------- accounts ----------
+function checkCallsign(cs: string) {
+  if (cs.length < 3 || cs.length > 16) throw new HttpError(400, 'callsign_invalid', 'Callsigns are 3 to 16 characters: letters, digits, _ and -.');
+  if (!/^[A-Za-z0-9_-]+$/.test(cs)) throw new HttpError(400, 'callsign_invalid', 'Callsigns are 3 to 16 characters: letters, digits, _ and -.');
+  if (cs.toLowerCase() === 'taken') throw new HttpError(409, 'callsign_taken', 'That callsign is taken.');
+}
+/** Characters that live "on the server": identity key -> saved DB. */
+const vault = (): Record<string, DB> => { try { return JSON.parse(localStorage.getItem(IDKEY) ?? '{}'); } catch { return {}; } };
+const putVault = (v: Record<string, DB>) => { try { localStorage.setItem(IDKEY, JSON.stringify(v)); } catch { /* ignore */ } };
+const idKey = (i: Ident) => i.provider + ':' + i.subject;
+function forgetIdentity(i: Ident) { const v = vault(); delete v[idKey(i)]; putVault(v); }
+function mockSignIn(body: any, authed: boolean, link: boolean): unknown {
+  const subject = String(need(body, 'subject')).trim();
+  const ident: Ident = { provider: 'dev', subject, email: typeof body.email === 'string' ? body.email : null };
+  const key = idKey(ident);
+  const v = vault();
+  if (link && !(authed && db.exists)) throw new HttpError(401, 'unauthorized', 'Missing token.');
+  if (v[key]) {
+    if (authed && db.exists && !link) {
+      if (db.faction && !body.switch) throw new HttpError(409, 'identity_in_use', 'That account already has a survivor. Switch to it? The survivor on this phone will be lost.');
+    } else if (link) throw new HttpError(409, 'identity_in_use', 'That dev account is already linked to another survivor.');
+    db = { ...fresh(), ...v[key] }; save();
+    return { token: TOKEN, me: buildMe(), created: false };
+  }
+  if (authed && db.exists) {
+    if (db.ids.some((i) => i.provider === 'dev')) throw new HttpError(409, 'already_linked', 'A different dev account is already linked.');
+    db.ids.push(ident); v[key] = db; putVault(v); save();
+    return link ? { me: buildMe() } : { token: TOKEN, me: buildMe(), created: false };
+  }
+  db = { ...fresh(), exists: true, ids: [ident] }; v[key] = db; putVault(v); save();
+  return { token: TOKEN, me: buildMe(), created: true };
+}
+
 // ---------- routing ----------
 class HttpError { constructor(public status: number, public error: string, public message: string) {} }
 const need = (b: any, k: string) => { if (b?.[k] == null) throw new HttpError(400, 'bad_request', `Missing ${k}.`); return b[k]; };
 const findItem = (uid: string) => { const it = db.items.find((i) => i.uid === uid); if (!it) throw new HttpError(404, 'no_item', 'No such item.'); return it; };
 
 function route(method: string, path: string, body: any, authed: boolean): unknown {
-  const guard = () => { if (!authed || !db.callsign) throw new HttpError(401, 'unauthorized', 'Sign in again.'); };
+  const guard = () => { if (!authed || !db.exists) throw new HttpError(401, 'unauthorized', 'Sign in again.'); };
   const mine = () => ({ me: buildMe() });
   switch (`${method} ${path}`) {
-    case 'GET /api/health': return { ok: true, version: 'mock', players_online: 41 };
+    case 'GET /api/health': return { ok: true, version: 'mock', players_online: 41, providers: { google: false, apple: false, dev: true, google_web_client_id: null, apple_web_service_id: null } };
     case 'GET /api/catalog': return CATALOG;
     case 'GET /api/factions': return { human: { share: 0.62, players: 310 }, zombie: { share: 0.38, players: 190 }, underdog: 'zombie', underdog_bonus: 0.12 };
     case 'POST /api/register': {
-      const cs = String(need(body, 'callsign')).trim();
-      if (cs.length < 3 || cs.length > 16) throw new HttpError(400, 'bad_callsign', 'Callsign must be 3 to 16 characters.');
-      if (!/^[A-Za-z0-9_ -]+$/.test(cs)) throw new HttpError(400, 'bad_callsign', 'Letters, numbers, spaces, - and _ only.');
-      if (cs.toLowerCase() === 'taken') throw new HttpError(409, 'callsign_taken', 'That callsign is taken.');
-      db = { ...fresh(), callsign: cs }; save();
+      const cs = typeof body?.callsign === 'string' ? body.callsign.trim() : '';
+      if (cs) checkCallsign(cs);
+      db = { ...fresh(), exists: true, callsign: cs || null }; save();
       return { token: TOKEN, recovery_code: RECOVERY, me: buildMe() };
     }
+    case 'POST /api/callsign': {
+      guard();
+      if (db.callsign) throw new HttpError(409, 'callsign_set', 'Your callsign is permanent.');
+      const cs = String(need(body, 'callsign')).trim();
+      checkCallsign(cs);
+      db.callsign = cs; save();
+      return mine();
+    }
     case 'POST /api/recover': {
-      if (String(need(body, 'recovery_code')).trim().toUpperCase() !== RECOVERY || !db.callsign) throw new HttpError(404, 'bad_recovery', 'No account matches that code. (Mock code: ' + RECOVERY + ')');
+      if (String(need(body, 'recovery_code')).trim().toUpperCase() !== RECOVERY || !db.exists) throw new HttpError(404, 'bad_recovery', 'No account matches that code. (Mock code: ' + RECOVERY + ')');
       return { token: TOKEN, me: buildMe() };
+    }
+    case 'POST /api/auth/dev': return mockSignIn(body, authed, false);
+    case 'POST /api/auth/link/dev': return mockSignIn(body, authed, true);
+    case 'POST /api/auth/unlink/dev': {
+      guard();
+      if (db.ids.length <= 1) throw new HttpError(409, 'last_identity', 'That is your only sign-in. Link another before removing it.');
+      db.ids = db.ids.filter((i) => i.provider !== 'dev'); save();
+      return mine();
+    }
+    case 'DELETE /api/account': {
+      guard();
+      for (const i of db.ids) forgetIdentity(i);
+      db = fresh(); save();
+      return { ok: true };
     }
     case 'POST /api/faction': {
       guard();

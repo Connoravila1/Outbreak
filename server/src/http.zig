@@ -19,7 +19,7 @@ const thread_stack_bytes = 512 * 1024;
 const cors_headers = [_]http.Header{
     .{ .name = "access-control-allow-origin", .value = "*" },
     .{ .name = "access-control-allow-headers", .value = "Authorization, Content-Type" },
-    .{ .name = "access-control-allow-methods", .value = "GET, POST, OPTIONS" },
+    .{ .name = "access-control-allow-methods", .value = "GET, POST, DELETE, OPTIONS" },
     .{ .name = "access-control-max-age", .value = "86400" },
     .{ .name = "content-type", .value = "application/json; charset=utf-8" },
     .{ .name = "cache-control", .value = "no-store" },

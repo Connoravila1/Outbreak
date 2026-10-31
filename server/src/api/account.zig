@@ -1,4 +1,5 @@
-//! Account endpoints: health, catalog, factions, register, recover, faction, me, avatar.
+//! Account endpoints: health, catalog, factions, register (guest), callsign, recover, faction, me,
+//! avatar. Sign-in, linking and deletion are in auth.zig.
 
 const std = @import("std");
 const game = @import("game");
@@ -106,33 +107,90 @@ fn callsignValid(name: []const u8) bool {
 // --- Handlers ---------------------------------------------------------------------------------------
 
 pub fn health(req: *Req, jw: *Stringify) HandlerError!void {
-    try jw.write(.{ .ok = true, .version = ctx_mod.version, .players_online = req.ctx.live.online(req.now) });
+    const cfg = req.ctx.auth.config;
+    const auth = &req.ctx.auth;
+    try jw.write(.{
+        .ok = true,
+        .version = ctx_mod.version,
+        .players_online = req.ctx.live.online(req.now),
+        .providers = .{
+            .google = auth.configured(.google),
+            .apple = auth.configured(.apple),
+            .dev = req.ctx.opts.dev,
+            .google_web_client_id = cfg.googleWebClientId(),
+            .apple_web_service_id = cfg.appleWebServiceId(),
+        },
+    });
 }
 
-pub fn register(req: *Req, jw: *Stringify) HandlerError!void {
-    const body = try req.json(struct { callsign: []const u8 });
-    const name = std.mem.trim(u8, body.callsign, " ");
+/// Check a callsign and return its lowercase form (for the unique index). Fails the request when
+/// it is malformed, not allowed or taken.
+fn vetCallsign(req: *Req, name: []const u8) HandlerError![]const u8 {
     if (!callsignValid(name)) return req.fail(400, "callsign_invalid", "Callsigns are 3 to 16 characters: letters, digits, _ and -.");
     if (!callsignAllowed(name)) return req.fail(400, "callsign_invalid", "That callsign is not allowed.");
-
     const lc = try std.ascii.allocLowerString(req.arena, name);
-    const db = &req.ctx.db;
-    if ((try db.scalar("SELECT id FROM players WHERE callsign_lc = ?", .{lc})) != null) {
+    if ((try req.ctx.db.scalar("SELECT id FROM players WHERE callsign_lc = ?", .{lc})) != null) {
         return req.fail(409, "callsign_taken", "That callsign is taken.");
     }
+    return lc;
+}
 
+pub const NewPlayer = struct { id: i64, token: [64]u8, recovery_code: [19]u8 };
+
+/// Insert a player with a fresh session token. Without a callsign the row holds an empty
+/// callsign and a unique placeholder (`#` is not a legal callsign character).
+pub fn createPlayer(req: *Req, callsign: ?[]const u8) HandlerError!NewPlayer {
+    const db = &req.ctx.db;
     const token = newToken(req);
     const code = newRecoveryCode(req);
     var norm_buf: [32]u8 = undefined;
     const token_hash = hashHex(&token);
     const code_hash = hashHex(normalizeCode(&norm_buf, &code));
+    var name: []const u8 = "";
+    var lc: []const u8 = try std.fmt.allocPrint(req.arena, "#{s}", .{@as([]const u8, &token_hash)});
+    if (callsign) |c| {
+        lc = try vetCallsign(req, c);
+        name = c;
+    }
     try db.run(
         "INSERT INTO players(callsign, callsign_lc, token_hash, recovery_hash, created_at, last_seen, abilities) VALUES(?,?,?,?,?,?,'')",
         .{ name, lc, @as([]const u8, &token_hash), @as([]const u8, &code_hash), req.now, req.now },
     );
-    const pid = db.lastInsertId();
-    const me = try views.meFresh(req, pid);
-    try jw.write(.{ .token = @as([]const u8, &token), .recovery_code = @as([]const u8, &code), .me = me });
+    return .{ .id = db.lastInsertId(), .token = token, .recovery_code = code };
+}
+
+/// Make a new session token for a player; the old device's token stops working.
+pub fn rotateToken(req: *Req, pid: i64) HandlerError![64]u8 {
+    const token = newToken(req);
+    try req.ctx.db.run("UPDATE players SET token_hash = ? WHERE id = ?", .{ @as([]const u8, &hashHex(&token)), pid });
+    return token;
+}
+
+/// Create a guest. The callsign is optional here; it can be chosen later with /api/callsign.
+pub fn register(req: *Req, jw: *Stringify) HandlerError!void {
+    const Body = struct { callsign: ?[]const u8 = null };
+    const body = if (req.body.len == 0) Body{} else try req.json(Body);
+    var name: ?[]const u8 = null;
+    if (body.callsign) |c| {
+        const t = std.mem.trim(u8, c, " ");
+        if (t.len > 0) name = t;
+    }
+    try req.begin();
+    const np = try createPlayer(req, name);
+    const me = try views.meFresh(req, np.id);
+    try jw.write(.{ .token = @as([]const u8, &np.token), .recovery_code = @as([]const u8, &np.recovery_code), .me = me });
+}
+
+pub fn setCallsign(req: *Req, jw: *Stringify) HandlerError!void {
+    const body = try req.json(struct { callsign: []const u8 });
+    const name = std.mem.trim(u8, body.callsign, " ");
+    const db = &req.ctx.db;
+    if ((try db.scalar("SELECT id FROM players WHERE id = ? AND callsign <> ''", .{req.pid})) != null) {
+        return req.fail(409, "callsign_set", "Your callsign is permanent.");
+    }
+    const lc = try vetCallsign(req, name);
+    try db.run("UPDATE players SET callsign = ?, callsign_lc = ? WHERE id = ?", .{ name, lc, req.pid });
+    try jw.write(.{ .me = try views.meFresh(req, req.pid) });
 }
 
 pub fn recover(req: *Req, jw: *Stringify) HandlerError!void {
@@ -144,8 +202,7 @@ pub fn recover(req: *Req, jw: *Stringify) HandlerError!void {
     const pid = (try db.scalar("SELECT id FROM players WHERE recovery_hash = ?", .{@as([]const u8, &hashHex(norm))})) orelse
         return req.fail(404, "not_found", "No account matches that recovery code.");
     // The old device's token stops working.
-    const token = newToken(req);
-    try db.run("UPDATE players SET token_hash = ? WHERE id = ?", .{ @as([]const u8, &hashHex(&token)), pid });
+    const token = try rotateToken(req, pid);
     try jw.write(.{ .token = @as([]const u8, &token), .me = try views.meFresh(req, pid) });
 }
 

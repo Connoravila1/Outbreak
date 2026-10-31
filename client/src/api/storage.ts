@@ -78,11 +78,25 @@ export const storage = {
 export const KEYS = {
   server: 'outbreak.server',
   token: 'outbreak.token',
-  recovery: 'outbreak.recovery',
   simPos: 'outbreak.sim.pos',
   simActive: 'outbreak.sim.active',
   sound: 'outbreak.sound',
   haptics: 'outbreak.haptics',
   reducedMotion: 'outbreak.reducedMotion',
   briefed: 'outbreak.briefed',
+  /** Highest level at which the guest reminder has been shown (3, then 10). */
+  guestNudge: 'outbreak.guestNudge',
 } as const;
+
+/** Device settings that outlive a sign-out: they are about the phone, not the player. */
+const KEEP: string[] = [KEYS.server, KEYS.sound, KEYS.haptics, KEYS.reducedMotion];
+
+/** Forget everything this device holds about the player (token, progress flags, simulator spot). */
+export function wipeLocal() {
+  for (const k of Object.values(KEYS)) if (!KEEP.includes(k)) backend.remove(k);
+  try {
+    for (const k of Object.keys(localStorage)) {
+      if (k.startsWith('outbreak.') && !k.startsWith('outbreak.mock') && !KEEP.includes(k)) localStorage.removeItem(k);
+    }
+  } catch { /* blocked */ }
+}

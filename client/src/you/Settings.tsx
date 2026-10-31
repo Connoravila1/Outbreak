@@ -1,11 +1,12 @@
 import { useState } from 'preact/hooks';
-import { api, errorMessage, getServerUrl, setServerUrl, KEYS, storage } from '../api';
-import { soundOn, hapticsOn, reducedMotion, setSetting, signOut } from '../state/store';
+import { api, errorMessage, getServerUrl, setServerUrl, KEYS } from '../api';
+import { soundOn, hapticsOn, reducedMotion, setSetting } from '../state/store';
 import { simActive, setSimActive, isDesktop } from '../location';
 import { say } from '../ui/voice';
 import { Icon } from '../ui/Icon';
 import { Section } from '../ui/kit';
 import { Credits } from './Credits';
+import { Account } from './Account';
 import { unlockAudio } from '../audio/fx';
 import { VolumeSliders } from '../audio/VolumeSliders';
 import { isNative } from '../native/platform';
@@ -26,10 +27,7 @@ export function Settings() {
   const [saved, setSaved] = useState(false);
   const [probe, setProbe] = useState<Probe>(null);
   const [testing, setTesting] = useState(false);
-  const [showCode, setShowCode] = useState(false);
-  const [copied, setCopied] = useState(false);
   const [credits, setCredits] = useState(false);
-  const recovery = storage.get(KEYS.recovery);
 
   const test = async () => {
     setTesting(true); setProbe(null);
@@ -40,6 +38,8 @@ export function Settings() {
   };
 
   return (
+    <>
+    <Account />
     <Section title={say('Settings', 'settings')}>
       <label class="dim lab" for="srv">{say('Server URL (blank = this site)', 'server (blank = here)')}</label>
       <div class="row-gap">
@@ -57,25 +57,12 @@ export function Settings() {
       <Toggle label={say('Reduce motion', 'still')} hint={say('Overrides your device setting. No screen shake, no breathing.', 'no shaking. no breathing.')} checked={reducedMotion.value} onChange={(v) => setSetting(reducedMotion, KEYS.reducedMotion, v)} />
       {!isNative && <Toggle label={say('GPS simulator', 'fake steps')} hint={isDesktop() ? undefined : say('For testing without walking.', 'for testing.')} checked={simActive.value} onChange={setSimActive} />}
 
-      <div class="kv code-kv">
-        <span>{say('Recovery code', 'recovery code')}</span>
-        {recovery ? (
-          <span class="code-act">
-            <b class="num code-val">{showCode ? recovery : '•••• •••• ••••'}</b>
-            <button class="btn" aria-pressed={showCode} onClick={() => setShowCode(!showCode)}>{showCode ? say('Hide', 'hide') : say('Show', 'show')}</button>
-            {showCode && <button class="btn" onClick={() => { void navigator.clipboard?.writeText(recovery).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1800); }, () => undefined); }}>{copied ? say('Copied', 'copied') : say('Copy', 'copy')}</button>}
-          </span>
-        ) : <b>{say('Not stored on this device', 'not kept here')}</b>}
-      </div>
-      <p class="settings-note">{say('Write the recovery code down. It is the only way to move to a new phone.', 'keep the code. it is the only way back.')}</p>
-
       <div class="set-actions">
+        <a class="btn block" href="privacy.html" target="_blank" rel="noopener">{say('Privacy policy', 'privacy')}</a>
         <button class="btn block" onClick={() => setCredits(true)}><Icon name="info" size={20} />{say('Credits', 'credits')}</button>
-        <button class="btn danger block" onClick={() => { if (confirm('Forget this device? You will need your recovery code to come back.')) signOut(); }}>
-          {say('Forget this device', 'leave')}
-        </button>
       </div>
       {credits && <Credits onClose={() => setCredits(false)} />}
     </Section>
+    </>
   );
 }

@@ -1,6 +1,6 @@
 import { signal, computed, effect } from '@preact/signals';
 import { api, ApiError, getServerUrl, getToken, setToken, type Battle, type Catalog, type Faction, type GameEvent, type Me, type WorldView } from '../api';
-import { KEYS, storage } from '../api/storage';
+import { KEYS, storage, wipeLocal } from '../api/storage';
 import { isNative } from '../native/platform';
 
 export type Lens = 'neutral' | 'survey' | 'heat';
@@ -52,17 +52,19 @@ export async function boot() {
   try {
     const m = await api.me();
     me.value = m;
-    phase.value = m.faction ? 'app' : 'onboarding';
-    if (m.faction) void loadCatalog();
+    const ready = !!m.faction && !!m.callsign;
+    phase.value = ready ? 'app' : 'onboarding';
+    if (ready) void loadCatalog();
   } catch (e) {
     if (e instanceof ApiError && e.status === 401) setToken(null);
     phase.value = 'onboarding';
   }
 }
 
+/** Forget this device's session and per-player settings (the server address stays), then restart at first launch. */
 export function signOut() {
   setToken(null);
-  storage.remove(KEYS.recovery);
+  wipeLocal();
   me.value = null;
   world.value = null;
   location.reload();

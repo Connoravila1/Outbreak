@@ -90,6 +90,7 @@ with `npm run icons:ios` (ImageMagick; from `assets/logo.png`). Fill the App Pri
 | Local notifications: "Daily missions reset" at 00:00 UTC (next 7 days, rescheduled on resume); "Back on your feet" / "you rise again." when Downed ends. Permission asked once, right after onboarding | `src/native/notify.ts` |
 | Status bar overlay, safe-area insets (`--sa-*` from `env(safe-area-inset-*)`), splash hidden on first screen | `src/native/lifecycle.ts` |
 | Android back: closes the top sheet (`src/ui/back.ts`), otherwise minimizes | `src/native/lifecycle.ts` |
+| Sign in with Google / Apple via `@capgo/capacitor-social-login` (ID token only; the server verifies it). Needs the IDs, the iOS URL scheme in `Info.plist` and the Sign in with Apple entitlement (`ios/App/App/App.entitlements`): see `../docs/ACCOUNTS_SETUP.md` | `src/auth/social.ts` |
 
 ## Next step: Patrol mode (background location)
 

@@ -34,7 +34,7 @@ export function TopBar() {
       <div class="id-plate">
         <LevelRing level={m.level} xp={m.xp} next={m.xp_next} avatar={m.avatar} />
         <div class="id-text">
-          <span class="callsign display">{m.callsign}</span>
+          <span class="callsign display">{m.callsign ?? ""}</span>
           <span class="title">{m.title}</span>
         </div>
       </div>
