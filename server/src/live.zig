@@ -26,6 +26,9 @@ pub const Pos = struct {
     /// Metres walked since walking XP was last paid out.
     carry_m: f64 = 0,
     source: Source = .foreground,
+    /// The phone says this fix came from a mock provider (a fake-GPS app). Such a position is not
+    /// matched for Contact and earns no walking XP or war points.
+    mock: bool = false,
 
     pub fn ttlMs(self: Pos) i64 {
         return if (self.source == .patrol) patrol_ttl_ms else position_ttl_ms;
@@ -134,6 +137,12 @@ pub const Live = struct {
         const p = self.positions.get(pid) orelse return null;
         if (!p.fresh(now)) return null;
         return p;
+    }
+
+    /// True while the player's latest live position is a simulated one (see `Pos.mock`).
+    pub fn simulated(self: *const Live, pid: i64, now: i64) bool {
+        const pos = self.position(pid, now) orelse return false;
+        return pos.mock;
     }
 
     pub fn setPosition(self: *Live, pid: i64, pos: Pos) Allocator.Error!void {

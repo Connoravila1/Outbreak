@@ -99,6 +99,7 @@ pub fn health(req: *Req, jw: *Stringify) HandlerError!void {
             .apple_web_service_id = cfg.appleWebServiceId(),
         },
         .tiles = tilesAdvert(req.ctx.opts.tiles),
+        .min_client = if (req.ctx.opts.update.min_client_text.len > 0) req.ctx.opts.update.min_client_text else null,
     });
 }
 

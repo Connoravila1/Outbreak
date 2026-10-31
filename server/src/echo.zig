@@ -76,6 +76,11 @@ pub fn current(req: *Req, p: *const model.Player, pos: live.Pos) HandlerError!?l
 /// A suspended player's snapshot is never served (the extra parameter is the current time).
 pub const not_banned = " AND NOT EXISTS (SELECT 1 FROM players b WHERE b.id = snapshots.player_id AND b.banned_until > ?)";
 
+/// A player who sent a simulated fix this recently is not offered as someone's Echo (the extra
+/// parameter is the earliest `mock_at` that still counts: now minus `mock_recent_ms`).
+pub const not_mocking = " AND NOT EXISTS (SELECT 1 FROM players m WHERE m.id = snapshots.player_id AND m.mock_at > ?)";
+pub const mock_recent_ms: i64 = 10 * 60 * 1000;
+
 const Picked = struct { player_id: i64, build: snapshot.Build };
 
 fn pickSnapshot(req: *Req, faction: data.Faction, not_pid: i64, level: u8, rng: *rng_mod.Rng) HandlerError!?Picked {
@@ -83,14 +88,14 @@ fn pickSnapshot(req: *Req, faction: data.Faction, not_pid: i64, level: u8, rng: 
     const hi = @as(i64, level) + level_band;
     const db = &req.ctx.db;
     const count = (try db.scalar(
-        "SELECT COUNT(*) FROM snapshots WHERE faction = ? AND player_id != ? AND level BETWEEN ? AND ?" ++ not_banned,
-        .{ faction, not_pid, lo, hi, req.now },
+        "SELECT COUNT(*) FROM snapshots WHERE faction = ? AND player_id != ? AND level BETWEEN ? AND ?" ++ not_banned ++ not_mocking,
+        .{ faction, not_pid, lo, hi, req.now, req.now - mock_recent_ms },
     )) orelse 0;
     if (count == 0) return null;
     const skip: i64 = rng.below(@intCast(@min(count, 1000)));
     var st = try db.query(
-        "SELECT player_id, level, items, abilities FROM snapshots WHERE faction = ? AND player_id != ? AND level BETWEEN ? AND ? " ++ not_banned ++ " ORDER BY player_id LIMIT 1 OFFSET ?",
-        .{ faction, not_pid, lo, hi, req.now, skip },
+        "SELECT player_id, level, items, abilities FROM snapshots WHERE faction = ? AND player_id != ? AND level BETWEEN ? AND ? " ++ not_banned ++ not_mocking ++ " ORDER BY player_id LIMIT 1 OFFSET ?",
+        .{ faction, not_pid, lo, hi, req.now, req.now - mock_recent_ms, skip },
     );
     defer st.finalize();
     if (!try st.step()) return null;

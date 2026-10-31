@@ -24,7 +24,7 @@ const max_range_bytes: u64 = 8 * 1024 * 1024;
 
 const cors_headers = [_]http.Header{
     .{ .name = "access-control-allow-origin", .value = "*" },
-    .{ .name = "access-control-allow-headers", .value = "Authorization, Content-Type, Range" },
+    .{ .name = "access-control-allow-headers", .value = "Authorization, Content-Type, Range, X-Outbreak-Client" },
     .{ .name = "access-control-allow-methods", .value = "GET, POST, DELETE, OPTIONS" },
     .{ .name = "access-control-max-age", .value = "86400" },
     .{ .name = "content-type", .value = "application/json; charset=utf-8" },
@@ -107,12 +107,26 @@ fn handleRequest(ctx: *Ctx, request: *http.Server.Request) !bool {
             if (h.value.len > prefix.len and std.ascii.eqlIgnoreCase(h.value[0..prefix.len], prefix)) token = h.value[prefix.len..];
         }
     }
+    // The client's version, if it sent one (a short string; anything longer is ignored).
+    var client: ?[]const u8 = null;
+    it = request.iterateHeaders();
+    while (it.next()) |h| {
+        if (std.ascii.eqlIgnoreCase(h.name, "x-outbreak-client")) client = h.value;
+    }
     // Copy it: the header buffer is invalidated when the body is read.
     var token_buf: [128]u8 = undefined;
     if (token) |t| {
         if (t.len > token_buf.len) token = null else {
             @memcpy(token_buf[0..t.len], t);
             token = token_buf[0..t.len];
+        }
+    }
+
+    var client_buf: [32]u8 = undefined;
+    if (client) |c| {
+        if (c.len > client_buf.len) client = null else {
+            @memcpy(client_buf[0..c.len], c);
+            client = client_buf[0..c.len];
         }
     }
 
@@ -147,7 +161,7 @@ fn handleRequest(ctx: *Ctx, request: *http.Server.Request) !bool {
         return keep;
     }
 
-    const resp = api.handle(ctx, method, path, query, token, body);
+    const resp = api.handleClient(ctx, method, path, query, token, client, body);
     defer resp.deinit(ctx.gpa);
     status = resp.status;
     try request.respond(resp.json, .{

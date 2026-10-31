@@ -5,6 +5,7 @@ const game = @import("game");
 const db_mod = @import("db.zig");
 const live_mod = @import("live.zig");
 const auth_mod = @import("auth.zig");
+const client_version = @import("client_version.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -19,6 +20,20 @@ pub const Options = struct {
     auth: auth_mod.Config = .{},
     /// Optional self-hosted map tiles (a PMTiles archive); see `Tiles`.
     tiles: Tiles = .{},
+    /// The forced-update gate (see `Update`).
+    update: Update = .{},
+};
+
+/// Clients older than `min_client` get 426 `update_required`. A request with no version header
+/// (curl, the web dev build) is always let through.
+pub const Update = struct {
+    /// The oldest client allowed; null lets every version in.
+    min_client: ?client_version.Version = null,
+    /// `min_client` as the operator wrote it, advertised in /api/health.
+    min_client_text: []const u8 = "",
+    /// Store pages the update screen opens; empty: the screen shows text only.
+    store_android: []const u8 = "",
+    store_ios: []const u8 = "",
 };
 
 /// Map tile source advertised in /api/health. All fields are optional; with none set the client

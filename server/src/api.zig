@@ -14,6 +14,8 @@ const auth = @import("api/auth.zig");
 const notes = @import("api/notes.zig");
 const report = @import("api/report.zig");
 const collection = @import("api/collection.zig");
+const client_error = @import("api/client_error.zig");
+const client_version = @import("client_version.zig");
 
 const Ctx = ctx_mod.Ctx;
 const Req = ctx_mod.Req;
@@ -45,6 +47,8 @@ const Route = struct {
     access: Access,
     handler: Handler,
     dev_only: bool = false,
+    /// The handler applies its own rate limit instead of the shared anonymous budget.
+    own_limit: bool = false,
 };
 
 const routes = [_]Route{
@@ -102,6 +106,7 @@ const routes = [_]Route{
     .{ .method = .get, .path = "/api/clan/chat", .access = .faction, .handler = social.chat },
     .{ .method = .post, .path = "/api/clan/chat", .access = .faction, .handler = social.chat },
     .{ .method = .post, .path = "/api/report", .access = .faction, .handler = report.report },
+    .{ .method = .post, .path = "/api/client-error", .access = .optional, .handler = client_error.submit, .own_limit = true },
     .{ .method = .post, .path = "/api/stronghold/claim", .access = .faction, .handler = social.claimStronghold },
     .{ .method = .post, .path = "/api/raid/attack", .access = .faction, .handler = social.raidAttack },
 
@@ -143,12 +148,45 @@ fn errorResponse(gpa: std.mem.Allocator, status: u16, code: []const u8, message:
 /// Handle one request. `path` excludes the query string; `token` is the bearer token without the
 /// "Bearer " prefix. Thread-safe: takes the global lock.
 pub fn handle(ctx: *Ctx, method: []const u8, path: []const u8, query: []const u8, token: ?[]const u8, body: []const u8) Response {
-    ctx.lock();
-    defer ctx.unlock();
-    return handleLocked(ctx, method, path, query, token, body);
+    return handleClient(ctx, method, path, query, token, null, body);
 }
 
-fn handleLocked(ctx: *Ctx, method_text: []const u8, path: []const u8, query: []const u8, token: ?[]const u8, body: []const u8) Response {
+/// `handle` for a request that carried an `X-Outbreak-Client` header (the client's version).
+pub fn handleClient(ctx: *Ctx, method: []const u8, path: []const u8, query: []const u8, token: ?[]const u8, client: ?[]const u8, body: []const u8) Response {
+    ctx.lock();
+    defer ctx.unlock();
+    return handleLocked(ctx, method, path, query, token, client, body);
+}
+
+/// The 426 answer for a client older than `--min-client`: where to get the new version, if known.
+fn updateRequired(gpa: std.mem.Allocator, u: ctx_mod.Update) Response {
+    const Store = struct { android: ?[]const u8, ios: ?[]const u8 };
+    const store: ?Store = if (u.store_android.len == 0 and u.store_ios.len == 0) null else .{
+        .android = if (u.store_android.len > 0) u.store_android else null,
+        .ios = if (u.store_ios.len > 0) u.store_ios else null,
+    };
+    const json = Stringify.valueAlloc(gpa, .{
+        .@"error" = "update_required",
+        .message = "This version of Outbreak is too old. Update to keep playing.",
+        .min_client = u.min_client_text,
+        .store = store,
+    }, .{}) catch return static_500;
+    return .{ .status = 426, .json = json };
+}
+
+/// True when the gate is on, the client named a version and it is older than the minimum. A missing
+/// or unreadable header is let through. Health (so the client can check at boot) and account
+/// deletion (a player may always leave) are never gated.
+fn tooOld(ctx: *const Ctx, client: ?[]const u8, m: Method, path: []const u8) bool {
+    const min = ctx.opts.update.min_client orelse return false;
+    const v = client_version.parse(client orelse return false) orelse return false;
+    if (v.order(min) != .lt) return false;
+    if (std.mem.eql(u8, path, "/api/health")) return false;
+    if (m == .delete and std.mem.eql(u8, path, "/api/account")) return false;
+    return true;
+}
+
+fn handleLocked(ctx: *Ctx, method_text: []const u8, path: []const u8, query: []const u8, token: ?[]const u8, client: ?[]const u8, body: []const u8) Response {
     const gpa = ctx.gpa;
     const m = parseMethod(method_text);
     if (m == .options) return .{ .status = 204, .json = "", .owned = false };
@@ -166,6 +204,8 @@ fn handleLocked(ctx: *Ctx, method_text: []const u8, path: []const u8, query: []c
         if (path_known) return errorResponse(gpa, 405, "method_not_allowed", "That method is not allowed here.");
         return errorResponse(gpa, 404, "not_found", "No such endpoint.");
     };
+
+    if (tooOld(ctx, client, m, path)) return updateRequired(gpa, ctx.opts.update);
 
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
@@ -201,7 +241,7 @@ fn authenticate(req: *Req, token: []const u8) HandlerError!?Who {
 fn run(req: *Req, rt: Route, token: ?[]const u8) HandlerError![]const u8 {
     const ctx = req.ctx;
     if (rt.access == .public or rt.access == .optional) {
-        if (ctx.opts.limits and rt.method != .get) {
+        if (ctx.opts.limits and rt.method != .get and !rt.own_limit) {
             if (!try ctx.live.allow(-1, req.now, anon_burst, anon_rate)) return req.fail(429, "rate_limited", "Slow down.");
         }
         // A stale token on an optional route is the same as none.

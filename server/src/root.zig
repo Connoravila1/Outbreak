@@ -11,6 +11,7 @@ pub const tick = @import("tick.zig");
 pub const http = @import("http.zig");
 pub const admin = @import("admin.zig");
 pub const names = @import("names.zig");
+pub const client_version = @import("client_version.zig");
 
 test {
     _ = @import("api_tests.zig");

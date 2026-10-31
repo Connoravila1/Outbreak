@@ -28,6 +28,8 @@ pub const usage =
     \\                                 suspend an account (forever unless --days is given)
     \\  unban <callsign>               lift a suspension
     \\  resolve <report-id>            close one report without acting on it
+    \\  errors [--since 7d]            crash and error reports from the app, grouped (d days, h hours)
+    \\  errors clear                   delete every stored error report
     \\
     \\Acting on a player, clan or message also closes the open reports about it.
     \\The data directory defaults to ./data (or OUTBREAK_DATA); it is the one the server uses.
@@ -66,6 +68,7 @@ pub fn run(gpa: Allocator, db: *Db, now: i64, rng: *game.rng.Rng, args: []const 
     if (eql(cmd, "unban")) return unban(c, try one(c, rest, "unban <callsign>"));
     if (eql(cmd, "resolve")) return resolve(c, try one(c, rest, "resolve <report-id>"));
     if (eql(cmd, "ban")) return ban(c, rest);
+    if (eql(cmd, "errors")) return errors(c, rest);
     if (eql(cmd, "help") or eql(cmd, "--help") or eql(cmd, "-h")) return out.writeAll(usage);
     try out.print("Unknown command \"{s}\".\n\n{s}", .{ cmd, usage });
     return error.Failed;
@@ -254,7 +257,8 @@ fn player(c: Ctx, callsign: []const u8) Error!void {
     var st = try c.db.query(
         \\SELECT p.faction, p.level, p.created_at, p.last_seen, p.banned_until, p.ban_reason, p.must_rename,
         \\  p.wins, p.losses, p.contacts_won, p.contacts_lost, COALESCE(cl.tag, ''), COALESCE(cl.name, ''), COALESCE(p.clan_role, ''),
-        \\  COALESCE((SELECT GROUP_CONCAT(provider) FROM identities i WHERE i.player_id = p.id), '')
+        \\  COALESCE((SELECT GROUP_CONCAT(provider) FROM identities i WHERE i.player_id = p.id), ''),
+        \\  p.mock_sessions, p.mock_at
         \\FROM players p LEFT JOIN clans cl ON cl.id = p.clan_id WHERE p.id = ?
     , .{f.id});
     defer st.finalize();
@@ -276,6 +280,12 @@ fn player(c: Ctx, callsign: []const u8) Error!void {
     const banned = try banText(c, until, st.text(5));
     try rows.append(c.arena, try rowOf(c, .{ "Suspension", banned }));
     try rows.append(c.arena, try rowOf(c, .{ "Must rename", if (st.int(6) != 0) "yes, on next launch" else "no" }));
+    // Sessions played with the phone reporting a simulated location (no position is ever stored).
+    const mock_sessions = st.int(15);
+    try rows.append(c.arena, try rowOf(c, .{
+        "Fake GPS",
+        if (mock_sessions == 0) "never reported" else try std.fmt.allocPrint(c.arena, "{d} session{s}, last {s} UTC", .{ mock_sessions, if (mock_sessions == 1) "" else "s", try stamp(c.arena, st.int(16)) }),
+    }));
 
     const msgs = (try c.db.scalar("SELECT COUNT(*) FROM clan_chat WHERE player_id = ?", .{f.id})) orelse 0;
     const against = (try c.db.scalar("SELECT COUNT(*) FROM reports WHERE target_player_id = ? AND status = 'open'", .{f.id})) orelse 0;
@@ -291,6 +301,67 @@ fn banText(c: Ctx, until: i64, reason: []const u8) Error![]const u8 {
     if (until <= c.now) return "none";
     if (until == forever) return std.fmt.allocPrint(c.arena, "banned for good. Reason: {s}", .{reason});
     return std.fmt.allocPrint(c.arena, "banned until {s} UTC. Reason: {s}", .{ try stamp(c.arena, until), reason });
+}
+
+// --- errors ---------------------------------------------------------------------------------------------
+
+/// "7d" or "36h" in milliseconds; a bare number is days.
+fn parseSpan(text: []const u8) ?i64 {
+    if (text.len == 0) return null;
+    const unit: i64 = switch (text[text.len - 1]) {
+        'h' => std.time.ms_per_hour,
+        'd' => std.time.ms_per_day,
+        '0'...'9' => std.time.ms_per_day,
+        else => return null,
+    };
+    const digits = if (text[text.len - 1] >= '0' and text[text.len - 1] <= '9') text else text[0 .. text.len - 1];
+    const n = std.fmt.parseInt(i64, digits, 10) catch return null;
+    if (n <= 0 or n > 3650 * 24) return null;
+    return n * unit;
+}
+
+fn plural(n: i64) []const u8 {
+    return if (n == 1) "" else "s";
+}
+
+fn errors(c: Ctx, rest: []const []const u8) Error!void {
+    if (rest.len == 1 and eql(rest[0], "clear")) {
+        const n = (try c.db.scalar("SELECT COUNT(*) FROM client_errors", .{})) orelse 0;
+        try c.db.run("DELETE FROM client_errors", .{});
+        return say(c, "Deleted {d} error report{s}.", .{ n, plural(n) });
+    }
+    var span: ?i64 = null;
+    if (rest.len == 2 and eql(rest[0], "--since")) {
+        span = parseSpan(rest[1]) orelse return fail(c, "\"{s}\" is not a span. Use a number of days or hours, such as 7d or 36h.", .{rest[1]});
+    } else if (rest.len != 0) {
+        try c.out.print("Usage: outbreak-server admin errors [--since 7d] | errors clear\n", .{});
+        return error.Failed;
+    }
+    const since: i64 = if (span) |s| c.now - s else 0;
+
+    const total = (try c.db.scalar("SELECT COUNT(*) FROM client_errors WHERE at >= ?", .{since})) orelse 0;
+    if (total == 0) return say(c, "No error reports{s}.", .{if (span != null) " in that time" else ""});
+    // The bare columns (message, frame) come from the row holding MAX(at): the latest report of the group.
+    var st = try c.db.query(
+        \\SELECT COUNT(*), MAX(at), GROUP_CONCAT(DISTINCT version), GROUP_CONCAT(DISTINCT platform), message, frame
+        \\FROM client_errors WHERE at >= ? GROUP BY hash ORDER BY COUNT(*) DESC, MAX(at) DESC LIMIT 50
+    , .{since});
+    defer st.finalize();
+    var rows: Rows = .empty;
+    while (try st.step()) {
+        try rows.append(c.arena, try rowOf(c, .{
+            try std.fmt.allocPrint(c.arena, "{d}", .{st.int(0)}),
+            try stamp(c.arena, st.int(1)),
+            try clip(c.arena, st.optText(2) orelse "", 20),
+            try clip(c.arena, st.optText(3) orelse "", 16),
+            try clip(c.arena, st.text(4), 70),
+            try clip(c.arena, st.text(5), 60),
+        }));
+    }
+    const groups = (try c.db.scalar("SELECT COUNT(DISTINCT hash) FROM client_errors WHERE at >= ?", .{since})) orelse 0;
+    const when: []const u8 = if (span != null) " in that time" else "";
+    try say(c, "{d} report{s} in {d} group{s}{s}. The table keeps the newest 5000.\n", .{ total, plural(total), groups, plural(groups), when });
+    try table(c, &.{ "COUNT", "LAST SEEN (UTC)", "VERSIONS", "PLATFORMS", "MESSAGE", "TOP FRAME" }, rows.items);
 }
 
 // --- rename -------------------------------------------------------------------------------------------
@@ -572,4 +643,71 @@ test "unknown commands and missing arguments print usage" {
     const c = try f.cmd(&.{});
     defer testing.allocator.free(c.text);
     try testing.expect(!c.ok);
+}
+
+test "player shows how many sessions reported a fake GPS, and no position" {
+    var f = try Fix.init();
+    defer f.deinit();
+    const none = try f.cmd(&.{ "player", "Alice" });
+    defer testing.allocator.free(none.text);
+    try testing.expect(std.mem.indexOf(u8, none.text, "Fake GPS") != null and std.mem.indexOf(u8, none.text, "never reported") != null);
+
+    try f.db.run("UPDATE players SET mock_sessions = 3, mock_at = ? WHERE id = 1", .{now_ms});
+    const some = try f.cmd(&.{ "player", "Alice" });
+    defer testing.allocator.free(some.text);
+    try testing.expect(std.mem.indexOf(u8, some.text, "3 sessions, last 2026-10-28 12:00 UTC") != null);
+}
+
+fn addError(f: *Fix, at: i64, hash: []const u8, message: []const u8, version: []const u8, platform: []const u8) !void {
+    try f.db.run(
+        "INSERT INTO client_errors(at, hash, message, stack, frame, version, platform, screen) VALUES(?,?,?,'','at f (a.js:1:2)',?,?,'map')",
+        .{ at, hash, message, version, platform },
+    );
+}
+
+test "errors: groups with counts, versions and last seen; --since; clear" {
+    var f = try Fix.init();
+    defer f.deinit();
+    const empty = try f.cmd(&.{"errors"});
+    defer testing.allocator.free(empty.text);
+    try testing.expect(empty.ok and std.mem.indexOf(u8, empty.text, "No error reports.") != null);
+
+    const day = std.time.ms_per_day;
+    try addError(&f, now_ms - 9 * day, "aaaa", "Old trouble", "0.0.9", "android");
+    try addError(&f, now_ms - 2 * day, "bbbb", "Map would not load", "0.1.0", "android");
+    try addError(&f, now_ms - 1 * day, "bbbb", "Map would not load", "0.1.1", "ios");
+    try addError(&f, now_ms - 3600_000, "bbbb", "Map would not load", "0.1.1", "android");
+    try addError(&f, now_ms - 3600_000, "cccc", "Undefined is not a function", "0.1.1", "web");
+
+    const all = try f.cmd(&.{"errors"});
+    defer testing.allocator.free(all.text);
+    try testing.expect(all.ok);
+    try testing.expect(std.mem.indexOf(u8, all.text, "5 reports in 3 groups") != null);
+    try testing.expect(std.mem.indexOf(u8, all.text, "Old trouble") != null);
+    // The biggest group comes first, with its versions and the time of its newest report.
+    const map_at = std.mem.indexOf(u8, all.text, "Map would not load").?;
+    try testing.expect(map_at < std.mem.indexOf(u8, all.text, "Undefined is not a function").?);
+    try testing.expect(std.mem.indexOf(u8, all.text, "0.1.0,0.1.1") != null or std.mem.indexOf(u8, all.text, "0.1.1,0.1.0") != null);
+    try testing.expect(std.mem.indexOf(u8, all.text, "2026-10-28 11:00") != null);
+
+    const week = try f.cmd(&.{ "errors", "--since", "7d" });
+    defer testing.allocator.free(week.text);
+    try testing.expect(week.ok);
+    try testing.expect(std.mem.indexOf(u8, week.text, "4 reports in 2 groups in that time") != null);
+    try testing.expect(std.mem.indexOf(u8, week.text, "Old trouble") == null);
+    const hours = try f.cmd(&.{ "errors", "--since", "2h" });
+    defer testing.allocator.free(hours.text);
+    try testing.expect(std.mem.indexOf(u8, hours.text, "2 reports in 2 groups") != null);
+
+    const bad = try f.cmd(&.{ "errors", "--since", "soon" });
+    defer testing.allocator.free(bad.text);
+    try testing.expect(!bad.ok and std.mem.indexOf(u8, bad.text, "not a span") != null);
+    const usage_err = try f.cmd(&.{ "errors", "--wat" });
+    defer testing.allocator.free(usage_err.text);
+    try testing.expect(!usage_err.ok);
+
+    const cleared = try f.cmd(&.{ "errors", "clear" });
+    defer testing.allocator.free(cleared.text);
+    try testing.expect(cleared.ok and std.mem.indexOf(u8, cleared.text, "Deleted 5 error reports.") != null);
+    try testing.expectEqual(@as(?i64, 0), try f.db.scalar("SELECT COUNT(*) FROM client_errors", .{}));
 }

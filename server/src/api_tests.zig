@@ -3293,3 +3293,409 @@ test "ban: a suspended player can still delete their account" {
     try testing.expectEqual(@as(u16, 200), del.status);
     try testing.expectEqual(@as(?i64, 0), try h.ctx.db.scalar("SELECT COUNT(*) FROM players WHERE callsign = 'Ghoul'", .{}));
 }
+
+// --- Forced update ---------------------------------------------------------------------------------------------
+
+const client_version = @import("client_version.zig");
+
+fn updateOpts(min: []const u8, android: []const u8, ios: []const u8) ctx_mod.Options {
+    return .{ .dev = true, .limits = false, .update = .{ .min_client = client_version.parse(min), .min_client_text = min, .store_android = android, .store_ios = ios } };
+}
+
+/// A request that carried an `X-Outbreak-Client` header.
+fn callClient(h: *Harness, client: ?[]const u8, method: []const u8, path: []const u8, token: ?[]const u8) !Res {
+    const raw = api.handleClient(&h.ctx, method, path, "", token, client, "");
+    const parsed: ?std.json.Parsed(Value) = if (raw.json.len > 0) try std.json.parseFromSlice(Value, testing.allocator, raw.json, .{}) else null;
+    return .{ .status = raw.status, .raw = raw, .parsed = parsed };
+}
+
+test "forced update: older clients get 426 with the stores, equal and newer pass, no header passes" {
+    var h: Harness = undefined;
+    try h.init(updateOpts("0.2.0", "https://play.example/outbreak", ""));
+    defer h.deinit();
+
+    var old = try callClient(&h, "0.1.9", "GET", "/api/factions", null);
+    defer old.deinit();
+    try testing.expectEqual(@as(u16, 426), old.status);
+    try testing.expectEqualStrings("update_required", try old.errorCode());
+    try testing.expect((try old.str("message")).len > 0);
+    try testing.expectEqualStrings("https://play.example/outbreak", try old.str("store.android"));
+    try testing.expect((try old.at("store.ios")) == .null);
+
+    // The gate comes before authentication and applies to POSTs too.
+    var old_post = try callClient(&h, "0.1.0", "POST", "/api/register", null);
+    defer old_post.deinit();
+    try testing.expectEqual(@as(u16, 426), old_post.status);
+
+    for ([_][]const u8{ "0.2.0", "0.2.1", "0.10.0", "1.0.0", "v0.3.0", "0.2.0-beta" }) |v| {
+        var r = try callClient(&h, v, "GET", "/api/factions", null);
+        defer r.deinit();
+        try testing.expectEqual(@as(u16, 200), r.status);
+    }
+    // No header (curl, the web dev build) and an unreadable one are allowed.
+    var none = try callClient(&h, null, "GET", "/api/factions", null);
+    defer none.deinit();
+    try testing.expectEqual(@as(u16, 200), none.status);
+    var junk = try callClient(&h, "banana", "GET", "/api/factions", null);
+    defer junk.deinit();
+    try testing.expectEqual(@as(u16, 200), junk.status);
+
+    // Health stays open so an old client can learn it must update; a player may always erase their account.
+    var health = try callClient(&h, "0.0.1", "GET", "/api/health", null);
+    defer health.deinit();
+    try testing.expectEqual(@as(u16, 200), health.status);
+    try testing.expectEqualStrings("0.2.0", try health.str("min_client"));
+    var del = try callClient(&h, "0.0.1", "DELETE", "/api/account", null);
+    defer del.deinit();
+    try testing.expectEqual(@as(u16, 401), del.status);
+}
+
+test "forced update: no stores configured means store is null; the gate is off by default" {
+    var h: Harness = undefined;
+    try h.init(updateOpts("1.0.0", "", ""));
+    defer h.deinit();
+    var old = try callClient(&h, "0.9.0", "GET", "/api/factions", null);
+    defer old.deinit();
+    try testing.expectEqual(@as(u16, 426), old.status);
+    try testing.expect((try old.at("store")) == .null);
+
+    var both: Harness = undefined;
+    try both.init(updateOpts("1.0.0", "https://play.example/o", "https://apps.example/o"));
+    defer both.deinit();
+    var r = try callClient(&both, "0.9.0", "GET", "/api/factions", null);
+    defer r.deinit();
+    try testing.expectEqualStrings("https://apps.example/o", try r.str("store.ios"));
+
+    var open: Harness = undefined;
+    try open.init(.{});
+    defer open.deinit();
+    var ok = try callClient(&open, "0.0.1", "GET", "/api/factions", null);
+    defer ok.deinit();
+    try testing.expectEqual(@as(u16, 200), ok.status);
+    var health = try open.get("/api/health", null);
+    defer health.deinit();
+    try testing.expect((try health.at("min_client")) == .null);
+}
+
+// --- Client error reports --------------------------------------------------------------------------------------
+
+fn clientErrorCount(h: *Harness) !i64 {
+    return (try h.ctx.db.scalar("SELECT COUNT(*) FROM client_errors", .{})).?;
+}
+
+test "client errors: accepted anonymously, scrubbed, cut to size and grouped" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+
+    var r = try h.post("/api/client-error", null,
+        \\{"message":"fix 47.60970,-122.33310 failed at http://x.test/a.js?lat=47.6&lon=-122.3","stack":"Error: boom\n    at go (http://x.test/a.js?v=3:10:5)\n    at run (http://x.test/a.js:1:1)","version":"0.1.0","platform":"android","screen":"map","ts":1793188800000}
+    );
+    defer r.deinit();
+    try testing.expectEqual(@as(u16, 200), r.status);
+    try testing.expectEqual(@as(i64, 1), try r.int("stored"));
+    {
+        var st = try h.ctx.db.query("SELECT message, stack, frame, version, platform, screen, length(hash) FROM client_errors", .{});
+        defer st.finalize();
+        try testing.expect(try st.step());
+        try testing.expectEqualStrings("fix ~,~ failed at http://x.test/a.js", st.text(0));
+        try testing.expect(std.mem.indexOf(u8, st.text(1), "?v=3") == null and std.mem.indexOf(u8, st.text(1), "a.js:10:5") != null);
+        try testing.expectEqualStrings("at go (http://x.test/a.js:10:5)", st.text(2));
+        try testing.expectEqualStrings("0.1.0", st.text(3));
+        try testing.expectEqualStrings("android", st.text(4));
+        try testing.expectEqualStrings("map", st.text(5));
+        try testing.expectEqual(@as(i64, 16), st.int(6));
+    }
+
+    // A token is not needed, and a junk one does not matter either.
+    var junk_token = try h.post("/api/client-error", "not-a-token", "{\"message\":\"x\"}");
+    defer junk_token.deinit();
+    try testing.expectEqual(@as(u16, 200), junk_token.status);
+
+    // No message: nothing stored. Not JSON: 400.
+    var empty = try h.post("/api/client-error", null, "{\"stack\":\"only a stack\"}");
+    defer empty.deinit();
+    try testing.expectEqual(@as(i64, 0), try empty.int("stored"));
+    var bad = try h.post("/api/client-error", null, "nope");
+    defer bad.deinit();
+    try testing.expectEqual(@as(u16, 400), bad.status);
+
+    // The same fault with other numbers lands in the same group.
+    var a = try h.post("/api/client-error", null, "{\"message\":\"Row 12 missing\",\"stack\":\"at f (u.js:1:2)\"}");
+    a.deinit();
+    var b = try h.post("/api/client-error", null, "{\"message\":\"Row 9041 missing\",\"stack\":\"at f (u.js:1:2)\"}");
+    b.deinit();
+    try testing.expectEqual(@as(?i64, 1), try h.ctx.db.scalar("SELECT COUNT(DISTINCT hash) FROM client_errors WHERE message LIKE 'Row % missing'", .{}));
+    try testing.expectEqual(@as(?i64, 2), try h.ctx.db.scalar("SELECT COUNT(*) FROM client_errors WHERE message LIKE 'Row % missing'", .{}));
+}
+
+test "client errors: message cut to 500, stack to 4000, batches to ten, only the newest 5000 kept" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+
+    const long_msg = try testing.allocator.alloc(u8, 900);
+    defer testing.allocator.free(long_msg);
+    @memset(long_msg, 'm');
+    const long_stack = try testing.allocator.alloc(u8, 9000);
+    defer testing.allocator.free(long_stack);
+    @memset(long_stack, 's');
+    var r = try h.postf("/api/client-error", null, "{{\"message\":\"{s}\",\"stack\":\"{s}\"}}", .{ long_msg, long_stack });
+    defer r.deinit();
+    try testing.expectEqual(@as(u16, 200), r.status);
+    try testing.expectEqual(@as(?i64, 500), try h.ctx.db.scalar("SELECT length(message) FROM client_errors", .{}));
+    try testing.expectEqual(@as(?i64, 4000), try h.ctx.db.scalar("SELECT length(stack) FROM client_errors", .{}));
+
+    var batch: std.ArrayList(u8) = .empty;
+    defer batch.deinit(testing.allocator);
+    try batch.appendSlice(testing.allocator, "{\"reports\":[");
+    for (0..14) |i| {
+        if (i > 0) try batch.append(testing.allocator, ',');
+        const one = try std.fmt.allocPrint(testing.allocator, "{{\"message\":\"batch item {c}\",\"version\":\"0.1.0\"}}", .{@as(u8, 'a') + @as(u8, @intCast(i))});
+        defer testing.allocator.free(one);
+        try batch.appendSlice(testing.allocator, one);
+    }
+    try batch.appendSlice(testing.allocator, "]}");
+    var rb = try h.post("/api/client-error", null, batch.items);
+    defer rb.deinit();
+    try testing.expectEqual(@as(i64, 10), try rb.int("stored"));
+
+    // Fill the table past the cap; one more report trims it to the newest 5000.
+    try h.ctx.db.exec("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 5200) INSERT INTO client_errors(at, hash, message) SELECT 1, 'old', 'old' FROM n");
+    try testing.expect(try clientErrorCount(&h) > 5200);
+    var one_more = try h.post("/api/client-error", null, "{\"message\":\"the newest\"}");
+    one_more.deinit();
+    try testing.expectEqual(@as(i64, 5000), try clientErrorCount(&h));
+    try testing.expectEqual(@as(?i64, 1), try h.ctx.db.scalar("SELECT COUNT(*) FROM client_errors WHERE message = 'the newest'", .{}));
+}
+
+test "client errors: rate limited per token and for anonymous senders, apart from registration" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = false, .limits = true });
+    defer h.deinit();
+    var tok: [64]u8 = undefined;
+    try h.player("Crashy", "human", &tok);
+
+    var limited = false;
+    var sent: usize = 0;
+    for (0..20) |_| {
+        var r = try h.post("/api/client-error", &tok, "{\"message\":\"again\"}");
+        defer r.deinit();
+        if (r.status == 429) {
+            limited = true;
+            try testing.expectEqualStrings("rate_limited", try r.errorCode());
+            break;
+        }
+        sent += 1;
+    }
+    try testing.expect(limited);
+    try testing.expect(sent >= 3 and sent <= 8);
+    try testing.expectEqual(@as(i64, @intCast(sent)), try clientErrorCount(&h));
+
+    // Anonymous senders share one bucket, and flooding it does not starve registration.
+    var anon_limited = false;
+    for (0..60) |_| {
+        var r = try h.post("/api/client-error", null, "{\"message\":\"anon\"}");
+        defer r.deinit();
+        if (r.status == 429) {
+            anon_limited = true;
+            break;
+        }
+    }
+    try testing.expect(anon_limited);
+    var reg = try h.post("/api/register", null, "{\"callsign\":\"StillWorks\"}");
+    defer reg.deinit();
+    try testing.expectEqual(@as(u16, 200), reg.status);
+
+    // The player's own game budget is untouched by it, and the bucket refills.
+    var me = try h.get("/api/me", &tok);
+    defer me.deinit();
+    try testing.expectEqual(@as(u16, 200), me.status);
+    h.advance(60_000);
+    var again = try h.post("/api/client-error", &tok, "{\"message\":\"later\"}");
+    defer again.deinit();
+    try testing.expectEqual(@as(u16, 200), again.status);
+}
+
+// --- Simulated location ----------------------------------------------------------------------------------------
+
+fn fixMock(h: *Harness, token: []const u8, lat: f64, lon: f64, mock: bool) !Res {
+    return h.ok("/api/location", token, "{{\"lat\":{d},\"lon\":{d},\"acc\":5,\"sanctuary\":false,\"mock\":{s}}}", .{ lat, lon, if (mock) "true" else "false" });
+}
+
+test "simulated location: Me carries the flag, it clears with the next real fix, sessions are counted" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var tok: [64]u8 = undefined;
+    try h.player("Spoofer", "human", &tok);
+    const pid = try h.playerId("Spoofer");
+
+    var real = try fixMock(&h, &tok, base_lat, base_lon, false);
+    defer real.deinit();
+    try testing.expectEqual(false, (try real.at("me.simulated_location")).bool);
+
+    h.advance(5000);
+    var fake = try fixMock(&h, &tok, base_lat, base_lon, true);
+    defer fake.deinit();
+    try testing.expectEqual(true, (try fake.at("me.simulated_location")).bool);
+    var me = try h.get("/api/me", &tok);
+    defer me.deinit();
+    try testing.expectEqual(true, (try me.at("simulated_location")).bool);
+
+    // Further fixes in the same sitting are one session; a new one after half an hour is another.
+    h.advance(5000);
+    var f2 = try fixMock(&h, &tok, base_lat, base_lon, true);
+    f2.deinit();
+    try testing.expectEqual(@as(?i64, 1), try h.ctx.db.scalar("SELECT mock_sessions FROM players WHERE id = ?", .{pid}));
+    h.advance(31 * 60 * 1000);
+    var f3 = try fixMock(&h, &tok, base_lat, base_lon, true);
+    f3.deinit();
+    try testing.expectEqual(@as(?i64, 2), try h.ctx.db.scalar("SELECT mock_sessions FROM players WHERE id = ?", .{pid}));
+
+    // A real fix takes the flag off at once, wherever it is (no speed check against a faked position).
+    h.advance(5000);
+    var back = try fixMock(&h, &tok, base_lat + 1.0, base_lon, false);
+    defer back.deinit();
+    try testing.expectEqual(false, (try back.at("me.simulated_location")).bool);
+    const pos = h.ctx.live.position(pid, h.ctx.now()).?;
+    try testing.expectApproxEqAbs(base_lat + 1.0, pos.lat, 1e-9);
+    try testing.expectEqual(@as(?i64, 2), try h.ctx.db.scalar("SELECT mock_sessions FROM players WHERE id = ?", .{pid}));
+}
+
+test "simulated location: no walking XP" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var fake: [64]u8 = undefined;
+    var real: [64]u8 = undefined;
+    try h.player("Faker", "zombie", &fake);
+    try h.player("Walker", "zombie", &real);
+
+    // Both "walk" 20 m every 5 s for two minutes; only the honest one is paid.
+    var lat: f64 = base_lat;
+    for (0..24) |_| {
+        h.advance(5000);
+        lat += 20.0 / 111_320.0;
+        var a = try fixMock(&h, &fake, lat, base_lon, true);
+        a.deinit();
+        var b = try fixMock(&h, &real, lat, base_lon, false);
+        b.deinit();
+    }
+    try testing.expectEqual(@as(?i64, 0), try h.ctx.db.scalar("SELECT xp FROM players WHERE callsign = 'Faker'", .{}));
+    try testing.expectEqual(@as(?i64, 0), try h.ctx.db.scalar("SELECT distance_m FROM players WHERE callsign = 'Faker'", .{}));
+    try testing.expect((try h.ctx.db.scalar("SELECT xp FROM players WHERE callsign = 'Walker'", .{})).? >= 20);
+}
+
+test "simulated location: no war points, but PvE still pays XP and loot" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var tok: [64]u8 = undefined;
+    try h.player("Ghost", "human", &tok);
+
+    var b1: [200]u8 = undefined;
+    var b2: [200]u8 = undefined;
+    const arr = try std.fmt.allocPrint(testing.allocator, "[{s},{s}]", .{
+        try placeJson(&b1, "n7001", "pharmacy", 10, "Corner Drugs"),
+        try placeJson(&b2, "n7002", "diner", 12, "Joes"),
+    });
+    defer testing.allocator.free(arr);
+    const window = @divFloor(h.ctx.now(), game.landmarks.window_ms);
+
+    var w = try h.ok("/api/location", &tok, "{{\"lat\":{d},\"lon\":{d},\"acc\":5,\"sanctuary\":false,\"mock\":true,\"places\":{s}}}", .{ base_lat, base_lon, arr });
+    w.deinit();
+    var open = try h.ok("/api/open", &tok, "{{\"id\":\"l.n7001.{d}\"}}", .{window});
+    defer open.deinit();
+    try testing.expect(try open.int("loot.xp") > 0);
+    try testing.expectEqual(@as(i64, 0), try open.int("loot.war_points"));
+    var war = try h.get("/api/war", &tok);
+    defer war.deinit();
+    try testing.expectEqual(@as(i64, 0), try war.int("my_points"));
+
+    // The same player with a real fix is paid.
+    h.advance(5000);
+    var w2 = try h.ok("/api/location", &tok, "{{\"lat\":{d},\"lon\":{d},\"acc\":5,\"sanctuary\":false,\"mock\":false,\"places\":{s}}}", .{ base_lat, base_lon, arr });
+    w2.deinit();
+    var open2 = try h.ok("/api/open", &tok, "{{\"id\":\"l.n7002.{d}\"}}", .{window});
+    defer open2.deinit();
+    try testing.expectEqual(@as(i64, 1), try open2.int("loot.war_points"));
+}
+
+test "simulated location: not matched for Contact, foreground or Patrol; matched again when real" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var a: [64]u8 = undefined;
+    var z: [64]u8 = undefined;
+    try h.player("Hank", "human", &a);
+    try h.player("Zed", "zombie", &z);
+    try h.reachLevel(&a, 6);
+    try h.reachLevel(&z, 7);
+    const count = "SELECT COUNT(*) FROM contact_log";
+    const zlat = base_lat + 30.0 / 111_320.0;
+
+    var ra = try fixMock(&h, &a, base_lat, base_lon, true);
+    ra.deinit();
+    var rz = try fixMock(&h, &z, zlat, base_lon, false);
+    rz.deinit();
+    tick.runLocked(&h.ctx, h.ctx.now());
+    try testing.expectEqual(@as(?i64, 0), try h.ctx.db.scalar(count, .{}));
+
+    // Patrol check-ins carry the flag too.
+    var p = try h.ok("/api/patrol", &a, "{{\"lat\":{d},\"lon\":{d},\"acc\":20,\"mock\":true}}", .{ base_lat, base_lon });
+    p.deinit();
+    try testing.expect(h.ctx.live.position(try h.playerId("Hank"), h.ctx.now()).?.mock);
+    tick.runLocked(&h.ctx, h.ctx.now());
+    try testing.expectEqual(@as(?i64, 0), try h.ctx.db.scalar(count, .{}));
+
+    // The same pair, both real: they fight.
+    h.advance(5000);
+    var ra2 = try fixMock(&h, &a, base_lat, base_lon, false);
+    ra2.deinit();
+    tick.runLocked(&h.ctx, h.ctx.now());
+    try testing.expectEqual(@as(?i64, 1), try h.ctx.db.scalar(count, .{}));
+}
+
+test "simulated location: a recently simulated player is not served as an Echo; Rogue echoes still appear" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var a: [64]u8 = undefined;
+    var z: [64]u8 = undefined;
+    try h.player("Seeker", "human", &a);
+    try h.reachLevel(&a, 5);
+    try h.player("Ghoul", "zombie", &z);
+    try h.reachLevel(&z, 6);
+    try h.ctx.db.run("UPDATE players SET last_pvp_at = 0", .{});
+
+    // While Ghoul keeps sending simulated fixes, every Echo Seeker meets is a Rogue.
+    var seen: usize = 0;
+    for (0..40) |_| {
+        h.advance(echoWindow());
+        var gz = try fixMock(&h, &z, base_lat + 0.5, base_lon, true);
+        gz.deinit();
+        var res = try h.location(&a, base_lat, base_lon);
+        defer res.deinit();
+        if (try res.len("echoes") > 0) {
+            seen += 1;
+            try testing.expectEqual(true, (try res.at("echoes.0.rogue")).bool);
+        }
+    }
+    try testing.expect(seen > 0);
+
+    // Once Ghoul plays for real (and the quiet minutes pass), their snapshot is offered again.
+    var gz = try fixMock(&h, &z, base_lat + 0.5, base_lon, false);
+    gz.deinit();
+    var real_seen = false;
+    for (0..60) |_| {
+        h.advance(echoWindow());
+        var res = try h.location(&a, base_lat, base_lon);
+        defer res.deinit();
+        if (try res.len("echoes") > 0 and !(try res.at("echoes.0.rogue")).bool) {
+            real_seen = true;
+            break;
+        }
+    }
+    try testing.expect(real_seen);
+}
