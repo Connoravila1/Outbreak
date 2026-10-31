@@ -109,14 +109,16 @@ simulator panel beside it.
   toggle (weekly / level), and Clan (L10+: create, join or your clan page with roster and chat).
 - **You**: big level and title, XP to next, stat block, record (wins, losses, contacts, echoes,
   caches, distance), the feed (recent events), the Store, and Settings (server URL, sound,
-  haptics, recovery code, reduced motion).
+  haptics, reduced motion) and Account (linked sign-ins, Link Google/Apple, Sign out, Delete account;
+  guests see a dismissible "link an account" reminder at the top of the tab).
 
 ## Key moments
 
 1. **Cold open → the bite → the choosing** (first launch only):
    - Black screen. An emergency broadcast types out, then stops. Location permission is asked here,
      framed by need: "Outbreak uses your location to build the world around you. It's never shown
-     to other players."
+     to other players." A quiet "Already playing? Sign in" link on the very first screen goes to a
+     sign-in sheet; if the account already has a character it is restored and onboarding is skipped.
    - "You've been bitten." Heartbeat audio and haptics, and veins creep in from the edges.
    - The split lens over your real streets, from the live map. The left side is labelled
      "Fight it. Stay human." and the right side "Let it in." Each side lists three plain lines
@@ -124,6 +126,10 @@ simulator panel beside it.
      or tap a side to lean into it.
    - "This is permanent." Hold to commit (3 s) with the heartbeat rising, then either the flatline
      averted (Survey) or flatline into eyes opening (Heat). The other lens burns away.
+   - "Save your survivor" (lens voice): Continue with Apple / Continue with Google in each
+     provider's official button style (Apple first on iOS, Google first on Android, both on web),
+     and a small "Play as guest" link. Signing in to an account that already has a character asks
+     "Switch to the existing character?" first.
    - Callsign ("What do they call you?"), then your first kit is handed over item by item.
    - A 3-card briefing in the faction voice: walk to find things, tap to fight, enemies find you.
 2. **Engage → fight → result**: a full-screen fight. Your card at the bottom, theirs at the top,

@@ -14,7 +14,7 @@ const LINES = [
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Black screen. A typed emergency broadcast that stops mid-sentence. */
-export function Broadcast({ onDone, onRecover }: { onDone: () => void; onRecover: () => void }) {
+export function Broadcast({ onDone, onSignIn }: { onDone: () => void; onSignIn: () => void }) {
   const [started, setStarted] = useState(false);
   const [shown, setShown] = useState<string[]>([]);
   const [cut, setCut] = useState(false);
@@ -51,7 +51,7 @@ export function Broadcast({ onDone, onRecover }: { onDone: () => void; onRecover
             <span class="bc-dot" aria-hidden="true" />
             Tap to listen
           </button>
-          <button class="bc-link" onClick={onRecover}>I already have an account</button>
+          <button class="bc-link quiet" onClick={onSignIn}>Already playing? Sign in</button>
         </div>
       ) : (
         <div class="bc-text" aria-live="polite">

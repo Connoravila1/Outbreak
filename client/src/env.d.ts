@@ -4,6 +4,12 @@ declare module '@fontsource/*';
 interface ImportMetaEnv {
   readonly VITE_SERVER_URL?: string;
   readonly VITE_MOCK?: string;
+  /** Google OAuth client IDs (see docs/ACCOUNTS_SETUP.md). The web ID is also used by Android. */
+  readonly VITE_GOOGLE_WEB_CLIENT_ID?: string;
+  readonly VITE_GOOGLE_IOS_CLIENT_ID?: string;
+  /** Apple Services ID and the return URL registered for it (Android / web Sign in with Apple). */
+  readonly VITE_APPLE_SERVICE_ID?: string;
+  readonly VITE_APPLE_REDIRECT_URL?: string;
 }
 
 declare module 'maplibre-gl/dist/maplibre-gl-worker.mjs?url' {

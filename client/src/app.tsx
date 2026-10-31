@@ -17,6 +17,7 @@ import { startPolling, stopPolling } from './state/poll';
 import { BattleHost } from './battle/BattleHost';
 import { Toasts } from './ui/kit';
 import { RewardsSheet } from './ui/RewardsSheet';
+import { GuestNudge } from './you/GuestNudge';
 import { setUnauthorizedHandler, setToken } from './api';
 import { Icon } from './ui/Icon';
 import { ServerAddress } from './onboarding/ServerAddress';
@@ -57,6 +58,7 @@ function Shell() {
       <Toasts />
       <RewardsSheet />
       <BattleHost />
+      <GuestNudge />
     </div>
   );
 }

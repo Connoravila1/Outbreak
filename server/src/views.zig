@@ -121,9 +121,12 @@ pub const Raw = struct {
 
 pub const RecordView = struct { wins: u32, losses: u32, contacts: u32, echoes: u32, caches: u32, distance_m: u64 };
 
+pub const AccountView = struct { guest: bool, providers: []const []const u8, email: ?[]const u8 };
+
 pub const MeView = struct {
     id: []const u8,
-    callsign: []const u8,
+    /// Null until the player picks one.
+    callsign: ?[]const u8,
     faction: ?data.Faction,
     level: u8,
     xp: u32,
@@ -148,6 +151,7 @@ pub const MeView = struct {
     underdog_bonus: f32,
     war_points_week: u32,
     record: RecordView,
+    account: AccountView,
 };
 
 pub const MeLite = struct {
@@ -245,10 +249,23 @@ pub fn meView(req: *Req, p: *Player) HandlerError!MeView {
         };
     }
 
+    var providers: std.ArrayList([]const u8) = .empty;
+    var email: ?[]const u8 = null;
+    {
+        var st = try req.ctx.db.query("SELECT provider, email FROM identities WHERE player_id = ? ORDER BY id", .{p.id});
+        defer st.finalize();
+        while (try st.step()) {
+            try providers.append(a, try st.dupe(a, 0));
+            if (email == null) {
+                if (st.optText(1)) |e| email = try a.dupe(u8, e);
+            }
+        }
+    }
+
     const sh = try warstate.shares(req);
     return .{
         .id = try std.fmt.allocPrint(a, "{d}", .{p.id}),
-        .callsign = p.callsign,
+        .callsign = if (p.callsign.len > 0) p.callsign else null,
         .faction = p.faction,
         .level = p.level,
         .xp = p.xp,
@@ -273,6 +290,7 @@ pub fn meView(req: *Req, p: *Player) HandlerError!MeView {
         .underdog_bonus = if (p.faction) |f| sh.bonusFor(f) else 0,
         .war_points_week = try warstate.weekPoints(req, p.id),
         .record = .{ .wins = p.wins, .losses = p.losses, .contacts = p.contacts, .echoes = p.echoes, .caches = p.caches, .distance_m = p.distance_m },
+        .account = .{ .guest = providers.items.len == 0, .providers = providers.items, .email = email },
     };
 }
 

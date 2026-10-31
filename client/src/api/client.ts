@@ -36,7 +36,7 @@ export function setToken(token: string | null) {
 let onUnauthorized: (() => void) | null = null;
 export function setUnauthorizedHandler(h: () => void) { onUnauthorized = h; }
 
-async function request<R>(method: 'GET' | 'POST', path: string, body?: unknown, base?: string): Promise<R> {
+async function request<R>(method: 'GET' | 'POST' | 'DELETE', path: string, body?: unknown, base?: string): Promise<R> {
   const headers: Record<string, string> = { Accept: 'application/json' };
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
@@ -66,6 +66,7 @@ async function request<R>(method: 'GET' | 'POST', path: string, body?: unknown, 
 
 const get = <R>(p: string, base?: string) => request<R>('GET', p, undefined, base);
 const post = <R>(p: string, b: unknown = {}) => request<R>('POST', p, b);
+const del = <R>(p: string) => request<R>('DELETE', p);
 
 export const api = {
   // account
@@ -73,8 +74,15 @@ export const api = {
   health: (base?: string) => get<T.Health>('/api/health', base?.trim().replace(/\/+$/, '')),
   catalog: () => get<T.Catalog>('/api/catalog'),
   factions: () => get<T.Factions>('/api/factions'),
-  register: (callsign: string) => post<T.RegisterResult>('/api/register', { callsign }),
-  recover: (recovery_code: string) => post<T.RecoverResult>('/api/recover', { recovery_code }),
+  /** Creates a guest. The callsign comes later (`setCallsign`). */
+  register: () => post<T.RegisterResult>('/api/register', {}),
+  setCallsign: (callsign: string) => post<{ me: T.Me }>('/api/callsign', { callsign }),
+  /** Sign in (or create) with a provider; a guest's token, if sent, is linked or replaced. */
+  authSignIn: (provider: T.AuthProvider, c: T.Credentials, opts: { switch?: boolean } = {}) =>
+    post<T.AuthResult>('/api/auth/' + provider, { ...c, ...(opts.switch ? { switch: true } : {}) }),
+  authLink: (provider: T.AuthProvider, c: T.Credentials) => post<{ me: T.Me }>('/api/auth/link/' + provider, c),
+  authUnlink: (provider: T.AuthProvider) => post<{ me: T.Me }>('/api/auth/unlink/' + provider),
+  deleteAccount: () => del<{ ok: boolean }>('/api/account'),
   chooseFaction: (faction: T.Faction) => post<{ me: T.Me }>('/api/faction', { faction }),
   me: () => get<T.Me>('/api/me'),
   setAvatar: (avatar: Record<string, unknown>) => post<{ me: T.Me }>('/api/avatar', { avatar }),

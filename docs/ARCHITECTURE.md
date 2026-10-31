@@ -21,6 +21,8 @@ The server is authoritative over every outcome. The client renders state and sen
   - `src/http.zig` — accept loop, thread per connection, request parsing, routing, JSON
     responses, CORS (`Access-Control-Allow-Origin: *`; auth is bearer tokens, no cookies).
   - `src/api.zig` (+ `src/api/*.zig` as it grows) — one handler per endpoint.
+  - `src/jwt.zig` (pure ID-token + JWKS verification on `std.crypto.Certificate.rsa`), `src/auth.zig`
+    (provider config, key cache, JWKS fetch), `src/api/auth.zig` (sign-in, link, unlink, delete).
   - `src/db.zig` — thin SQLite wrapper (prepare/bind/step), schema + migrations by `user_version`.
   - `src/game/` — **pure** game logic, no I/O, fully unit-tested: `data.zig` (catalogue from
     DESIGN.md), `stats.zig`, `combat.zig`, `loot.zig`, `progression.zig`, `geo.zig` (geohash,
@@ -34,8 +36,11 @@ The server is authoritative over every outcome. The client renders state and sen
 - **Persistence**: SQLite in WAL mode at `--data <dir>/outbreak.db`. Positions are never stored.
 - **Determinism**: world content = f(server_seed, cell, window). `server_seed` is created on first
   start and stored in the DB. Combat = f(seed) and is reproducible from the stored seed.
-- **Config**: `--port` (8080), `--bind` (0.0.0.0), `--data` (./data), `--dev` (enables `/api/dev/*`
-  and relaxed rate limits). Same as env vars `OUTBREAK_PORT`, etc.
+- **Config**: `--port` (8080), `--bind` (0.0.0.0), `--data` (./data), `--dev` (enables `/api/dev/*`,
+  the `dev` sign-in provider and relaxed rate limits), `--google-client-ids` (comma list: web, Android,
+  iOS OAuth client IDs; the first is the web one), `--apple-audiences` (comma list: the iOS bundle id
+  `com.outbreak.game` and the web Services ID). Same as env vars `OUTBREAK_PORT`,
+  `OUTBREAK_GOOGLE_CLIENT_IDS`, etc. See `docs/ACCOUNTS_SETUP.md`.
 - **Additive wire details** (nothing above changed shape): `Rewards` may carry `auto_scrapped`
   (items scrapped on pickup because the pack was full); `/api/catalog` items and abilities also
   carry `lore_zombie`, `text_zombie`, `note`, `flavour`; `raids[].boss` is the boss's display name
@@ -63,14 +68,43 @@ degrees (WGS84). `faction` is `"human"` or `"zombie"`. Slots are `"weapon" | "ar
 ### Account
 | Method | Path | Body | Returns |
 |---|---|---|---|
-| GET | `/api/health` | | `{ok, version, players_online}` |
+| GET | `/api/health` | | `{ok, version, players_online, providers:{google, apple, dev, google_web_client_id?, apple_web_service_id?}}` — which sign-ins this server offers, and the IDs a browser needs |
 | GET | `/api/catalog` | | static game data (below); cacheable by `version` |
 | GET | `/api/factions` | | `{human:{share, players}, zombie:{...}, underdog:"human"|"zombie"|null, underdog_bonus}` |
-| POST | `/api/register` | `{callsign}` | `{token, recovery_code, me}` |
-| POST | `/api/recover` | `{recovery_code}` | `{token, me}` |
-| POST | `/api/faction` | `{faction}` | `{me}` — once only; 409 `already_chosen` |
+| POST | `/api/register` | `{}` (optional `{callsign}`) | `{token, me}` — creates a **guest**: a player with no sign-in identity |
+| POST | `/api/callsign` | `{callsign}` | `{me}` — once only, same rules as before; 409 `callsign_set`, `callsign_taken`; 400 `callsign_invalid` |
+| POST | `/api/faction` | `{faction}` | `{me}` — once only; 409 `already_chosen`. Works before or after the callsign |
+| POST | `/api/auth/{google\|apple}` | `{id_token, nonce?, switch?}` + optional `Authorization` of the current player | `{token, me, created}` — see below |
+| POST | `/api/auth/link/{google\|apple}` | `{id_token, nonce?}` (auth) | `{me}` — 409 `identity_in_use` (taken by another player), 409 `already_linked` (this player already has that provider) |
+| POST | `/api/auth/unlink/{provider}` | | `{me}` — 404 `not_linked`; 409 `last_identity` for the only identity |
+| DELETE | `/api/account` | | `{ok}` — deletes the player and everything owned (auth) |
 | GET | `/api/me` | | `Me` |
 | POST | `/api/avatar` | `{avatar:{...}}` | `{me}` |
+
+**Accounts.** A player with no row in `identities(provider, subject, player_id, email, created_at)`
+is a guest; its only credential is the bearer token. `POST /api/auth/{provider}` verifies the
+provider's ID token (RS256 against the provider's JWKS; `iss`, `aud`, `exp` with 60 s leeway, `iat`,
+and `nonce` when the client sends one: the claim may equal the raw nonce or its SHA-256 hex) and then:
+
+- identity exists: returns that player's session (a fresh token; any older token stops working) with
+  `created:false`. If a different player's token was also sent: a guest without a faction is
+  discarded; one with a faction gets **409 `identity_in_use`** unless the body has `switch:true`, in
+  which case the guest is deleted.
+- identity is new and a token was sent: it is linked to that player (`created:false`).
+- identity is new and no token: a new player (no faction, no callsign) is created (`created:true`).
+
+Errors: 503 `provider_not_configured` (server has no client IDs for it), 503 `provider_unavailable`
+(JWKS fetch failed), 401 `token_expired` / `invalid_token`, 400 `invalid_token` (not a JWT).
+Signing keys are cached per `kid` for the JWKS `Cache-Control: max-age` (default 1 h) and refetched
+on an unknown `kid`, at most every 30 s. With `--dev`, provider `dev` accepts
+`POST /api/auth/dev {subject, email?}` (and `/api/auth/link/dev`, `/api/auth/unlink/dev`) with no verification.
+A player with no callsign cannot use the game endpoints (409 `no_callsign`), nor one with no faction (409 `no_faction`).
+
+**Deletion** removes the player's items, consumables, buffs, missions, events, war points, raid damage,
+snapshots, contact records and identities. Clan leadership passes to the most senior officer, else the
+highest level (the clan closes if they were alone). Their clan chat lines stay, shown as `[deleted]`.
+Weekly war totals survive only as per-district aggregates. `POST /api/recover` still works for
+accounts that have a recovery code but is no longer used by the client.
 
 ### World
 | Method | Path | Body | Returns |
@@ -121,7 +155,7 @@ Item = { uid: string, base: string, slot: Slot, rarity: "common"|"uncommon"|"rar
          stats: Stats /* final, incl. rarity+upgrade */, power: number, scrap_value: number,
          upgrade_cost: number|null /* null at +10 */ }
 
-Me = { id, callsign, faction: Faction|null, level, xp, xp_next, title,
+Me = { id, callsign: string|null, faction: Faction|null, level, xp, xp_next, title,
        hp, max_hp, downed_until: number|null, stats: Stats /* total */, base_stats: Stats,
        salvage, inventory_cap, equipped: {weapon: uid|null, armor: uid|null, utility: uid|null},
        items: Item[], consumables: Record<string, number>,
@@ -130,7 +164,8 @@ Me = { id, callsign, faction: Faction|null, level, xp, xp_next, title,
        missions: { daily: Mission[], weekly: Mission|null, streak: number, resets_at: number },
        clan: {id, name, tag, role}|null, avatar: object|null,
        pvp_protected: boolean, underdog_bonus: number, war_points_week: number,
-       record: { wins, losses, contacts, echoes, caches, distance_m } }
+       record: { wins, losses, contacts, echoes, caches, distance_m },
+       account: { guest: boolean, providers: ("google"|"apple"|"dev")[], email: string|null } }
 
 Mission = { id, kind, text, target, progress, rewards: Rewards, claimed: boolean }
 

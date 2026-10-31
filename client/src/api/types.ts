@@ -46,9 +46,13 @@ export interface ClanRef { id: string; name: string; tag: string; role: string }
 
 export interface PlayerRecord { wins: number; losses: number; contacts: number; echoes: number; caches: number; distance_m: number }
 
+/** How this survivor signs back in. A guest has no providers: it lives only on this phone. */
+export interface AccountInfo { guest: boolean; providers: string[]; email: string | null }
+
 export interface Me {
   id: string;
-  callsign: string;
+  /** Null until the player chooses one. */
+  callsign: string | null;
   faction: Faction | null;
   level: number;
   xp: number;
@@ -73,6 +77,7 @@ export interface Me {
   underdog_bonus: number;
   war_points_week: number;
   record: PlayerRecord;
+  account: AccountInfo;
 }
 
 export interface MeLite {
@@ -197,7 +202,15 @@ export interface Catalog {
 }
 
 // ---- account ----
-export interface Health { ok: boolean; version: string; players_online: number }
+/** Which sign-in providers the server has set up (and the IDs a browser needs). */
+export interface ProviderStatus {
+  google: boolean;
+  apple: boolean;
+  dev: boolean;
+  google_web_client_id?: string | null;
+  apple_web_service_id?: string | null;
+}
+export interface Health { ok: boolean; version: string; players_online: number; providers?: ProviderStatus }
 export interface FactionShare { share: number; players: number }
 export interface Factions {
   human: FactionShare;
@@ -205,8 +218,11 @@ export interface Factions {
   underdog: Faction | null;
   underdog_bonus: number;
 }
-export interface RegisterResult { token: string; recovery_code: string; me: Me }
-export interface RecoverResult { token: string; me: Me }
+export interface RegisterResult { token: string; me: Me }
+export type AuthProvider = 'google' | 'apple' | 'dev';
+/** What the provider hands us to prove who the player is (`subject`/`email` are dev-only). */
+export interface Credentials { id_token?: string; nonce?: string; subject?: string; email?: string }
+export interface AuthResult { token: string; me: Me; created: boolean }
 
 // ---- war / social ----
 export interface WarState {

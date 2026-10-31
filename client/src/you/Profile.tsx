@@ -18,7 +18,7 @@ export function Profile() {
       <div class="id-card card">
         <div class="avatar" aria-hidden="true"><Icon name={f === 'zombie' ? 'fangs' : 'person'} size={34} /></div>
         <div class="id-main">
-          <p class="display callsign-big">{m.callsign}</p>
+          <p class="display callsign-big">{m.callsign ?? ""}</p>
           <p class="dim voice">{f === 'zombie' ? say('Zombie', 'infected') : say('Human', 'living')} · {say('avatar coming soon', 'a face, later')}</p>
         </div>
       </div>

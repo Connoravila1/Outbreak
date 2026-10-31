@@ -19,6 +19,14 @@
     "LocalNotifications": {
       "smallIcon": "ic_notify",
       "iconColor": "#E2342D"
+    },
+    "SocialLogin": {
+      "providers": {
+        "google": true,
+        "apple": true,
+        "facebook": false,
+        "twitter": false
+      }
     }
   }
 }

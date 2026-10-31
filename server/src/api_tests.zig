@@ -1411,3 +1411,398 @@ test "positions are never written to the database" {
     h.advance(live.position_ttl_ms + 1);
     try testing.expect(h.ctx.live.position(try h.playerId("Private"), h.ctx.now()) == null);
 }
+
+// --- Accounts: guests, sign-in, linking, deletion ----------------------------------------------------
+
+const fx = @import("jwt_fixture.zig");
+
+/// A guest with no callsign (the new onboarding order): faction first, callsign later.
+fn guest(h: *Harness, out: *[64]u8) !void {
+    var r = try h.post("/api/register", null, "{}");
+    defer r.deinit();
+    try testing.expectEqual(@as(u16, 200), r.status);
+    @memcpy(out, try r.str("token"));
+}
+
+/// Turn on Google and Apple with the fixture signing key; the network is never touched.
+fn withProviders(h: *Harness) !void {
+    h.ctx.auth.config = .{ .google_client_ids = &.{ fx.web_client_id, "android.apps.googleusercontent.com" }, .apple_audiences = &.{ fx.apple_bundle, "com.outbreak.web" } };
+    h.ctx.auth.fetch_enabled = false;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    try h.ctx.auth.inject(arena.allocator(), .google, fx.jwks);
+    try h.ctx.auth.inject(arena.allocator(), .apple, fx.jwks);
+}
+
+/// POST `{"id_token": ...}` expecting 200.
+fn okToken(h: *Harness, path: []const u8, token: ?[]const u8, id_token: []const u8) !Res {
+    const body = try std.fmt.allocPrint(testing.allocator, "{{\"id_token\":\"{s}\"}}", .{id_token});
+    defer testing.allocator.free(body);
+    const r = try h.post(path, token, body);
+    if (r.status != 200) std.debug.print("{s}: {d} {s}\n", .{ path, r.status, r.raw.json });
+    try testing.expectEqual(@as(u16, 200), r.status);
+    return r;
+}
+
+test "guest flow: no callsign needed, faction before or after it, callsign once" {
+    var h: Harness = undefined;
+    try h.init(.{});
+    defer h.deinit();
+    var t: [64]u8 = undefined;
+    try guest(&h, &t);
+
+    var me = try h.get("/api/me", &t);
+    defer me.deinit();
+    try testing.expect((try me.at("callsign")) == .null);
+    try testing.expect((try me.at("account.guest")).bool);
+    try testing.expectEqual(@as(usize, 0), try me.len("account.providers"));
+    try testing.expect((try me.at("account.email")) == .null);
+
+    // Faction first; the game still waits for a callsign.
+    var f = try h.ok("/api/faction", &t, "{{\"faction\":\"zombie\"}}", .{});
+    f.deinit();
+    var early = try h.post("/api/location", &t, "{\"lat\":1,\"lon\":2}");
+    defer early.deinit();
+    try testing.expectEqual(@as(u16, 409), early.status);
+    try testing.expectEqualStrings("no_callsign", try early.errorCode());
+
+    var bad = try h.post("/api/callsign", &t, "{\"callsign\":\"x\"}");
+    defer bad.deinit();
+    try testing.expectEqualStrings("callsign_invalid", try bad.errorCode());
+    var c = try h.ok("/api/callsign", &t, "{{\"callsign\":\"Grey_Fox\"}}", .{});
+    defer c.deinit();
+    try testing.expectEqualStrings("Grey_Fox", try c.str("me.callsign"));
+    var twice = try h.post("/api/callsign", &t, "{\"callsign\":\"Other\"}");
+    defer twice.deinit();
+    try testing.expectEqual(@as(u16, 409), twice.status);
+    try testing.expectEqualStrings("callsign_set", try twice.errorCode());
+    var w = try h.location(&t, base_lat, base_lon);
+    w.deinit();
+
+    // Taken names are refused for the next guest, case-insensitively; two callsign-less guests
+    // never collide on the placeholder.
+    var t2: [64]u8 = undefined;
+    try guest(&h, &t2);
+    var dup = try h.post("/api/callsign", &t2, "{\"callsign\":\"grey_fox\"}");
+    defer dup.deinit();
+    try testing.expectEqualStrings("callsign_taken", try dup.errorCode());
+}
+
+test "health reports which providers are on; unconfigured ones answer 503" {
+    var h: Harness = undefined;
+    try h.init(.{});
+    defer h.deinit();
+    var off = try h.get("/api/health", null);
+    defer off.deinit();
+    try testing.expect(!(try off.at("providers.google")).bool);
+    try testing.expect(!(try off.at("providers.apple")).bool);
+    try testing.expect(!(try off.at("providers.dev")).bool);
+    var g = try h.post("/api/auth/google", null, "{\"id_token\":\"x.y.z\"}");
+    defer g.deinit();
+    try testing.expectEqual(@as(u16, 503), g.status);
+    try testing.expectEqualStrings("provider_not_configured", try g.errorCode());
+    // The dev provider does not exist on a production server.
+    var d = try h.post("/api/auth/dev", null, "{\"subject\":\"x\"}");
+    defer d.deinit();
+    try testing.expectEqual(@as(u16, 404), d.status);
+
+    try withProviders(&h);
+    var on = try h.get("/api/health", null);
+    defer on.deinit();
+    try testing.expect((try on.at("providers.google")).bool);
+    try testing.expect((try on.at("providers.apple")).bool);
+    try testing.expectEqualStrings(fx.web_client_id, try on.str("providers.google_web_client_id"));
+    try testing.expectEqualStrings("com.outbreak.web", try on.str("providers.apple_web_service_id"));
+}
+
+test "Google sign-in: a new identity creates a player, the same identity returns it" {
+    var h: Harness = undefined;
+    try h.init(.{});
+    defer h.deinit();
+    try withProviders(&h);
+
+    var first = try okToken(&h, "/api/auth/google", null, fx.google_1);
+    defer first.deinit();
+    try testing.expect((try first.at("created")).bool);
+    try testing.expect((try first.at("me.callsign")) == .null);
+    try testing.expect(!(try first.at("me.account.guest")).bool);
+    try testing.expectEqualStrings("google", try first.str("me.account.providers.0"));
+    try testing.expectEqualStrings("g-sub-1@example.com", try first.str("me.account.email"));
+    const id = try testing.allocator.dupe(u8, try first.str("me.id"));
+    defer testing.allocator.free(id);
+    const old_token = try testing.allocator.dupe(u8, try first.str("token"));
+    defer testing.allocator.free(old_token);
+
+    // Another device signs in: same player, fresh token, the old one is retired.
+    var again = try okToken(&h, "/api/auth/google", null, fx.google_https_iss);
+    defer again.deinit();
+    try testing.expect(!(try again.at("created")).bool);
+    try testing.expectEqualStrings(id, try again.str("me.id"));
+    var stale = try h.get("/api/me", old_token);
+    defer stale.deinit();
+    try testing.expectEqual(@as(u16, 401), stale.status);
+    try testing.expectEqual(@as(?i64, 1), try h.ctx.db.scalar("SELECT COUNT(*) FROM players", .{}));
+}
+
+test "sign-in refuses bad tokens with explained errors" {
+    var h: Harness = undefined;
+    try h.init(.{});
+    defer h.deinit();
+    try withProviders(&h);
+    const cases = [_]struct { token: []const u8, status: u16, code: []const u8 }{
+        .{ .token = fx.google_expired, .status = 401, .code = "token_expired" },
+        .{ .token = fx.google_wrong_aud, .status = 401, .code = "invalid_token" },
+        .{ .token = fx.google_wrong_iss, .status = 401, .code = "invalid_token" },
+        .{ .token = fx.google_bad_sig, .status = 401, .code = "invalid_token" },
+        .{ .token = fx.google_tampered, .status = 401, .code = "invalid_token" },
+        .{ .token = fx.google_unknown_kid, .status = 401, .code = "invalid_token" },
+        .{ .token = "garbage", .status = 400, .code = "invalid_token" },
+    };
+    for (cases) |c| {
+        var r = try h.postf("/api/auth/google", null, "{{\"id_token\":\"{s}\"}}", .{c.token});
+        defer r.deinit();
+        try testing.expectEqual(c.status, r.status);
+        try testing.expectEqualStrings(c.code, try r.errorCode());
+    }
+    var missing = try h.post("/api/auth/google", null, "{}");
+    defer missing.deinit();
+    try testing.expectEqual(@as(u16, 400), missing.status);
+    try testing.expectEqual(@as(?i64, 0), try h.ctx.db.scalar("SELECT COUNT(*) FROM players", .{}));
+}
+
+test "Apple sign-in checks the nonce" {
+    var h: Harness = undefined;
+    try h.init(.{});
+    defer h.deinit();
+    try withProviders(&h);
+    var wrong = try h.postf("/api/auth/apple", null, "{{\"id_token\":\"{s}\",\"nonce\":\"nope\"}}", .{fx.apple_1});
+    defer wrong.deinit();
+    try testing.expectEqual(@as(u16, 401), wrong.status);
+    var ok = try h.postf("/api/auth/apple", null, "{{\"id_token\":\"{s}\",\"nonce\":\"{s}\"}}", .{ fx.apple_1, fx.raw_nonce });
+    defer ok.deinit();
+    try testing.expectEqual(@as(u16, 200), ok.status);
+    try testing.expect((try ok.at("created")).bool);
+    try testing.expectEqualStrings("apple", try ok.str("me.account.providers.0"));
+}
+
+test "a guest links an identity and keeps its progress" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var t: [64]u8 = undefined;
+    try guest(&h, &t);
+    var f = try h.ok("/api/faction", &t, "{{\"faction\":\"human\"}}", .{});
+    f.deinit();
+    var c = try h.ok("/api/callsign", &t, "{{\"callsign\":\"Linker\"}}", .{});
+    c.deinit();
+    try h.reachLevel(&t, 3);
+
+    var l = try h.ok("/api/auth/dev", &t, "{{\"subject\":\"dev-1\",\"email\":\"a@b.co\"}}", .{});
+    defer l.deinit();
+    try testing.expect(!(try l.at("created")).bool);
+    try testing.expectEqualStrings("Linker", try l.str("me.callsign"));
+    try testing.expectEqual(@as(i64, 3), try l.int("me.level"));
+    try testing.expect(!(try l.at("me.account.guest")).bool);
+    try testing.expectEqualStrings("a@b.co", try l.str("me.account.email"));
+
+    // The new token works; a fresh sign-in on another device finds the same character.
+    var me = try h.get("/api/me", try l.str("token"));
+    defer me.deinit();
+    try testing.expectEqualStrings("Linker", try me.str("callsign"));
+    var other = try h.post("/api/auth/dev", null, "{\"subject\":\"dev-1\"}");
+    defer other.deinit();
+    try testing.expectEqualStrings("Linker", try other.str("me.callsign"));
+    try testing.expect(!(try other.at("created")).bool);
+}
+
+test "a guest with progress meets an identity that already has a character" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    // The existing character, reachable by sign-in.
+    var existing = try h.post("/api/auth/dev", null, "{\"subject\":\"dev-9\"}");
+    defer existing.deinit();
+    var et: [64]u8 = undefined;
+    @memcpy(&et, try existing.str("token"));
+    var ec = try h.ok("/api/callsign", &et, "{{\"callsign\":\"Veteran\"}}", .{});
+    ec.deinit();
+    var ef = try h.ok("/api/faction", &et, "{{\"faction\":\"zombie\"}}", .{});
+    ef.deinit();
+
+    // A new phone: a guest that has played.
+    var g: [64]u8 = undefined;
+    try guest(&h, &g);
+    var gf = try h.ok("/api/faction", &g, "{{\"faction\":\"human\"}}", .{});
+    gf.deinit();
+    var gc = try h.ok("/api/callsign", &g, "{{\"callsign\":\"Newbie\"}}", .{});
+    gc.deinit();
+
+    var clash = try h.post("/api/auth/dev", &g, "{\"subject\":\"dev-9\"}");
+    defer clash.deinit();
+    try testing.expectEqual(@as(u16, 409), clash.status);
+    try testing.expectEqualStrings("identity_in_use", try clash.errorCode());
+    try testing.expect((try clash.at("message")) == .string);
+    // Nothing changed.
+    try testing.expectEqual(@as(?i64, 2), try h.ctx.db.scalar("SELECT COUNT(*) FROM players", .{}));
+    var still = try h.get("/api/me", &g);
+    defer still.deinit();
+    try testing.expectEqualStrings("Newbie", try still.str("callsign"));
+
+    // The player agrees to switch: the guest is discarded.
+    var sw = try h.ok("/api/auth/dev", &g, "{{\"subject\":\"dev-9\",\"switch\":true}}", .{});
+    defer sw.deinit();
+    try testing.expectEqualStrings("Veteran", try sw.str("me.callsign"));
+    try testing.expect(!(try sw.at("created")).bool);
+    try testing.expectEqual(@as(?i64, 1), try h.ctx.db.scalar("SELECT COUNT(*) FROM players", .{}));
+    var gone = try h.get("/api/me", &g);
+    defer gone.deinit();
+    try testing.expectEqual(@as(u16, 401), gone.status);
+}
+
+test "a guest with no faction is discarded silently when it signs in to an existing identity" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var existing = try h.post("/api/auth/dev", null, "{\"subject\":\"dev-5\"}");
+    existing.deinit();
+    var g: [64]u8 = undefined;
+    try guest(&h, &g);
+    var r = try h.ok("/api/auth/dev", &g, "{{\"subject\":\"dev-5\"}}", .{});
+    defer r.deinit();
+    try testing.expect(!(try r.at("created")).bool);
+    try testing.expectEqual(@as(?i64, 1), try h.ctx.db.scalar("SELECT COUNT(*) FROM players", .{}));
+}
+
+test "link and unlink: second provider, conflicts, never the last identity" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    try withProviders(&h);
+    var a = try h.post("/api/auth/dev", null, "{\"subject\":\"dev-a\"}");
+    defer a.deinit();
+    var at: [64]u8 = undefined;
+    @memcpy(&at, try a.str("token"));
+
+    var noauth = try h.post("/api/auth/link/google", null, "{}");
+    defer noauth.deinit();
+    try testing.expectEqual(@as(u16, 401), noauth.status);
+
+    var lk = try okToken(&h, "/api/auth/link/google", &at, fx.google_1);
+    defer lk.deinit();
+    try testing.expectEqual(@as(usize, 2), try lk.len("me.account.providers"));
+    // Linking the same identity again is harmless.
+    var lk2 = try okToken(&h, "/api/auth/link/google", &at, fx.google_1);
+    lk2.deinit();
+    // A different Google account on the same player is refused.
+    var second = try h.postf("/api/auth/link/google", &at, "{{\"id_token\":\"{s}\"}}", .{fx.google_2});
+    defer second.deinit();
+    try testing.expectEqualStrings("already_linked", try second.errorCode());
+
+    // Another player cannot take that Google identity.
+    var b = try h.post("/api/auth/dev", null, "{\"subject\":\"dev-b\"}");
+    defer b.deinit();
+    var bt: [64]u8 = undefined;
+    @memcpy(&bt, try b.str("token"));
+    var taken = try h.postf("/api/auth/link/google", &bt, "{{\"id_token\":\"{s}\"}}", .{fx.google_1});
+    defer taken.deinit();
+    try testing.expectEqual(@as(u16, 409), taken.status);
+    try testing.expectEqualStrings("identity_in_use", try taken.errorCode());
+
+    var un = try h.ok("/api/auth/unlink/dev", &at, "{{}}", .{});
+    defer un.deinit();
+    try testing.expectEqual(@as(usize, 1), try un.len("me.account.providers"));
+    var last = try h.post("/api/auth/unlink/google", &at, "{}");
+    defer last.deinit();
+    try testing.expectEqual(@as(u16, 409), last.status);
+    try testing.expectEqualStrings("last_identity", try last.errorCode());
+    var missing = try h.post("/api/auth/unlink/apple", &at, "{}");
+    defer missing.deinit();
+    try testing.expectEqualStrings("not_linked", try missing.errorCode());
+}
+
+test "deleting an account removes everything it owned and tidies the clan and chat" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var a: [64]u8 = undefined;
+    var b: [64]u8 = undefined;
+    try h.player("Founder", "human", &a);
+    try h.player("Second", "human", &b);
+    for ([_][]const u8{ &a, &b }) |t| try h.reachLevel(t, 10);
+    var gr = try h.ok("/api/dev/grant", &a, "{{\"salvage\":500}}", .{});
+    gr.deinit();
+    var made = try h.ok("/api/clans", &a, "{{\"name\":\"Last Light\",\"tag\":\"LL\"}}", .{});
+    defer made.deinit();
+    var joined = try h.ok("/api/clans/join", &b, "{{\"code\":\"{s}\"}}", .{try made.str("clan.code")});
+    joined.deinit();
+    var m = try h.ok("/api/clan/chat", &a, "{{\"text\":\"remember me\"}}", .{});
+    m.deinit();
+    // Some game state: a position, an event, war points, a contact record, an identity.
+    var w = try h.location(&a, base_lat, base_lon);
+    w.deinit();
+    const pid = try h.playerId("Founder");
+    try h.ctx.db.run("INSERT INTO events(player_id, at, type, text) VALUES(?, 1, 'x', 'y')", .{pid});
+    try h.ctx.db.run("INSERT INTO contact_log(a, b, at) VALUES(?, 999, 1)", .{pid});
+    try h.ctx.db.run("INSERT INTO war_player(week, player_id, district, points) VALUES(1, ?, 'd', 40)", .{pid});
+    try h.ctx.db.run("INSERT INTO war_district(week, district, faction, points) VALUES(1, 'd', 0, 40)", .{});
+    try h.ctx.db.run("INSERT INTO identities(provider, subject, player_id, created_at) VALUES('dev', 'founder', ?, 1)", .{pid});
+
+    var del = try h.call("DELETE", "/api/account", &a, "");
+    defer del.deinit();
+    try testing.expectEqual(@as(u16, 200), del.status);
+
+    const owned = [_][:0]const u8{
+        "SELECT COUNT(*) FROM players WHERE id = ?",
+        "SELECT COUNT(*) FROM items WHERE player_id = ?",
+        "SELECT COUNT(*) FROM consumables WHERE player_id = ?",
+        "SELECT COUNT(*) FROM buffs WHERE player_id = ?",
+        "SELECT COUNT(*) FROM mission_progress WHERE player_id = ?",
+        "SELECT COUNT(*) FROM events WHERE player_id = ?",
+        "SELECT COUNT(*) FROM war_player WHERE player_id = ?",
+        "SELECT COUNT(*) FROM raid_damage WHERE player_id = ?",
+        "SELECT COUNT(*) FROM snapshots WHERE player_id = ?",
+        "SELECT COUNT(*) FROM done WHERE player_id = ?",
+        "SELECT COUNT(*) FROM identities WHERE player_id = ?",
+        "SELECT COUNT(*) FROM clan_chat WHERE player_id = ?",
+        "SELECT COUNT(*) FROM contact_log WHERE a = ? OR b = ?1",
+    };
+    for (owned) |sql| {
+        const n = (try h.ctx.db.scalar(sql, .{pid})).?;
+        if (n != 0) std.debug.print("rows left: {s}\n", .{sql});
+        try testing.expectEqual(@as(i64, 0), n);
+    }
+    try testing.expect(h.ctx.live.position(pid, h.ctx.now()) == null);
+    // Aggregate war totals stay; the chat line stays but is anonymous.
+    try testing.expectEqual(@as(?i64, 1), try h.ctx.db.scalar("SELECT COUNT(*) FROM war_district", .{}));
+    var chat = try h.get("/api/clan/chat", &b);
+    defer chat.deinit();
+    try testing.expectEqualStrings("[deleted]", try chat.str("messages.0.callsign"));
+    try testing.expectEqualStrings("remember me", try chat.str("messages.0.text"));
+    // Leadership passed to the other member.
+    var clan = try h.get("/api/clan", &b);
+    defer clan.deinit();
+    try testing.expectEqual(@as(usize, 1), try clan.len("clan.members"));
+    try testing.expectEqualStrings("leader", try clan.str("clan.members.0.role"));
+    // The token and the callsign are free again.
+    var gone = try h.get("/api/me", &a);
+    defer gone.deinit();
+    try testing.expectEqual(@as(u16, 401), gone.status);
+    var reuse = try h.post("/api/register", null, "{\"callsign\":\"Founder\"}");
+    defer reuse.deinit();
+    try testing.expectEqual(@as(u16, 200), reuse.status);
+
+    // A sole clan member takes the clan with them.
+    var del2 = try h.call("DELETE", "/api/account", &b, "");
+    defer del2.deinit();
+    try testing.expectEqual(@as(?i64, 0), try h.ctx.db.scalar("SELECT COUNT(*) FROM clans", .{}));
+    try testing.expectEqual(@as(?i64, 0), try h.ctx.db.scalar("SELECT COUNT(*) FROM clan_chat", .{}));
+}
+
+test "deleting needs a token" {
+    var h: Harness = undefined;
+    try h.init(.{});
+    defer h.deinit();
+    var r = try h.call("DELETE", "/api/account", null, "");
+    defer r.deinit();
+    try testing.expectEqual(@as(u16, 401), r.status);
+}

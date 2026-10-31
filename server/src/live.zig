@@ -107,6 +107,23 @@ pub const Live = struct {
         _ = self.echoes.remove(pid);
     }
 
+    /// Forget everything held in memory for a deleted player.
+    pub fn forget(self: *Live, pid: i64) void {
+        _ = self.positions.remove(pid);
+        _ = self.echoes.remove(pid);
+        _ = self.buckets.remove(pid);
+        _ = self.tutorials.remove(pid);
+        _ = self.chat_last.remove(pid);
+        // Echoes of this player's build offered to others.
+        var doomed: std.ArrayList(i64) = .empty;
+        defer doomed.deinit(self.gpa);
+        var it = self.echoes.iterator();
+        while (it.next()) |kv| {
+            if (kv.value_ptr.source == pid) doomed.append(self.gpa, kv.key_ptr.*) catch continue;
+        }
+        for (doomed.items) |k| _ = self.echoes.remove(k);
+    }
+
     /// Token bucket: refills `rate` tokens per second up to `burst`; false when empty.
     pub fn allow(self: *Live, key: i64, now: i64, burst: f64, rate: f64) Allocator.Error!bool {
         const gop = try self.buckets.getOrPut(self.gpa, key);

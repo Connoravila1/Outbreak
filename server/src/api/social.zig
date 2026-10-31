@@ -193,11 +193,18 @@ pub fn joinClan(req: *Req, jw: *Stringify) HandlerError!void {
 pub fn leaveClan(req: *Req, jw: *Stringify) HandlerError!void {
     var p = try loadP(req);
     const clan_id = p.clan_id orelse return req.fail(409, "no_clan", "You are not in a clan.");
-    const db = &req.ctx.db;
     const was_leader = if (p.clan_role) |r| std.mem.eql(u8, r, "leader") else false;
     p.clan_id = null;
     p.clan_role = null;
     try model.save(req, &p);
+    try afterMemberLeft(req, clan_id, was_leader);
+    try jw.write(.{ .me = try views.meFresh(req, p.id) });
+}
+
+/// Housekeeping once a member (already detached from the clan) is gone: the last one out closes
+/// the clan, and a departed leader hands over to the most senior officer, else the highest level.
+pub fn afterMemberLeft(req: *Req, clan_id: i64, was_leader: bool) HandlerError!void {
+    const db = &req.ctx.db;
     if ((try db.scalar("SELECT COUNT(*) FROM players WHERE clan_id = ?", .{clan_id})).? == 0) {
         // The last member left: the clan, its chat and its strongholds go with it.
         try db.run("DELETE FROM clans WHERE id = ?", .{clan_id});
@@ -208,7 +215,6 @@ pub fn leaveClan(req: *Req, jw: *Stringify) HandlerError!void {
             \\  ORDER BY CASE clan_role WHEN 'officer' THEN 0 ELSE 1 END, level DESC, id LIMIT 1)
         , .{clan_id});
     }
-    try jw.write(.{ .me = try views.meFresh(req, p.id) });
 }
 
 pub fn clan(req: *Req, jw: *Stringify) HandlerError!void {
@@ -222,7 +228,7 @@ const ChatMessage = struct { id: []const u8, callsign: []const u8, text: []const
 fn chatMessages(req: *Req, clan_id: i64) HandlerError![]const ChatMessage {
     var st = try req.ctx.db.query(
         \\SELECT * FROM (
-        \\  SELECT m.id, p.callsign, m.text, m.at FROM clan_chat m JOIN players p ON p.id = m.player_id
+        \\  SELECT m.id, COALESCE(p.callsign, '[deleted]'), m.text, m.at FROM clan_chat m LEFT JOIN players p ON p.id = m.player_id
         \\  WHERE m.clan_id = ? ORDER BY m.id DESC LIMIT ?) ORDER BY id
     , .{ clan_id, chat_history });
     defer st.finalize();

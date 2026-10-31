@@ -10,6 +10,7 @@ const gear = @import("api/gear.zig");
 const social = @import("api/social.zig");
 const war = @import("api/war.zig");
 const dev = @import("api/dev.zig");
+const auth = @import("api/auth.zig");
 
 const Ctx = ctx_mod.Ctx;
 const Req = ctx_mod.Req;
@@ -31,7 +32,9 @@ pub const Response = struct {
 };
 
 const Handler = *const fn (*Req, *Stringify) HandlerError!void;
-const Access = enum { public, player, faction };
+/// `optional`: a bearer token is used when it is valid, and its absence is fine. `player` needs an
+/// account; `faction` needs a callsign and a faction too.
+const Access = enum { public, optional, player, faction };
 
 const Route = struct {
     method: Method,
@@ -47,9 +50,21 @@ const routes = [_]Route{
     .{ .method = .get, .path = "/api/factions", .access = .public, .handler = account.factions },
     .{ .method = .post, .path = "/api/register", .access = .public, .handler = account.register },
     .{ .method = .post, .path = "/api/recover", .access = .public, .handler = account.recover },
+    .{ .method = .post, .path = "/api/callsign", .access = .player, .handler = account.setCallsign },
     .{ .method = .post, .path = "/api/faction", .access = .player, .handler = account.chooseFaction },
     .{ .method = .get, .path = "/api/me", .access = .player, .handler = account.getMe },
     .{ .method = .post, .path = "/api/avatar", .access = .player, .handler = account.setAvatar },
+    .{ .method = .delete, .path = "/api/account", .access = .player, .handler = auth.deleteAccount },
+
+    .{ .method = .post, .path = "/api/auth/google", .access = .optional, .handler = auth.signIn },
+    .{ .method = .post, .path = "/api/auth/apple", .access = .optional, .handler = auth.signIn },
+    .{ .method = .post, .path = "/api/auth/dev", .access = .optional, .handler = auth.signIn, .dev_only = true },
+    .{ .method = .post, .path = "/api/auth/link/google", .access = .player, .handler = auth.link },
+    .{ .method = .post, .path = "/api/auth/link/apple", .access = .player, .handler = auth.link },
+    .{ .method = .post, .path = "/api/auth/link/dev", .access = .player, .handler = auth.link, .dev_only = true },
+    .{ .method = .post, .path = "/api/auth/unlink/google", .access = .player, .handler = auth.unlink },
+    .{ .method = .post, .path = "/api/auth/unlink/apple", .access = .player, .handler = auth.unlink },
+    .{ .method = .post, .path = "/api/auth/unlink/dev", .access = .player, .handler = auth.unlink, .dev_only = true },
 
     .{ .method = .post, .path = "/api/location", .access = .faction, .handler = world.location },
     .{ .method = .post, .path = "/api/engage", .access = .faction, .handler = world.engage },
@@ -100,6 +115,7 @@ const static_500 = Response{
 fn parseMethod(m: []const u8) Method {
     if (std.mem.eql(u8, m, "GET")) return .get;
     if (std.mem.eql(u8, m, "POST")) return .post;
+    if (std.mem.eql(u8, m, "DELETE")) return .delete;
     if (std.mem.eql(u8, m, "OPTIONS")) return .options;
     return .other;
 }
@@ -152,41 +168,46 @@ fn handleLocked(ctx: *Ctx, method_text: []const u8, path: []const u8, query: []c
     return .{ .status = 200, .json = gpa.dupe(u8, result) catch return static_500 };
 }
 
-const Who = struct { id: i64, has_faction: bool, last_seen: i64 };
+const Who = struct { id: i64, has_faction: bool, has_callsign: bool, last_seen: i64 };
 
-fn authenticate(req: *Req, token: []const u8) HandlerError!Who {
+fn authenticate(req: *Req, token: []const u8) HandlerError!?Who {
     const hash = account.hashHex(token);
-    var st = try req.ctx.db.query("SELECT id, faction, last_seen FROM players WHERE token_hash = ?", .{@as([]const u8, &hash)});
+    var st = try req.ctx.db.query("SELECT id, faction, last_seen, callsign <> '' FROM players WHERE token_hash = ?", .{@as([]const u8, &hash)});
     defer st.finalize();
-    if (!try st.step()) return req.fail(401, "unauthorized", "Unknown token.");
-    return .{ .id = st.int(0), .has_faction = !st.isNull(1), .last_seen = st.int(2) };
+    if (!try st.step()) return null;
+    return .{ .id = st.int(0), .has_faction = !st.isNull(1), .has_callsign = st.int(3) != 0, .last_seen = st.int(2) };
 }
 
 /// Auth, rate limit, then the handler inside a transaction. Returns the JSON (arena memory).
 fn run(req: *Req, rt: Route, token: ?[]const u8) HandlerError![]const u8 {
     const ctx = req.ctx;
-    var in_txn = false;
-    if (rt.access == .public) {
-        if (ctx.opts.limits and rt.method == .post) {
+    if (rt.access == .public or rt.access == .optional) {
+        if (ctx.opts.limits and rt.method != .get) {
             if (!try ctx.live.allow(-1, req.now, anon_burst, anon_rate)) return req.fail(429, "rate_limited", "Slow down.");
+        }
+        // A stale token on an optional route is the same as none.
+        if (rt.access == .optional) {
+            if (token) |tok| {
+                if (try authenticate(req, tok)) |who| req.pid = who.id;
+            }
         }
     } else {
         const tok = token orelse return req.fail(401, "unauthorized", "Missing token.");
-        const who = try authenticate(req, tok);
+        const who = (try authenticate(req, tok)) orelse return req.fail(401, "unauthorized", "Unknown token.");
         req.pid = who.id;
+        if (rt.access == .faction and !who.has_callsign) return req.fail(409, "no_callsign", "Choose a callsign first.");
         if (rt.access == .faction and !who.has_faction) return req.fail(409, "no_faction", "Choose a faction first.");
         if (ctx.opts.limits and !ctx.opts.dev) {
             if (!try ctx.live.allow(req.pid, req.now, player_burst, player_rate)) return req.fail(429, "rate_limited", "Slow down.");
         }
-        try ctx.db.begin();
-        in_txn = true;
+        try req.begin();
         if (req.now - who.last_seen > 60_000) try ctx.db.run("UPDATE players SET last_seen = ? WHERE id = ?", .{ req.now, req.pid });
     }
-    errdefer if (in_txn) ctx.db.rollback();
+    errdefer if (req.in_txn) ctx.db.rollback();
 
     var aw: std.Io.Writer.Allocating = .init(req.arena);
     var jw = Stringify{ .writer = &aw.writer, .options = .{} };
     try rt.handler(req, &jw);
-    if (in_txn) try ctx.db.commit();
+    if (req.in_txn) try ctx.db.commit();
     return aw.written();
 }

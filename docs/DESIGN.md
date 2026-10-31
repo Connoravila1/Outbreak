@@ -485,8 +485,13 @@ deferred, cosmetic-only if ever added).
 - **Avatar** (original: gender, race, faction skins): layered illustrated portrait — face shape,
   skin tone, hair, and a faction treatment (human: grime, bandages, gear; zombie: decay stages that
   advance with level). More faction skins unlock with titles.
-- **Account**: created on first launch with a random token. A **recovery code** is shown once and in
-  Settings, to move to a new phone. (Email/Google/Apple sign-in later.)
+- **Account**: three ways in. **Sign in with Google** or **Sign in with Apple** ties the survivor to
+  an account so it can be picked up on any phone; the game keeps only the provider's sign-in ID and,
+  if shared, an email. **Guest** play needs nothing: the survivor lives on one phone and can be
+  linked to an account at any time (a gentle, dismissible reminder appears on the You tab and once
+  at levels 3 and 10). Settings, Account shows what is linked and offers Link, Sign out (a guest is
+  warned it will lose the character) and Delete account (type DELETE; erases everything). The
+  callsign is chosen once, after the faction. There is no password and no recovery code.
 
 ## 15. Notifications
 

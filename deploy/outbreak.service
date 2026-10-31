@@ -6,6 +6,8 @@ Wants=network-online.target
 [Service]
 User=outbreak
 WorkingDirectory=/opt/outbreak
+# Sign-in (see docs/ACCOUNTS_SETUP.md): put the real IDs in /etc/outbreak.env
+EnvironmentFile=-/etc/outbreak.env
 ExecStart=/opt/outbreak/outbreak-server --bind 127.0.0.1 --port 8080 --data /opt/outbreak/data
 Restart=on-failure
 RestartSec=3

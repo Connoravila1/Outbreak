@@ -429,6 +429,31 @@ const migrations = [_][:0]const u8{
     \\);
     \\CREATE INDEX contact_log_pair ON contact_log(a, b);
     ,
+    // Sign-in identities (a player with none is a guest), and clan chat that outlives its authors:
+    // a deleted player's messages stay, shown as "[deleted]".
+    \\CREATE TABLE identities (
+    \\  id INTEGER PRIMARY KEY,
+    \\  provider TEXT NOT NULL,
+    \\  subject TEXT NOT NULL,
+    \\  player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    \\  email TEXT,
+    \\  created_at INTEGER NOT NULL,
+    \\  UNIQUE (provider, subject)
+    \\);
+    \\CREATE INDEX identities_player ON identities(player_id);
+    \\
+    \\CREATE TABLE clan_chat_new (
+    \\  id INTEGER PRIMARY KEY,
+    \\  clan_id INTEGER NOT NULL REFERENCES clans(id) ON DELETE CASCADE,
+    \\  player_id INTEGER REFERENCES players(id) ON DELETE SET NULL,
+    \\  text TEXT NOT NULL,
+    \\  at INTEGER NOT NULL
+    \\);
+    \\INSERT INTO clan_chat_new(id, clan_id, player_id, text, at) SELECT id, clan_id, player_id, text, at FROM clan_chat;
+    \\DROP TABLE clan_chat;
+    \\ALTER TABLE clan_chat_new RENAME TO clan_chat;
+    \\CREATE INDEX clan_chat_clan ON clan_chat(clan_id, id);
+    ,
 };
 
 // --- Tests -------------------------------------------------------------------------------------------
