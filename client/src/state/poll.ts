@@ -1,6 +1,7 @@
 import { effect, signal } from '@preact/signals';
 import { api, errorMessage } from '../api';
 import { position } from '../location';
+import { locationIsMocked } from '../location/mock';
 import { gameMap } from '../map/instance';
 import { isInSanctuary } from '../map/sanctuary';
 import { collectPlaces } from '../map/places';
@@ -31,7 +32,8 @@ async function tick() {
     inSanctuary.value = sanctuary;
     // Real places near you from the tiles already on screen (the server never reads the map itself).
     const places = m && !sanctuary ? collectPlaces(m, fix) : [];
-    const w = await api.location(fix.lat, fix.lon, fix.acc, sanctuary, places);
+    const mock = await locationIsMocked();
+    const w = await api.location(fix.lat, fix.lon, fix.acc, sanctuary, places, mock);
     world.value = w;
     pollError.value = null;
     // A contact interrupts everything; take it before the HP numbers move so the fight is not spoiled.

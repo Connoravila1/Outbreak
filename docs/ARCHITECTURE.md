@@ -32,7 +32,7 @@ The server is authoritative over every outcome. The client renders state and sen
   - `src/live.zig` — in-memory state: latest position per player (never persisted, expires in
     2 min, or 4 min when it came from a Patrol check-in), active echoes, rate limits, and reported landmarks per geohash-6 area (12 h TTL, capped, never persisted).
   - `src/tick.zig` — every 5 s: PvP contact matching, raid/war housekeeping.
-  - `src/names.zig` — the name blocklist (callsigns, clan names, tags). `src/api/report.zig` — player reports. `src/admin.zig` — the `outbreak-server admin ...` moderation commands, run against the SQLite file directly (no network surface); see `docs/MODERATING.md`.
+  - `src/names.zig` — the name blocklist (callsigns, clan names, tags). `src/api/report.zig` — player reports. `src/api/client_error.zig` — anonymous crash reports. `src/client_version.zig` — the forced-update version compare. `src/admin.zig` — the `outbreak-server admin ...` moderation commands, run against the SQLite file directly (no network surface); see `docs/MODERATING.md`.
   - `src/sim.zig` — balance simulator (`zig build sim`): simulates players and prints pacing.
 - **Concurrency**: one global mutex around game state and the single SQLite connection. Correct
   and fast enough for thousands of players; revisit only with evidence.
@@ -77,7 +77,7 @@ degrees (WGS84). `faction` is `"human"` or `"zombie"`. Slots are `"weapon" | "ar
 ### Account
 | Method | Path | Body | Returns |
 |---|---|---|---|
-| GET | `/api/health` | | `{ok, version, terms_version, players_online, providers:{google, apple, dev, google_web_client_id?, apple_web_service_id?}, tiles:{pmtiles, glyphs}|null}` — which sign-ins this server offers, and the IDs a browser needs; `tiles` points the map at a self-hosted PMTiles archive (null: OpenFreeMap) |
+| GET | `/api/health` | | `{ok, version, terms_version, players_online, providers:{google, apple, dev, google_web_client_id?, apple_web_service_id?}, tiles:{pmtiles, glyphs}|null}` — which sign-ins this server offers, and the IDs a browser needs; `tiles` points the map at a self-hosted PMTiles archive (null: OpenFreeMap); `min_client` (null or a version) and `store:{android, ios}|null` are the forced-update gate (below) |
 | GET | `/tiles/map.pmtiles` | | the `--tiles` archive, HTTP range requests (206); only routed when the server was started with `--tiles` |
 | GET | `/api/catalog` | | static game data (below); cacheable by `version` |
 | GET | `/api/factions` | | `{human:{share, players}, zombie:{...}, underdog:"human"|"zombie"|null, underdog_bonus}` |
@@ -129,8 +129,8 @@ accounts that have a recovery code but is no longer used by the client.
 ### World
 | Method | Path | Body | Returns |
 |---|---|---|---|
-| POST | `/api/location` | `{lat, lon, acc, sanctuary, places?:[{key, kind, lat, lon, name?}]}` (<= 40) | `WorldView` — call every ~5 s in foreground |
-| POST | `/api/patrol` | `{lat, lon, acc?, sanctuary?}` | `{events:[{id, type, text, at}], hp, downed_until}` — Patrol check-in, see below |
+| POST | `/api/location` | `{lat, lon, acc, sanctuary, mock?, places?:[{key, kind, lat, lon, name?}]}` (<= 40) | `WorldView` — call every ~5 s in foreground. `mock: true` says the phone's fix came from a mock provider (see "Simulated locations"); `me.simulated_location` echoes the flag |
+| POST | `/api/patrol` | `{lat, lon, acc?, sanctuary?, mock?}` | `{events:[{id, type, text, at}], hp, downed_until}` — Patrol check-in, see below |
 | POST | `/api/engage` | `{id, stance?}` (enemy spawn or echo id; stance `aggressive`/`careful`/`evasive`, default careful; 409 `in_transit`) | `Battle` |
 | POST | `/api/stance` | `{stance}` (default for Contact PvP) | `{me}` |
 | POST | `/api/open` | `{id}` (cache, airdrop or landmark id; 409 `landmark_limit`, 409 `in_transit`) | `{loot: Rewards, me}` |
@@ -206,7 +206,7 @@ them.
 | POST | `/api/clans/leave` | | `{me}` |
 | GET | `/api/clan` | | `{clan:{id, name, tag, code, members:[{callsign, level, title, role, weekly_points}], strongholds, perks}}` |
 | GET/POST | `/api/clan/chat` | `{text}` | `{messages:[{id, callsign, text, at}]}` |
-| POST | `/api/stronghold/claim` | `{id, stance?}` | `{battles:[Battle], claimed, me}` |
+| POST | `/api/stronghold/claim` | `{id, stance?}` | `{battles:[Battle], claimed, me}` — 409 `in_transit`, or `simulated_location` while the latest fix is flagged `mock` |
 | POST | `/api/raid/attack` | `{id, stance?}` | `Battle` |
 
 ### Reports and suspensions
@@ -220,6 +220,48 @@ visible to, and so reportable by, members of that clan). `note` is at most 140 c
 report per reporter per target), 429 `report_limit` (five an hour). Reports are stored in `reports`
 and read with `outbreak-server admin reports`; there is no endpoint that lists them. Clan creation
 with a blocked name or tag answers 400 `name_not_allowed` with the same plain message.
+
+**Forced update.** The client sends its version (`package.json`, baked in at build time) in an
+`X-Outbreak-Client: <semver>` header on every request. With `--min-client X.Y.Z` (or
+`OUTBREAK_MIN_CLIENT`) the server answers an older client **426**
+`{error:"update_required", message, min_client, store:{android, ios}|null}` to every request except
+`GET /api/health` and `DELETE /api/account`. The store URLs come from `--store-android` /
+`--store-ios` (either may be null). A request with **no** header (curl, the web dev build, a Patrol
+check-in from a build that does not send one) or an unreadable one is always allowed. Versions compare
+numerically (`0.10.0` is newer than `0.9.0`; a `-beta` or `+build` suffix is ignored). The client
+also reads `min_client` from `/api/health` at boot and shows the full-screen "Update to keep playing"
+(`src/shell/UpdateRequired.tsx`) on either signal. CORS allows the header.
+
+**Crash and error reports.**
+
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| POST | `/api/client-error` | `{message, stack?, version?, platform?, screen?, ts?}` or `{reports:[...]}` (<= 10) | `{ok, stored}` |
+
+Anonymous: a token is not needed and none is stored or logged; the server stamps its own time (`ts` is
+ignored). `message` is cut to 500 bytes, `stack` to 4000, `version`/`platform`/`screen` to 32/16/32; a
+report without a message is skipped. Both client and server scrub anything that could be a place
+before it is kept: query strings and fragments on URLs, and decimals that look like a latitude or
+longitude (up to three whole digits, four or more fractional ones). Rate limited by a bucket per
+token (6 burst, one per 10 s), or one shared bucket for unauthenticated senders (30 burst, two a
+second); 429 `rate_limited`, which the client ignores. Stored in `client_errors` (schema 8), capped
+at the newest 5000 rows, grouped by a hash of the message (digit runs folded) plus the top stack frame
+(`api/client_error.zig`). Read with `outbreak-server admin errors [--since 7d]`; `errors clear` empties
+it. The client (`src/report/errors.ts`) catches `window` errors, unhandled rejections, Preact render
+errors (`ErrorBoundary`, a plain "Something broke. Reload" card) and failed native plugin calls,
+dedupes identical reports per session (and sends at most 25), batches them every 5 s, and drops them
+silently when offline.
+
+**Simulated locations.** `mock: true` on `/api/location` or `/api/patrol` marks a fix as coming from a
+mock provider. The server keeps the flag on the in-memory position (never on disk); while it is set the
+player is skipped by Contact matching (`tick.zig`), earns no walking XP (`acceptFix`) and no war
+points (`rewards.apply`), and their snapshot is not served as an Echo for ten minutes
+(`echo.zig`). `players.mock_sessions` / `players.mock_at` (schema 8) count sessions for `admin player`.
+`me.simulated_location` (and `MeLite.simulated_location` in `/api/location`) is true while the
+live position is flagged. Android reads the flag in `MockLocation.java` (called from the Patrol
+plugin's `mockCheck` and from `PatrolService`), iOS in `PatrolPlugin.swift`; the client asks
+`Patrol.mockCheck()` before each `/api/location` (`src/location/mock.ts`). The desktop simulator never
+sets it, except the dev panel's "Report as mock GPS" box.
 
 **Suspended accounts.** Every authenticated endpoint except `DELETE /api/account` answers **403** to a suspended player (they can always erase their account):
 

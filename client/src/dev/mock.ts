@@ -239,6 +239,9 @@ function weeklyMission(): Mission | null {
   return { id: 'w1', kind: 'win', text: 'Win 3 Contacts or Echoes', target: 3, progress: Math.min(3, db.wprog), claimed: db.wclaimed, rewards: r };
 }
 
+/** The last /api/location said `mock: true` (a mock provider on the phone). */
+let mockSimulated = false;
+
 function buildMe(): Me {
   const base: Stats = { hp: maxHp(db.level), atk: 10 + 2 * (db.level - 1), def: 6 + 1.5 * (db.level - 1), spd: 10 + 0.6 * (db.level - 1) };
   const eq = equipped();
@@ -270,6 +273,7 @@ function buildMe(): Me {
     titles_extra: [...titlesFor(db.noteClaims ?? []), ...titlesFrom(collection(), db.faction ?? 'human')],
     cosmetics: { owned: collection().owned, color: collection().color, frame: collection().frame },
     achievements: { earned: collection().earned.length, total: MOCK_ACHIEVEMENTS.length },
+    simulated_location: mockSimulated,
   };
 }
 
@@ -322,7 +326,7 @@ function world(lat: number, lon: number, places: PlaceReport[] = []): WorldView 
   const { dlat, dlon } = dims(lat);
   const ci = Math.floor(lat / dlat), cj = Math.floor(lon / dlon);
   const w10 = Math.floor(now / 600e3), w30 = Math.floor(now / 1800e3);
-  const v: WorldView = { now, me: { hp: db.hp, max_hp: buildMe().max_hp, downed_until: null, level: db.level, xp: db.xp, xp_next: CATALOG.levels.xp_to_next[db.level - 1], salvage: db.salvage }, hostiles_near: false, in_transit: false, enemies: [], caches: [], echoes: [], landmarks: [], time: mockTime(now, lon), strongholds: [], raids: [], events: [] };
+  const v: WorldView = { now, me: { simulated_location: mockSimulated, hp: db.hp, max_hp: buildMe().max_hp, downed_until: null, level: db.level, xp: db.xp, xp_next: CATALOG.levels.xp_to_next[db.level - 1], salvage: db.salvage }, hostiles_near: false, in_transit: false, enemies: [], caches: [], echoes: [], landmarks: [], time: mockTime(now, lon), strongholds: [], raids: [], events: [] };
   const win4h = Math.floor(now / (4 * 3600e3));
   for (const p of places.slice(0, 40)) {
     if (!PLACE_KINDS.includes(p.kind)) continue;
@@ -558,6 +562,7 @@ function route(method: string, path: string, body: any, authed: boolean): unknow
   };
   const mine = () => ({ me: buildMe() });
   switch (`${method} ${path}`) {
+    case 'POST /api/client-error': return { ok: true, stored: Array.isArray(body?.reports) ? body.reports.length : 0 };
     case 'GET /api/health': return { ok: true, version: 'mock', players_online: 41, terms_version: TERMS_VERSION, providers: { google: false, apple: false, dev: true, google_web_client_id: null, apple_web_service_id: null } };
     case 'GET /api/catalog': return CATALOG;
     case 'GET /api/factions': return { human: { share: 0.62, players: 310 }, zombie: { share: 0.38, players: 190 }, underdog: 'zombie', underdog_bonus: 0.12 };
@@ -614,6 +619,7 @@ function route(method: string, path: string, body: any, authed: boolean): unknow
     case 'POST /api/avatar': guard(); db.avatar = body.avatar as Record<string, unknown>; save(); return mine();
     case 'POST /api/location': {
       guard();
+      mockSimulated = body.mock === true;
       const v = world(need(body, 'lat'), need(body, 'lon'), (body.places as PlaceReport[] | undefined) ?? []);
       v.in_transit = observeTransit(body.lat, body.lon);
       if (v.in_transit) v.hostiles_near = false;

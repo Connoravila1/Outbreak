@@ -143,7 +143,8 @@ pub fn apply(req: *Req, p: *Player, acc: *Acc, district: ?[]const u8) HandlerErr
         out.notes = refs[0..n];
     }
 
-    if (acc.war_points > 0) {
+    // A simulated location earns no war points (the fight itself still pays).
+    if (acc.war_points > 0 and !req.ctx.live.simulated(p.id, req.now)) {
         if (district) |d| {
             try warstate.addPoints(req, p.id, p.fac(), d, acc.war_points);
             out.war_points = acc.war_points;

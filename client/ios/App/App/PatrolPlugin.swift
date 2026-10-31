@@ -45,6 +45,19 @@ final class PatrolEngine: NSObject, CLLocationManagerDelegate {
         return ends == 0 || ends > Date().timeIntervalSince1970 * 1000
     }
 
+    /// True when CoreLocation says the newest fix (under a minute old) was produced by software
+    /// rather than a GPS receiver (iOS 15+: `CLLocationSourceInformation.isSimulatedBySoftware`).
+    /// Any doubt is false: a miss costs nothing, a false alarm costs a real player their fights.
+    var simulated: Bool {
+        guard let loc = manager.location ?? latest else { return false }
+        return PatrolEngine.isSimulated(loc)
+    }
+
+    static func isSimulated(_ loc: CLLocation) -> Bool {
+        guard #available(iOS 15.0, *), Date().timeIntervalSince(loc.timestamp) < 60 else { return false }
+        return loc.sourceInformation?.isSimulatedBySoftware ?? false
+    }
+
     var hasAlways: Bool { manager.authorizationStatus == .authorizedAlways }
     var hasFine: Bool { manager.authorizationStatus == .authorizedAlways || manager.authorizationStatus == .authorizedWhenInUse }
 
@@ -159,7 +172,7 @@ final class PatrolEngine: NSObject, CLLocationManagerDelegate {
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        let body: [String: Any] = ["lat": loc.coordinate.latitude, "lon": loc.coordinate.longitude, "acc": loc.horizontalAccuracy]
+        let body: [String: Any] = ["lat": loc.coordinate.latitude, "lon": loc.coordinate.longitude, "acc": loc.horizontalAccuracy, "mock": PatrolEngine.isSimulated(loc)]
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
         URLSession.shared.dataTask(with: req) { [weak self] data, resp, error in
@@ -243,6 +256,7 @@ public class PatrolPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "status", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "requestBackground", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "openSettings", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "mockCheck", returnType: CAPPluginReturnPromise),
     ]
 
     private func readStatus(_ done: @escaping (JSObject) -> Void) {
@@ -293,6 +307,13 @@ public class PatrolPlugin: CAPPlugin, CAPBridgedPlugin {
     @objc func requestBackground(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
             PatrolEngine.shared.requestAlways { self.readStatus { call.resolve($0) } }
+        }
+    }
+
+    /// Whether the newest location fix was simulated by software: {mock: Bool}.
+    @objc func mockCheck(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            call.resolve(["mock": PatrolEngine.shared.simulated])
         }
     }
 

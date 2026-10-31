@@ -56,7 +56,7 @@ fn contacts(ctx: *Ctx, now: i64) !void {
     var it = ctx.live.positions.iterator();
     while (it.next()) |e| {
         const pos = e.value_ptr.*;
-        if (!pos.fresh(now) or pos.sanctuary) continue;
+        if (!pos.fresh(now) or pos.sanctuary or pos.mock) continue;
         // No Contact from a moving vehicle.
         if (ctx.live.inTransit(e.key_ptr.*, now)) continue;
         try ids.append(gpa, e.key_ptr.*);

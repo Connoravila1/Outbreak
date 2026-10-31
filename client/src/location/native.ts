@@ -1,5 +1,6 @@
 import { Geolocation, type Position } from '@capacitor/geolocation';
 import { Emitter, type LocationSource } from './source';
+import { reportPluginError } from '../report/errors';
 
 export type PermissionResult = 'granted' | 'denied';
 
@@ -31,10 +32,14 @@ export class NativeSource extends Emitter implements LocationSource {
       { enableHighAccuracy: true, maximumAge: 2000, timeout: 20000, interval: 10000, minimumUpdateInterval: 5000 },
       (pos, err) => {
         if (pos) this.emit(toFix(pos));
-        else if (err) this.fail(/denied|permission/i.test(String(err.message)) ? 'Location permission was denied.' : 'Cannot get a location fix.');
+        else if (err) {
+          const denied = /denied|permission/i.test(String(err.message));
+          if (!denied) reportPluginError('Geolocation.watchPosition', err);
+          this.fail(denied ? 'Location permission was denied.' : 'Cannot get a location fix.');
+        }
       },
     ).then((id) => { this.watch = id; this.starting = false; })
-      .catch(() => { this.starting = false; this.fail('Cannot get a location fix.'); });
+      .catch((e) => { this.starting = false; reportPluginError('Geolocation.watchPosition', e); this.fail('Cannot get a location fix.'); });
   }
 
   stop() {

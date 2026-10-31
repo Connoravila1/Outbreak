@@ -182,6 +182,39 @@ Findings and changes:
 | Android back: closes the top sheet (`src/ui/back.ts`), otherwise minimizes | `src/native/lifecycle.ts` |
 | Sign in with Google / Apple via `@capgo/capacitor-social-login` (ID token only; the server verifies it). Needs the IDs, the iOS URL scheme in `Info.plist` and the Sign in with Apple entitlement (`ios/App/App/App.entitlements`): see `../docs/ACCOUNTS_SETUP.md` | `src/auth/social.ts` |
 
+## Fake-GPS detection
+
+The server pauses real-world fights and war points while a fix is flagged as simulated (DESIGN.md
+section 7). Foreground fixes come from `@capacitor/geolocation`, which hides the flag, so the web
+layer asks the Patrol plugin (`Patrol.mockCheck()`, called before each `/api/location`, see
+`src/location/mock.ts`) and sends `mock: true`; the Patrol service adds the flag to its own
+`/api/patrol` fixes.
+
+- **Android** (`MockLocation.java`, used by `PatrolPlugin.mockCheck` and `PatrolService`): the newest
+  fix any provider (gps, network, passive, fused) holds, if under a minute old, is mock when
+  `Location.isMock()` (API 31+) or `isFromMockProvider()` says so. No fix, no permission, a stale
+  fix or any exception reads as "not mocked". **Written without a build: compile it and, on a phone
+  with Developer options > "Select mock location app" set to a fake-GPS app, check that the banner
+  appears within ~10 s and goes away when the app is deselected.** Also check an unmocked phone never
+  shows it.
+- **iOS** (`PatrolEngine.simulated` / `isSimulated` in `PatrolPlugin.swift`):
+  `CLLocation.sourceInformation?.isSimulatedBySoftware` (iOS 15+). TODO, needs a Mac: nothing has been
+  built or run. `CLLocationManager.location` is only fresh while some manager is receiving updates;
+  the plugin reads its own manager (and the last Patrol fix), so in the foreground with Patrol off the
+  answer may be "not simulated" even for a simulated fix. If that matters, run a short-lived
+  `startUpdatingLocation()` in `mockCheck` or add a watch of its own.
+- **Web and the desktop simulator** never report it (a browser cannot tell). The dev panel has a
+  "Report as mock GPS" box to try the server's policy.
+
+## Version and error reports
+
+`package.json`'s version is baked in at build time (`__APP_VERSION__`, `vite.config.ts`) and sent as
+`X-Outbreak-Client` on every request; bump it for each store release, and raise the server's
+`--min-client` once the build is live. The native Patrol services do not send the header (a missing
+header is allowed). Crashes, unhandled rejections, render errors and failed plugin calls are reported
+anonymously to `/api/client-error` (`src/report/errors.ts`); read them with `outbreak-server admin
+errors`.
+
 ## Patrol mode (background location)
 
 Patrol keeps the player in the world with the app closed. A native plugin (`Patrol`, JS wrapper

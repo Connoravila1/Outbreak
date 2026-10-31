@@ -557,6 +557,24 @@ const migrations = [_][:0]const u8{
     \\ALTER TABLE players ADD COLUMN terms_accepted INTEGER NOT NULL DEFAULT 0;
     \\ALTER TABLE players ADD COLUMN terms_accepted_at INTEGER NOT NULL DEFAULT 0;
     ,
+    // Crash and error reports from the app (anonymous; the newest few thousand are kept), and a
+    // per-player count of sessions played with a simulated location. No position is stored.
+    \\CREATE TABLE client_errors (
+    \\  id INTEGER PRIMARY KEY AUTOINCREMENT,
+    \\  at INTEGER NOT NULL,
+    \\  hash TEXT NOT NULL,
+    \\  message TEXT NOT NULL,
+    \\  stack TEXT NOT NULL DEFAULT '',
+    \\  frame TEXT NOT NULL DEFAULT '',
+    \\  version TEXT NOT NULL DEFAULT '',
+    \\  platform TEXT NOT NULL DEFAULT '',
+    \\  screen TEXT NOT NULL DEFAULT ''
+    \\);
+    \\CREATE INDEX client_errors_hash ON client_errors(hash, at);
+    \\CREATE INDEX client_errors_at ON client_errors(at);
+    \\ALTER TABLE players ADD COLUMN mock_sessions INTEGER NOT NULL DEFAULT 0;
+    \\ALTER TABLE players ADD COLUMN mock_at INTEGER NOT NULL DEFAULT 0;
+    ,
 };
 
 // --- Tests -------------------------------------------------------------------------------------------

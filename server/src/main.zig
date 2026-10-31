@@ -18,19 +18,27 @@ const Config = struct {
     tiles_file: []const u8 = "",
     tiles_url: []const u8 = "",
     tiles_glyphs: []const u8 = "",
+    min_client: []const u8 = "",
+    store_android: []const u8 = "",
+    store_ios: []const u8 = "",
 };
 
 const usage =
     \\usage: outbreak-server [--port 8080] [--bind 0.0.0.0] [--data ./data] [--dev]
     \\                       [--tiles FILE.pmtiles | --tiles-url URL] [--tiles-glyphs URL]
+    \\                       [--min-client X.Y.Z] [--store-android URL] [--store-ios URL]
     \\                       [--google-client-ids ID,ID,...] [--apple-audiences ID,ID,...]
     \\       outbreak-server admin [--data ./data] <command>    (moderation; "admin help" lists the commands)
     \\environment: OUTBREAK_PORT, OUTBREAK_BIND, OUTBREAK_DATA, OUTBREAK_DEV (1 or true),
     \\             OUTBREAK_GOOGLE_CLIENT_IDS, OUTBREAK_APPLE_AUDIENCES, OUTBREAK_TILES,
-    \\             OUTBREAK_TILES_URL, OUTBREAK_TILES_GLYPHS
+    \\             OUTBREAK_TILES_URL, OUTBREAK_TILES_GLYPHS, OUTBREAK_MIN_CLIENT,
+    \\             OUTBREAK_STORE_ANDROID, OUTBREAK_STORE_IOS
     \\Map tiles: the client uses OpenFreeMap by default. --tiles serves a PMTiles extract from this
     \\binary (GET /tiles/map.pmtiles, range requests); --tiles-url advertises one hosted elsewhere;
     \\--tiles-glyphs overrides the font URL template. See docs/TILES.md.
+    \\Forced update: --min-client answers 426 update_required to clients older than that version (a
+    \\request with no X-Outbreak-Client header, such as curl or the web dev build, is always allowed).
+    \\--store-android / --store-ios are the pages the client's update screen opens.
     \\Sign-in: the Google client IDs are the web, Android and iOS OAuth clients (web first); the Apple
     \\audiences are the iOS bundle id (com.outbreak.game) and the web Services ID. A provider with no
     \\IDs answers 503 provider_not_configured. --google-jwks-url / --apple-jwks-url exist for testing.
@@ -62,6 +70,9 @@ fn parseConfig(init: std.process.Init) !Config {
     if (env.get("OUTBREAK_GOOGLE_CLIENT_IDS")) |v| cfg.google_client_ids = v;
     if (env.get("OUTBREAK_APPLE_AUDIENCES")) |v| cfg.apple_audiences = v;
 
+    if (env.get("OUTBREAK_MIN_CLIENT")) |v| cfg.min_client = v;
+    if (env.get("OUTBREAK_STORE_ANDROID")) |v| cfg.store_android = v;
+    if (env.get("OUTBREAK_STORE_IOS")) |v| cfg.store_ios = v;
     if (env.get("OUTBREAK_TILES")) |v| cfg.tiles_file = v;
     if (env.get("OUTBREAK_TILES_URL")) |v| cfg.tiles_url = v;
     if (env.get("OUTBREAK_TILES_GLYPHS")) |v| cfg.tiles_glyphs = v;
@@ -83,6 +94,12 @@ fn parseConfig(init: std.process.Init) !Config {
             cfg.tiles_url = args.next() orelse return error.MissingValue;
         } else if (std.mem.eql(u8, arg, "--tiles-glyphs")) {
             cfg.tiles_glyphs = args.next() orelse return error.MissingValue;
+        } else if (std.mem.eql(u8, arg, "--min-client")) {
+            cfg.min_client = args.next() orelse return error.MissingValue;
+        } else if (std.mem.eql(u8, arg, "--store-android")) {
+            cfg.store_android = args.next() orelse return error.MissingValue;
+        } else if (std.mem.eql(u8, arg, "--store-ios")) {
+            cfg.store_ios = args.next() orelse return error.MissingValue;
         } else if (std.mem.eql(u8, arg, "--google-client-ids")) {
             cfg.google_client_ids = args.next() orelse return error.MissingValue;
         } else if (std.mem.eql(u8, arg, "--apple-audiences")) {
@@ -96,6 +113,7 @@ fn parseConfig(init: std.process.Init) !Config {
             std.process.exit(0);
         } else return error.UnknownArgument;
     }
+    if (cfg.min_client.len > 0 and server.client_version.parse(cfg.min_client) == null) return error.InvalidMinClient;
     return cfg;
 }
 
@@ -176,7 +194,13 @@ pub fn main(init: std.process.Init) !void {
     if (cfg.google_jwks_url) |u| auth.google_jwks_url = u;
     if (cfg.apple_jwks_url) |u| auth.apple_jwks_url = u;
 
-    var ctx = try server.ctx.Ctx.init(gpa, io, db_path, .{ .dev = cfg.dev, .limits = !cfg.dev, .auth = auth, .tiles = .{ .file = cfg.tiles_file, .url = cfg.tiles_url, .glyphs = cfg.tiles_glyphs } });
+    var ctx = try server.ctx.Ctx.init(gpa, io, db_path, .{ .dev = cfg.dev, .limits = !cfg.dev, .auth = auth, .tiles = .{ .file = cfg.tiles_file, .url = cfg.tiles_url, .glyphs = cfg.tiles_glyphs }, .update = .{
+        .min_client = server.client_version.parse(cfg.min_client),
+        .min_client_text = cfg.min_client,
+        .store_android = cfg.store_android,
+        .store_ios = cfg.store_ios,
+    } });
+    if (cfg.min_client.len > 0) log.info("clients older than {s} are asked to update", .{cfg.min_client});
     if (cfg.tiles_file.len > 0) log.info("serving map tiles from {s}", .{cfg.tiles_file});
     defer ctx.deinit();
     log.info("data in {s}{s}", .{ cfg.data, if (cfg.dev) " (dev endpoints enabled)" else "" });

@@ -2,6 +2,7 @@ import { registerPlugin } from '@capacitor/core';
 import { signal } from '@preact/signals';
 import { getServerUrl, getToken, storage } from '../api';
 import { isNative } from './platform';
+import { reportPluginError } from '../report/errors';
 
 /**
  * Patrol mode (native only): a background service posts a light check-in to /api/patrol so the
@@ -28,9 +29,11 @@ interface PatrolPlugin {
   status(): Promise<PatrolStatus>;
   requestBackground(): Promise<PatrolStatus>;
   openSettings(): Promise<void>;
+  /** Whether the newest location fix came from a mock provider (fake-GPS app). */
+  mockCheck(): Promise<{ mock: boolean }>;
 }
 
-const Patrol = registerPlugin<PatrolPlugin>('Patrol');
+export const Patrol = registerPlugin<PatrolPlugin>('Patrol');
 
 /** The last status the phone reported (null until first read, and always null on the web). */
 export const patrolStatus = signal<PatrolStatus | null>(null);
@@ -47,11 +50,12 @@ export function patrolIntervalSec(): number {
   return Math.max(10, Math.min(600, Math.round(v)));
 }
 
-const quiet = <T>(p: Promise<T>): Promise<T | null> => p.catch(() => null);
+/** A plugin call that must not break the app: failures are reported (anonymously) and read as "no answer". */
+const quiet = <T>(p: Promise<T>, call: string): Promise<T | null> => p.catch((e) => { reportPluginError(call, e); return null; });
 
 export async function refreshPatrol(): Promise<PatrolStatus | null> {
   if (!isNative) return null;
-  const s = await quiet(Patrol.status());
+  const s = await quiet(Patrol.status(), 'Patrol.status');
   if (s) patrolStatus.value = s;
   return s;
 }
@@ -67,22 +71,23 @@ export async function startPatrol(durationSec: number): Promise<PatrolStatus> {
     return s;
   } catch (e) {
     const msg = (e as { message?: string }).message;
+    reportPluginError('Patrol.start', e);
     throw new Error(msg || 'Patrol could not start.');
   }
 }
 
 export async function stopPatrol(): Promise<void> {
   if (!isNative) return;
-  const s = await quiet(Patrol.stop());
+  const s = await quiet(Patrol.stop(), 'Patrol.stop');
   if (s) patrolStatus.value = s;
 }
 
 /** Ask for "Allow all the time" / "Always". Resolves to the status afterwards. */
 export async function requestBackgroundLocation(): Promise<PatrolStatus | null> {
   if (!isNative) return null;
-  const s = await quiet(Patrol.requestBackground());
+  const s = await quiet(Patrol.requestBackground(), 'Patrol.requestBackground');
   if (s) patrolStatus.value = s;
   return s ?? (await refreshPatrol());
 }
 
-export function openPatrolSettings() { void quiet(Patrol.openSettings()); }
+export function openPatrolSettings() { void quiet(Patrol.openSettings(), 'Patrol.openSettings'); }

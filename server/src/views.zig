@@ -218,9 +218,13 @@ pub const MeView = struct {
     titles_extra: []const []const u8,
     cosmetics: CosmeticsView,
     achievements: AchievementTally,
+    /// The phone reports its location as simulated (a mock provider): real-world fights, walking XP
+    /// and war points are off until it is not.
+    simulated_location: bool,
 };
 
 pub const MeLite = struct {
+    simulated_location: bool,
     hp: i32,
     max_hp: i32,
     downed_until: ?i64,
@@ -230,8 +234,9 @@ pub const MeLite = struct {
     salvage: u32,
 };
 
-pub fn meLite(p: *const Player, now: i64) MeLite {
+pub fn meLite(p: *const Player, now: i64, simulated: bool) MeLite {
     return .{
+        .simulated_location = simulated,
         .hp = p.hp,
         .max_hp = p.maxHp(now),
         .downed_until = if (p.downed(now)) p.downed_until else null,
@@ -370,6 +375,7 @@ pub fn meView(req: *Req, p: *Player) HandlerError!MeView {
         .titles_extra = try std.mem.concat(a, []const u8, &.{ try notes_db.titles(req, p.id), try ach_db.titles(req, p.id, p.fac()) }),
         .cosmetics = .{ .owned = try ach_db.owned(req, p.id), .color = ach_db.optId(p.callsign_color), .frame = ach_db.optId(p.avatar_frame) },
         .achievements = .{ .earned = @intCast((try ach_db.earnedSet(req, p.id)).count()), .total = game.achievements.list.len },
+        .simulated_location = req.ctx.live.simulated(p.id, now),
     };
 }
 

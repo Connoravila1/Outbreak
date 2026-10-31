@@ -278,6 +278,8 @@ pub fn claimStronghold(req: *Req, jw: *Stringify) HandlerError!void {
     if (p.downed(req.now)) return req.fail(409, "downed", "You are down. Heal, or wait to get back up.");
     const pos = req.ctx.live.position(p.id, req.now) orelse return req.fail(409, "no_position", "Your position is unknown. Wait for a location update.");
     if (pos.sanctuary) return req.fail(409, "sanctuary", "Nothing can be claimed in a sanctuary.");
+    // Territory is real-world ground: a simulated location cannot take it (DESIGN.md section 7).
+    if (pos.mock) return req.fail(409, "simulated_location", "Your location is simulated. Territory needs a real one.");
     const site = game.spawns.resolveStronghold(req.ctx.seed, body.id) orelse return req.fail(404, "not_found", "No such stronghold.");
     if (!world.withinReach(pos, site.lat, site.lon)) return req.fail(409, "too_far", "Get closer to the stronghold.");
 

@@ -55,7 +55,7 @@ const RaidView = struct { id: []const u8, boss: []const u8, lat: f64, lon: f64, 
 const LandmarkView = struct { id: []const u8, kind: []const u8, name: ?[]const u8, lat: f64, lon: f64, available: bool, available_at: ?i64 };
 const TimeView = struct { phase: []const u8, changes_at: i64 };
 
-const Fix = struct { lat: f64, lon: f64, acc: f64 = 0, sanctuary: bool = false, places: []const landmarks.Report = &.{} };
+const Fix = struct { lat: f64, lon: f64, acc: f64 = 0, sanctuary: bool = false, mock: bool = false, places: []const landmarks.Report = &.{} };
 
 /// Validate a posted fix against the player's last position (speed limit), pay walking XP and
 /// store it as their live position. A rejected jump keeps the old position.
@@ -67,10 +67,15 @@ fn acceptFix(req: *Req, p: *Player, fix: Fix, source: live.Source) HandlerError!
     const now = req.now;
     const acc: f32 = @floatCast(std.math.clamp(if (std.math.isNan(fix.acc)) 0 else fix.acc, 0, 10_000));
 
-    var pos = live.Pos{ .lat = fix.lat, .lon = fix.lon, .acc = acc, .sanctuary = fix.sanctuary, .faction = p.fac(), .at = now, .source = source };
+    var pos = live.Pos{ .lat = fix.lat, .lon = fix.lon, .acc = acc, .sanctuary = fix.sanctuary, .faction = p.fac(), .at = now, .source = source, .mock = fix.mock };
+    if (fix.mock) try noteMock(req, p.id);
     // Patrol fixes come about once a minute, so a walk is credited over a longer gap.
     const walk_gap_ms: i64 = if (source == .patrol) patrol_walk_gap_ms else 60_000;
-    if (ctx.live.position(p.id, now)) |prev| {
+    // A simulated fix, or a real one right after it, says nothing about walking: no speed check
+    // and no distance credit (the old position is not trusted either).
+    const before = ctx.live.position(p.id, now);
+    if (before != null and !fix.mock and !before.?.mock) {
+        const prev = before.?;
         const d = geo.haversineM(prev.lat, prev.lon, fix.lat, fix.lon);
         const dt_s = @max(1.0, @as(f64, @floatFromInt(now - prev.at)) / 1000.0);
         // Faster than walking for two fixes running puts the player in transit (a jump counts too).
@@ -87,6 +92,17 @@ fn acceptFix(req: *Req, p: *Player, fix: Fix, source: live.Source) HandlerError!
     try payWalking(req, p, &pos);
     try ctx.live.setPosition(p.id, pos);
     return pos;
+}
+
+/// A simulated fix starts a "mocked session" when the last one was over `mock_session_gap_ms`
+/// ago; the player's count and the time of the latest are kept (never a position).
+pub const mock_session_gap_ms: i64 = 30 * 60 * 1000;
+
+fn noteMock(req: *Req, pid: i64) HandlerError!void {
+    try req.ctx.db.run(
+        "UPDATE players SET mock_sessions = mock_sessions + (CASE WHEN ? - mock_at > ? THEN 1 ELSE 0 END), mock_at = ? WHERE id = ?",
+        .{ req.now, mock_session_gap_ms, req.now, pid },
+    );
 }
 
 /// A Patrol check-in may follow the last one by up to this long and still count as walking.
@@ -140,7 +156,7 @@ pub fn location(req: *Req, jw: *Stringify) HandlerError!void {
 
     try jw.write(.{
         .now = now,
-        .me = views.meLite(&p, now),
+        .me = views.meLite(&p, now, pos.mock),
         .hostiles_near = !pos.sanctuary and !in_transit and hostilesNear(req, &p, pos),
         .in_transit = in_transit,
         .enemies = enemies.items,
@@ -156,7 +172,7 @@ pub fn location(req: *Req, jw: *Stringify) HandlerError!void {
 
 // --- /api/patrol -----------------------------------------------------------------------------------------
 
-const PatrolFix = struct { lat: f64, lon: f64, acc: f64 = 0, sanctuary: bool = false };
+const PatrolFix = struct { lat: f64, lon: f64, acc: f64 = 0, sanctuary: bool = false, mock: bool = false };
 
 /// A background check-in from the phone's Patrol service: keeps the player live (Contact can find
 /// them), pays walking, and returns only what a notification needs. Nothing about the world
@@ -164,10 +180,10 @@ const PatrolFix = struct { lat: f64, lon: f64, acc: f64 = 0, sanctuary: bool = f
 pub fn patrol(req: *Req, jw: *Stringify) HandlerError!void {
     const fix = try req.json(PatrolFix);
     var p = (try model.load(req, req.pid)).?;
-    _ = try acceptFix(req, &p, .{ .lat = fix.lat, .lon = fix.lon, .acc = fix.acc, .sanctuary = fix.sanctuary }, .patrol);
+    const pos = try acceptFix(req, &p, .{ .lat = fix.lat, .lon = fix.lon, .acc = fix.acc, .sanctuary = fix.sanctuary, .mock = fix.mock }, .patrol);
     // No notifications from a moving vehicle; they stay queued for the next check-in.
     const evs: []const events.NoticeView = if (req.ctx.live.inTransit(p.id, req.now)) &.{} else try events.takeUnnotified(req, p.id);
-    const me = views.meLite(&p, req.now);
+    const me = views.meLite(&p, req.now, pos.mock);
     try jw.write(.{ .events = evs, .hp = me.hp, .downed_until = me.downed_until });
 }
 
