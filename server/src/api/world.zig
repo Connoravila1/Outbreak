@@ -484,6 +484,7 @@ fn engageEcho(req: *Req, jw: *Stringify, p: *Player, pos: live.Pos, id: []const 
         try acc.addDrop(req, loot.rollPvp(&lrng, p.level, e.build.level, rewards.lootMult(p, req.now)));
         acc.war_points = game.war.points(.echo_win);
         p.wins += 1;
+        p.echoes_won += 1;
     } else {
         acc.xp = progression.lossXp(win_xp, progression.pvp_loss_fraction);
         p.losses += 1;

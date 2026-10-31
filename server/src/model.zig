@@ -77,6 +77,10 @@ pub const Player = struct {
     losses: u32,
     contacts: u32,
     echoes: u32,
+    /// Real-world Contact fights won and lost (Echoes and Rogues count separately).
+    contacts_won: u32 = 0,
+    contacts_lost: u32 = 0,
+    echoes_won: u32 = 0,
     caches: u32,
     distance_m: u64,
     clan_id: ?i64,
@@ -168,7 +172,7 @@ pub const select_player =
     \\SELECT id, callsign, faction, level, xp, hp, hp_at, downed_until, salvage, expansions, avatar,
     \\  abilities, last_seen, last_pvp_at, streak, last_claim_day, mday, mlevel, mweek, wlevel,
     \\  walk_day, walk_xp_today, wins, losses, contacts, echoes, caches, distance_m, clan_id, clan_role,
-    \\  stance, bestiary
+    \\  stance, bestiary, contacts_won, contacts_lost, echoes_won
     \\FROM players
 ;
 
@@ -213,6 +217,9 @@ pub fn load(req: *Req, id: i64) HandlerError!?Player {
         .clan_role = if (st.optText(29)) |t| try a.dupe(u8, t) else null,
         .stance = std.enums.fromInt(data.Stance, st.int(30)) orelse .careful,
         .bestiary = parseBestiary(st.text(31)),
+        .contacts_won = @intCast(st.int(32)),
+        .contacts_lost = @intCast(st.int(33)),
+        .echoes_won = @intCast(st.int(34)),
     };
     try loadCollections(req, &p);
     const now = req.now;
@@ -320,14 +327,16 @@ pub fn save(req: *Req, p: *Player) HandlerError!void {
         \\UPDATE players SET level = ?, xp = ?, salvage = ?, expansions = ?, avatar = ?, abilities = ?,
         \\  last_pvp_at = ?, streak = ?, last_claim_day = ?, mday = ?, mlevel = ?, mweek = ?, wlevel = ?,
         \\  walk_day = ?, walk_xp_today = ?, wins = ?, losses = ?, contacts = ?, echoes = ?, caches = ?,
-        \\  distance_m = ?, clan_id = ?, clan_role = ?, downed_until = ?, stance = ?, bestiary = ?
+        \\  distance_m = ?, clan_id = ?, clan_role = ?, downed_until = ?, stance = ?, bestiary = ?,
+        \\  contacts_won = ?, contacts_lost = ?, echoes_won = ?
         \\WHERE id = ?
     , .{
         p.level,                p.xp,                                     p.salvage,        p.expansions, p.avatar,    w.buffered(),
         p.last_pvp_at,          p.streak,                                 p.last_claim_day, p.mday,       p.mlevel,    p.mweek,
         p.wlevel,               p.walk_day,                               p.walk_xp_today,  p.wins,       p.losses,    p.contacts,
         p.echoes,               p.caches,                                 p.distance_m,     p.clan_id,    p.clan_role, p.downed_until,
-        @intFromEnum(p.stance), bestiaryText(&p.bestiary, &bestiary_buf), p.id,
+        @intFromEnum(p.stance), bestiaryText(&p.bestiary, &bestiary_buf), p.contacts_won, p.contacts_lost, p.echoes_won,
+        p.id,
     });
     if (p.hp_dirty) {
         try db.run("UPDATE players SET hp = ?, hp_at = ? WHERE id = ?", .{ p.hp, p.hp_at, p.id });

@@ -130,7 +130,7 @@ accounts that have a recovery code but is no longer used by the client.
 | Method | Path | Body | Returns |
 |---|---|---|---|
 | GET | `/api/war` | | `{week, ends_at, global:{human,zombie}, district:{id, human, zombie}|null, top:[{callsign, level, title, points}], my_points}` |
-| GET | `/api/leaderboard?board=weekly|level` | | `{entries:[{rank, callsign, level, title, faction, value, clan_tag}]}` |
+| GET | `/api/leaderboard?board=weekly|contacts|level` | | `{entries:[{rank, callsign, level, title, faction, value, clan_tag}]}` |
 | GET | `/api/feed` | | `{events:[Event]}` — the last 50 events |
 | GET | `/api/clans?q=` | | `{clans:[{id, name, tag, members, level_sum, faction}]}` |
 | POST | `/api/clans` | `{name, tag}` | `{clan, me}` |
@@ -166,7 +166,8 @@ Me = { id, callsign: string|null, faction: Faction|null, level, xp, xp_next, tit
        clan: {id, name, tag, role}|null, avatar: object|null,
        pvp_protected: boolean, underdog_bonus: number, war_points_week: number,
        stance: Stance, bestiary: Record<string, number> /* fights per archetype */,
-       record: { wins, losses, contacts, echoes, caches, distance_m },
+       record: { wins, losses, contacts, contacts_won, contacts_lost, echoes, echoes_won, caches, distance_m },
+       contact_rank: { name, tier: 0..5, wins, next_at: number|null, next_name: string|null }, // lifetime Contact wins
        account: { guest: boolean, providers: ("google"|"apple"|"dev")[], email: string|null } }
 
 Mission = { id, kind, text, target, progress, rewards: Rewards, claimed: boolean }
@@ -184,7 +185,9 @@ WorldView = { now, me: MeLite /* hp, max_hp, downed_until, level, xp, xp_next, s
 
 Combatant = { name, faction, level, title, kind: "player"|"enemy"|"echo"|"rogue"|"boss",
               archetype: string|null, max_hp, hp_start, stats: Stats,
-              abilities: string[], gear: string[] /* display names */ }
+              abilities: string[], gear: string[] /* display names */,
+              gear_detail: {slot, name, rarity, upgrade, unique: boolean}[] /* the kit in its wearer's own faction names; no ids, no stats */,
+              stance: Stance|null /* real players only (Contact) */ }
 
 Turn = { actor: "a"|"b", ev: "hit"|"crit"|"dodge"|"ability"|"dot"|"heal"|"revive",
          ability: string|null, dmg: number, heal: number, hp_a: number, hp_b: number }
@@ -207,3 +210,12 @@ uniques:[{id, base, names, lore, perks}], rarities, perks:[{id, name, text}],
 consumables:[{id, names, text, price}], abilities:[{id, level, names, text}],
 enemies:[{id, names, text}], levels:{xp_to_next:[...], titles:{human:[], zombie:[]},
 unlocks:[{level, text}]}, store:[{sku, name, price, text}]}`.
+
+### Contact rank and the `contacts` board
+
+Contact rank is lifetime Contact wins (Echo and Rogue wins do not count): Human Unbloodied 0, Blooded 1,
+Tracker 5, Veteran 15, Warden 40, Legend 100; Zombie Unfed, Blooded, Stalker, Ravener, Apex, Legend.
+`record.contacts_won/contacts_lost` count real-world fights only; `echoes_won` counts Echo wins.
+`GET /api/leaderboard?board=contacts` is this week's Contact wins (table `contact_week`). An opponent's
+`gear_detail` and `stance` carry no identity: only what is worn (and how they fought), never a name,
+avatar, clan, place or history with the viewer. Echoes are labelled `echo`, rogues `rogue`.

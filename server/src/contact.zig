@@ -10,6 +10,7 @@ const views = @import("views.zig");
 const fight = @import("fight.zig");
 const rewards = @import("rewards.zig");
 const missions = @import("missions.zig");
+const warstate = @import("warstate.zig");
 
 const data = game.data;
 const progression = game.progression;
@@ -48,9 +49,12 @@ pub fn settleSide(req: *Req, p: *Player, a: fight.Side, foe: fight.Side, o: figh
         try acc.addDrop(req, loot.rollPvp(&lrng, p.level, foe_level, rewards.lootMult(p, req.now)));
         acc.war_points = game.war.points(.pvp_win);
         p.wins += 1;
+        p.contacts_won += 1;
+        try warstate.addContactWin(req, p.id);
     } else {
         acc.xp = progression.pvpLossXp(foe_level);
         p.losses += 1;
+        p.contacts_lost += 1;
     }
     acc.deliver_level_up = false;
     p.contacts += 1;

@@ -558,6 +558,8 @@ test "Me has a record of wins, losses, contacts, echoes, caches and distance" {
     try testing.expectEqual(@as(i64, 2), try me.int("record.losses"));
     try testing.expectEqual(@as(i64, 1), try me.int("record.contacts"));
     try testing.expectEqual(@as(i64, 3), try me.int("record.echoes"));
+    try testing.expectEqual(@as(i64, 0), try me.int("record.contacts_won"));
+    try testing.expectEqualStrings("Unbloodied", try me.str("contact_rank.name"));
     try testing.expectEqual(@as(i64, 5), try me.int("record.caches"));
     try testing.expectEqual(@as(i64, 1234), try me.int("record.distance_m"));
 }
@@ -1005,6 +1007,28 @@ test "contact: two players 30 m apart fight; each sees an anonymous foe from the
     try testing.expect(!std.mem.eql(u8, t0a.get("actor").?.string, t0z.get("actor").?.string));
     try testing.expectEqual(t0a.get("hp_a").?.integer, t0z.get("hp_b").?.integer);
     try testing.expect(ea.object.get("rewards").?.object.get("xp").?.integer > 0);
+    // Both kits are described for drawing: slot, the wearer's own faction names, rarity; never ids.
+    const gd = ba.get("b").?.object.get("gear_detail").?.array.items;
+    try testing.expectEqual(ba.get("b").?.object.get("gear").?.array.items.len, gd.len);
+    try testing.expectEqualStrings("Rotten Teeth", gd[0].object.get("name").?.string);
+    try testing.expectEqualStrings("weapon", gd[0].object.get("slot").?.string);
+    try testing.expect(gd[0].object.get("rarity") != null and gd[0].object.get("upgrade") != null and gd[0].object.get("unique") != null);
+    try testing.expect(gd[0].object.get("uid") == null);
+    try testing.expect(ba.get("a").?.object.get("gear_detail").?.array.items.len > 0);
+    try testing.expect(ba.get("b").?.object.get("stance") != null);
+    // The record keeps Contact wins and losses apart and ranks the winner.
+    const won_first = std.mem.eql(u8, ba.get("winner").?.string, "a");
+    var rec_a = try h.get("/api/me", &a);
+    defer rec_a.deinit();
+    try testing.expectEqual(@as(i64, if (won_first) 1 else 0), try rec_a.int("record.contacts_won"));
+    try testing.expectEqual(@as(i64, if (won_first) 0 else 1), try rec_a.int("record.contacts_lost"));
+    try testing.expectEqualStrings(if (won_first) "Blooded" else "Unbloodied", try rec_a.str("contact_rank.name"));
+    try testing.expectEqual(@as(i64, if (won_first) 5 else 1), try rec_a.int("contact_rank.next_at"));
+    var board = try h.get("/api/leaderboard?board=contacts", &a);
+    defer board.deinit();
+    try testing.expectEqual(@as(usize, 1), try board.len("entries"));
+    try testing.expectEqualStrings(if (won_first) "Hank" else "Zed", try board.str("entries.0.callsign"));
+    try testing.expectEqual(@as(i64, 1), try board.int("entries.0.value"));
     // Delivered once.
     var wa2 = try h.location(&a, base_lat, base_lon);
     defer wa2.deinit();

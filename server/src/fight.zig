@@ -22,6 +22,16 @@ const Allocator = std.mem.Allocator;
 pub const CombatantKind = enum { player, enemy, echo, rogue, boss };
 pub const BattleKind = enum { pve, pvp, echo, raid, garrison };
 
+/// One worn item as the opponent's own faction names it: enough to draw it on a silhouette and
+/// list it afterwards. No uid, no stats.
+pub const GearDetail = struct {
+    slot: data.Slot,
+    name: []const u8,
+    rarity: data.Rarity,
+    upgrade: u8,
+    unique: bool,
+};
+
 pub const CombatantView = struct {
     name: []const u8,
     faction: data.Faction,
@@ -34,6 +44,9 @@ pub const CombatantView = struct {
     stats: data.Stats,
     abilities: []const []const u8,
     gear: []const []const u8,
+    gear_detail: []const GearDetail = &.{},
+    /// How this side fought; only real players (Contact) have one.
+    stance: ?data.Stance = null,
 };
 
 pub const BattleView = struct {
@@ -93,6 +106,20 @@ fn gearNames(arena: Allocator, b: *const snapshot.Build) Allocator.Error![]const
     return list.items;
 }
 
+fn gearDetail(arena: Allocator, b: *const snapshot.Build) Allocator.Error![]const GearDetail {
+    var list: std.ArrayList(GearDetail) = .empty;
+    for (b.items) |maybe| {
+        if (maybe) |it| try list.append(arena, .{
+            .slot = it.slot(),
+            .name = it.name(b.faction),
+            .rarity = it.rarity,
+            .upgrade = it.upgrade,
+            .unique = it.unique != null,
+        });
+    }
+    return list.items;
+}
+
 /// You, as side "a", in your saved stance (Contact and anything else that does not ask).
 pub fn selfSide(req: *Req, p: *const Player) Allocator.Error!Side {
     return selfSideWith(req, p, p.stance, null);
@@ -124,6 +151,8 @@ pub fn selfSideWith(req: *Req, p: *const Player, stance: data.Stance, foe: ?data
             .stats = adj.c.stats,
             .abilities = try names(req.arena, p.abilities),
             .gear = try gearNames(req.arena, &b),
+            .gear_detail = try gearDetail(req.arena, &b),
+            .stance = stance,
         },
     };
 }
@@ -153,6 +182,7 @@ pub fn buildSide(arena: Allocator, b: *const snapshot.Build, kind: CombatantKind
             .stats = c.stats,
             .abilities = try names(arena, b.abilities),
             .gear = try gearNames(arena, b),
+            .gear_detail = try gearDetail(arena, b),
         },
     };
 }
@@ -254,4 +284,10 @@ test "opponent views are anonymous for players and labelled for echoes" {
     try std.testing.expectEqualStrings("Rogue", echo.view.name);
     try std.testing.expectEqual(echo.view.max_hp, echo.view.hp_start);
     try std.testing.expectEqualStrings("Lashing Tendril", real.view.gear[0]);
+    // The detail names the kit in the opponent's own faction and carries rarity, never an id.
+    try std.testing.expectEqual(real.view.gear.len, real.view.gear_detail.len);
+    try std.testing.expectEqualStrings("Lashing Tendril", real.view.gear_detail[0].name);
+    try std.testing.expectEqual(data.Slot.weapon, real.view.gear_detail[0].slot);
+    try std.testing.expectEqual(data.Rarity.rare, real.view.gear_detail[0].rarity);
+    try std.testing.expect(!real.view.gear_detail[0].unique and real.view.stance == null);
 }

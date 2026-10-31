@@ -120,7 +120,7 @@ function fresh(): DB {
     exists: false, ids: [], callsign: null, faction: null, level: 1, xp: 0, hp: 100, salvage: 0, items: [], eq: { weapon: null, armor: null, utility: null },
     consumables: {}, abil: [], buffs: [], defeated: [], n: 1, mprog: [1, 0, 240], mclaimed: [false, false, false], wprog: 0, wclaimed: false,
     streak: 2, clan: null, chat: [], warPoints: 0, feed: [], contactPending: false, userClans: [],
-    rec: { wins: 0, losses: 0, contacts: 0, echoes: 0, caches: 0, distance_m: 0 },
+    rec: { wins: 0, losses: 0, contacts: 0, echoes: 0, caches: 0, distance_m: 0, contacts_won: 0, contacts_lost: 0, echoes_won: 0 },
   };
 }
 function load(): DB {
@@ -211,10 +211,23 @@ function buildMe(): Me {
     missions: { daily: missionList(), weekly: weeklyMission(), streak: db.streak, resets_at: Date.now() + 6 * 3600e3 + 1500e3 },
     clan: db.clan && myClan ? { id: myClan.id, name: myClan.name, tag: myClan.tag, role: db.clan.role } : null,
     avatar: db.avatar ?? null, pvp_protected: db.level < 5, underdog_bonus: 0.15, war_points_week: db.warPoints,
-    record: db.rec,
+    record: { ...db.rec, contacts_won: db.rec.contacts_won ?? 0, contacts_lost: db.rec.contacts_lost ?? 0, echoes_won: db.rec.echoes_won ?? 0 },
+    contact_rank: contactRank(db.faction ?? 'human', db.rec.contacts_won ?? 0),
     account: { guest: db.ids.length === 0, providers: db.ids.map((i) => i.provider), email: db.ids.find((i) => i.email)?.email ?? null },
     stance: db.stance ?? 'careful', bestiary: db.bestiary ?? {},
   };
+}
+
+const RANK_AT = [0, 1, 5, 15, 40, 100];
+const RANK_NAMES: Record<Faction, string[]> = {
+  human: ['Unbloodied', 'Blooded', 'Tracker', 'Veteran', 'Warden', 'Legend'],
+  zombie: ['Unfed', 'Blooded', 'Stalker', 'Ravener', 'Apex', 'Legend'],
+};
+function contactRank(f: Faction, wins: number): Me['contact_rank'] {
+  let tier = 0;
+  RANK_AT.forEach((at, i) => { if (wins >= at) tier = i; });
+  const last = tier + 1 >= RANK_AT.length;
+  return { name: RANK_NAMES[f][tier], tier, wins, next_at: last ? null : RANK_AT[tier + 1], next_name: last ? null : RANK_NAMES[f][tier + 1] };
 }
 
 // ---------- world ----------
@@ -284,6 +297,12 @@ function combatantMe(): Combatant {
     name: m.callsign ?? "You", faction: f, level: m.level, title: m.title, kind: 'player', archetype: null, max_hp: m.max_hp, hp_start: m.hp, stats: m.stats,
     abilities: m.abilities.equipped,
     gear: Object.values(m.equipped).filter(Boolean).map((uid) => { const it = m.items.find((i) => i.uid === uid)!; return it.unique ? CATALOG.uniques.find((u) => u.id === it.unique)!.names[f] : CATALOG.items.find((c) => c.id === it.base)!.names[f]; }),
+    gear_detail: Object.values(m.equipped).filter(Boolean).map((uid) => {
+      const it = m.items.find((i) => i.uid === uid)!;
+      const name = it.unique ? CATALOG.uniques.find((u) => u.id === it.unique)!.names[f] : CATALOG.items.find((c) => c.id === it.base)!.names[f];
+      return { slot: it.slot, name, rarity: it.rarity, upgrade: it.upgrade, unique: !!it.unique };
+    }),
+    stance: db.stance ?? 'careful',
   };
 }
 
@@ -365,9 +384,9 @@ function resolve(foe: Combatant, kind: Battle['kind'], xpBase: number, warPts: n
   db.hp = Math.max(1, last ? last.hp_a : db.hp);
   const rewards = win ? lootRewards(xpBase, 0.4, bias) : lootRewards(Math.round(xpBase * 0.25), 0);
   if (win) { rewards.war_points = warPts; db.warPoints += warPts; db.mprog[0]++; if (kind !== 'pve') db.wprog++; }
-  if (kind === 'pvp') db.rec.contacts++;
+  if (kind === 'pvp') { db.rec.contacts_won = (db.rec.contacts_won ?? 0) + (win ? 1 : 0); db.rec.contacts_lost = (db.rec.contacts_lost ?? 0) + (win ? 0 : 1); }
   if (win) db.rec.wins++; else db.rec.losses++;
-  if (kind === 'echo') db.rec.echoes++;
+  if (kind === 'echo') { db.rec.echoes++; if (win) db.rec.echoes_won = (db.rec.echoes_won ?? 0) + 1; }
   grantXp(rewards);
   save();
   return { id: 'b' + db.n, kind, a, b: foe, turns, winner: win ? 'a' : 'b', rewards, me: buildMe() };
@@ -375,6 +394,14 @@ function resolve(foe: Combatant, kind: Battle['kind'], xpBase: number, warPts: n
 
 function oppFaction(): Faction { return db.faction === 'human' ? 'zombie' : 'human'; }
 const gearFor = (f: Faction, bases: string[]) => bases.map((b) => CATALOG.items.find((i) => i.id === b)!.names[f]);
+/** A kit for a made-up opponent: one item per slot, rarities as given (a legendary wears its unique's name). */
+function kitFor(f: Faction, bases: [string, Rarity, number][]): NonNullable<Combatant['gear_detail']> {
+  return bases.map(([id, rarity, upgrade]) => {
+    const c = CATALOG.items.find((i) => i.id === id)!;
+    const uq = rarity === 'legendary' ? CATALOG.uniques.find((u) => u.base === id) : undefined;
+    return { slot: c.slot, name: uq ? uq.names[f] : c.names[f], rarity, upgrade, unique: !!uq };
+  });
+}
 
 function contactBattle(): Battle {
   const f = oppFaction();
@@ -383,6 +410,8 @@ function contactBattle(): Battle {
     name: f === 'zombie' ? 'A Zombie' : 'A Human', faction: f, level: lvl, title: CATALOG.levels.titles[f][Math.min(10, Math.floor(lvl / 5))], kind: 'player', archetype: null,
     max_hp: maxHp(lvl), hp_start: maxHp(lvl), stats: { hp: maxHp(lvl), atk: 11 + 2 * lvl, def: 7 + 1.5 * lvl, spd: 10 + 0.6 * lvl },
     abilities: lvl >= 7 ? ['aimed_shot'] : [], gear: gearFor(f, ['crowbar', 'jacket', 'flashlight']),
+    gear_detail: kitFor(f, [['crowbar', 'rare', 3], ['jacket', 'uncommon', 1], ['flashlight', 'legendary', 0]]),
+    stance: 'aggressive',
   };
   foe.stats = { hp: foe.max_hp, atk: Math.round(foe.stats.atk), def: Math.round(foe.stats.def), spd: Math.round(foe.stats.spd) };
   return resolve(foe, 'pvp', 60 + 10 * lvl, 10);
@@ -536,7 +565,7 @@ function route(method: string, path: string, body: any, authed: boolean): unknow
         const lvl = Math.max(1, db.level + (sp.elite ? 3 : sp.off));
         foe = { name: names[db.faction === 'zombie' ? 'zombie' : 'human'], faction: f, level: lvl, title: sp.elite ? 'Elite' : '', kind: 'enemy', archetype: sp.archetype, max_hp: Math.round(maxHp(lvl) * 0.9), hp_start: Math.round(maxHp(lvl) * 0.9), stats: { hp: 0, atk: 8 + 1.8 * lvl, def: 5 + 1.3 * lvl, spd: 9 + 0.5 * lvl }, abilities: [], gear: [] };
       } else if (isEcho) {
-        foe = { name: 'Rogue', faction: f, level: db.level + 1, title: 'Stalker', kind: 'rogue', archetype: null, max_hp: maxHp(db.level + 1), hp_start: maxHp(db.level + 1), stats: { hp: 0, atk: 12 + 2 * db.level, def: 7 + 1.5 * db.level, spd: 10 + 0.6 * db.level }, abilities: db.level >= 7 ? ['aimed_shot'] : [], gear: gearFor(f, ['crowbar', 'jacket']) };
+        foe = { name: 'Rogue', faction: f, level: db.level + 1, title: 'Stalker', kind: 'rogue', archetype: null, max_hp: maxHp(db.level + 1), hp_start: maxHp(db.level + 1), stats: { hp: 0, atk: 12 + 2 * db.level, def: 7 + 1.5 * db.level, spd: 10 + 0.6 * db.level }, abilities: db.level >= 7 ? ['aimed_shot'] : [], gear: gearFor(f, ['crowbar', 'jacket']), gear_detail: kitFor(f, [['crowbar', 'common', 0], ['jacket', 'uncommon', 0]]) };
       } else throw new HttpError(404, 'gone', 'Nothing there.');
       foe.stats = { hp: foe.max_hp, atk: Math.round(foe.stats.atk), def: Math.round(foe.stats.def), spd: Math.round(foe.stats.spd) };
       const base = isEcho ? 40 + 7 * foe.level : 20 + 6 * foe.level;
@@ -667,10 +696,11 @@ function route(method: string, path: string, body: any, authed: boolean): unknow
     }
     case 'GET /api/leaderboard': {
       guard();
-      const weekly = (body?.board ?? '') !== 'level';
+      const board = String(body?.board ?? 'weekly');
+      const weekly = board === 'weekly', contacts = board === 'contacts';
       const rows = [['Marrow', 31, 'human', 'NITE'], ['Vesper', 29, 'zombie', 'HOLO'], ['Pike', 22, 'human', 'NITE'], ['Hush', 21, 'zombie', null], ['Quill', 19, 'human', null], ['Rook', 18, 'zombie', 'ROT'], ['Dorn', 12, 'human', null]] as const;
-      const entries: LeaderboardEntry[] = rows.map(([callsign, level, faction, clan_tag], i) => ({ rank: i + 1, callsign, level, title: CATALOG.levels.titles[faction][Math.floor(level / 5)], faction, value: weekly ? 460 - i * 52 : level, clan_tag }));
-      entries.push({ rank: 8, callsign: db.callsign ?? 'You', level: db.level, title: buildMe().title, faction: db.faction ?? 'human', value: weekly ? db.warPoints : db.level, clan_tag: null });
+      const entries: LeaderboardEntry[] = rows.map(([callsign, level, faction, clan_tag], i) => ({ rank: i + 1, callsign, level, title: CATALOG.levels.titles[faction][Math.floor(level / 5)], faction, value: weekly ? 460 - i * 52 : contacts ? 14 - i * 2 : level, clan_tag }));
+      entries.push({ rank: 8, callsign: db.callsign ?? 'You', level: db.level, title: buildMe().title, faction: db.faction ?? 'human', value: weekly ? db.warPoints : contacts ? db.rec.contacts_won ?? 0 : db.level, clan_tag: null });
       return { entries: entries.sort((a, b) => b.value - a.value).map((e, i) => ({ ...e, rank: i + 1 })) };
     }
     case 'GET /api/feed': guard(); return { events: db.feed.map((e) => ({ ...e, battle: undefined })) };

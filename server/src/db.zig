@@ -458,6 +458,17 @@ const migrations = [_][:0]const u8{
     \\ALTER TABLE players ADD COLUMN stance INTEGER NOT NULL DEFAULT 1;
     \\ALTER TABLE players ADD COLUMN bestiary TEXT NOT NULL DEFAULT '';
     ,
+    // Contact record (wins and losses of real-world fights only), Echo wins, and weekly Contact wins.
+    \\ALTER TABLE players ADD COLUMN contacts_won INTEGER NOT NULL DEFAULT 0;
+    \\ALTER TABLE players ADD COLUMN contacts_lost INTEGER NOT NULL DEFAULT 0;
+    \\ALTER TABLE players ADD COLUMN echoes_won INTEGER NOT NULL DEFAULT 0;
+    \\CREATE TABLE contact_week (
+    \\  week INTEGER NOT NULL,
+    \\  player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    \\  wins INTEGER NOT NULL DEFAULT 0,
+    \\  PRIMARY KEY (week, player_id)
+    \\);
+    ,
 };
 
 // --- Tests -------------------------------------------------------------------------------------------

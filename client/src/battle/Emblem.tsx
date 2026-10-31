@@ -43,7 +43,7 @@ function pencilCircle(seed: string, r0: number, turns = 1.12): string {
 }
 
 /** Red pencil slashes across the target: Survey's impact flash. */
-function Scratches({ crit, n }: { crit: boolean; n: number }) {
+export function Scratches({ crit, n }: { crit: boolean; n: number }) {
   const r = rng('scratch' + n);
   const count = crit ? 6 : 3;
   const lines = Array.from({ length: count }, (_, i) => {

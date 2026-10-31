@@ -31,6 +31,14 @@ pub fn addPoints(req: *Req, pid: i64, faction: data.Faction, district: []const u
     );
 }
 
+/// One more Contact win this week (the `contacts` leaderboard).
+pub fn addContactWin(req: *Req, pid: i64) HandlerError!void {
+    try req.ctx.db.run(
+        "INSERT INTO contact_week(week, player_id, wins) VALUES(?,?,1) ON CONFLICT(week, player_id) DO UPDATE SET wins = wins + 1",
+        .{ week(req.now), pid },
+    );
+}
+
 pub fn weekPoints(req: *Req, pid: i64) HandlerError!u32 {
     return @intCast(try req.ctx.db.scalar("SELECT COALESCE(SUM(points), 0) FROM war_player WHERE week = ? AND player_id = ?", .{ week(req.now), pid }) orelse 0);
 }

@@ -51,7 +51,14 @@ export interface Buff { kind: string; until: number }
 
 export interface ClanRef { id: string; name: string; tag: string; role: string }
 
-export interface PlayerRecord { wins: number; losses: number; contacts: number; echoes: number; caches: number; distance_m: number }
+export interface PlayerRecord {
+  wins: number; losses: number; contacts: number; echoes: number; caches: number; distance_m: number;
+  /** Real-world fights only: Contact wins and losses, and Echo wins. */
+  contacts_won: number; contacts_lost: number; echoes_won: number;
+}
+
+/** Lifetime rank from Contact wins. `next_at` / `next_name` are null at the top. */
+export interface ContactRank { name: string; tier: number; wins: number; next_at: number | null; next_name: string | null }
 
 /** How this survivor signs back in. A guest has no providers: it lives only on this phone. */
 export interface AccountInfo { guest: boolean; providers: string[]; email: string | null }
@@ -86,6 +93,7 @@ export interface Me {
   underdog_bonus: number;
   war_points_week: number;
   record: PlayerRecord;
+  contact_rank: ContactRank;
   account: AccountInfo;
   /** Saved default stance, used in Contact. */
   stance: Stance;
@@ -155,6 +163,9 @@ export interface WorldView {
   events: GameEvent[];
 }
 
+/** One worn item as its owner's faction names it. Drawn on a silhouette; carries no id and no stats. */
+export interface GearDetail { slot: Slot; name: string; rarity: Rarity; upgrade: number; unique: boolean }
+
 export interface Combatant {
   name: string;
   faction: Faction;
@@ -167,6 +178,10 @@ export interface Combatant {
   stats: Stats;
   abilities: string[];
   gear: string[];
+  /** The kit by slot, for drawing it. Empty for monsters. */
+  gear_detail?: GearDetail[];
+  /** How this side fought; only real players (Contact) have one. */
+  stance?: Stance | null;
 }
 
 export interface Turn {
