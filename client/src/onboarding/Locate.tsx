@@ -28,7 +28,7 @@ export function Locate({ onDone }: { onDone: () => void }) {
         <ul class="ob-list">
           <li>Fights are anonymous. Nobody learns who you are or where.</li>
           <li>Your position is held in memory for two minutes and never saved.</li>
-          <li>Nothing is read while the app is closed.</li>
+          <li>Nothing is read while the app is closed, unless you turn on Patrol.</li>
         </ul>
         {asked && !err && !have && <p class="ob-status" role="status">Looking for you…</p>}
         {err && <p class="ob-error" role="alert">{err}</p>}
