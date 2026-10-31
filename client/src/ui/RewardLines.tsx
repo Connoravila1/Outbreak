@@ -2,6 +2,7 @@ import type { Rewards } from '../api';
 import { say } from './voice';
 import { Icon } from './Icon';
 import { consumableName, itemTitle } from '../gear/util';
+import { NoteScrap } from '../notes/Scrap';
 
 /** A plain list of what a Rewards bundle contains. */
 export function RewardLines({ r }: { r: Rewards }) {
@@ -16,11 +17,12 @@ export function RewardLines({ r }: { r: Rewards }) {
       ))}
       {cons.map(([id, n]) => <li key={id}><Icon name="medical-pack" size={18} /> {consumableName(id)} ×{n}</li>)}
       {!!r.auto_scrapped && <li class="dim"><Icon name="recycle" size={18} /> {say(`Pack full: extra gear scrapped for ${r.auto_scrapped} salvage.`, `no room. the extra was torn down for ${r.auto_scrapped} salvage.`)}</li>}
+      {(r.notes ?? []).map((nt) => <li key={nt.id} class="scrap-li"><NoteScrap r={nt} /></li>)}
       {r.level_up && <li class="lvl"><Icon name="laurels" size={18} /> {say(`Level ${r.level_up.to}.`, `level ${r.level_up.to}. stronger.`)}</li>}
     </ul>
   );
 }
 
 export function rewardsEmpty(r: Rewards): boolean {
-  return !r.xp && !r.salvage && !r.auto_scrapped && !r.war_points && !r.items.length && !Object.keys(r.consumables).length;
+  return !r.xp && !r.salvage && !r.auto_scrapped && !r.war_points && !r.items.length && !Object.keys(r.consumables).length && !r.notes?.length;
 }

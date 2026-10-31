@@ -6,6 +6,7 @@ import { Icon } from '../ui/Icon';
 import { consumableName, itemTitle, perkInfo, SLOT_ICON, statLine, uniqueLore } from '../gear/util';
 import * as fx from '../audio/fx';
 import { damageTaken, foeLabel, outcomeLine, outcomeWord } from './names';
+import { NoteScrap } from '../notes/Scrap';
 
 /** XP position before the fight, as a fraction of that level's bar, and after. */
 function xpSpan(b: Battle): { from: number; to: number; gain: number } {
@@ -84,7 +85,10 @@ export function Result({ battle, onContinue }: { battle: Battle; onContinue: () 
   const won = battle.winner === 'a';
   const n = r.items.length;
   const cons = Object.entries(r.consumables);
-  const final = 4 + n;
+  const notes = r.notes ?? [];
+  // After the gear: found notes get a step of their own.
+  const noteStep = 4 + n;
+  const final = noteStep + (notes.length ? 1 : 0);
   const [step, setStep] = useState(0);
   const [fast, setFast] = useState(false);
   const btn = useRef<HTMLButtonElement>(null);
@@ -99,6 +103,7 @@ export function Result({ battle, onContinue }: { battle: Battle; onContinue: () 
 
   useEffect(() => {
     if (step === 0) { if (won) fx.held(); else fx.fell(); return; }
+    if (notes.length && step === noteStep) { fx.lootFlip(notes[0].rarity === 'legendary' ? 'rare' : notes[0].rarity); return; }
     const flipped = step - 3; // items flipped so far
     if (step > 3 && flipped >= 1 && flipped <= n) {
       const it = r.items[flipped - 1];
@@ -109,7 +114,7 @@ export function Result({ battle, onContinue }: { battle: Battle; onContinue: () 
   useEffect(() => { if (step >= final) btn.current?.focus(); }, [step]);
 
   const skip = () => { setFast(true); setStep(final); };
-  const flippedCount = Math.max(0, step - 3);
+  const flippedCount = Math.min(n, Math.max(0, step - 3));
   const dmg = damageTaken(battle);
   const f = faction.value;
   return (
@@ -131,13 +136,19 @@ export function Result({ battle, onContinue }: { battle: Battle; onContinue: () 
             {r.items.map((it, k) => <LootCard key={it.uid} it={it} flipped={k < flippedCount} held={k === flippedCount && it.rarity === 'legendary'} />)}
           </div>
         )}
+        {notes.length > 0 && step >= noteStep && (
+          <div class="note-drop">
+            <p class="note-drop-h dim voice">{say(notes.length > 1 ? 'Notes found' : 'Note found', 'something was left')}</p>
+            {notes.map((nt, k) => <NoteScrap key={nt.id} r={nt} delay={k * 160} />)}
+          </div>
+        )}
         {step >= final && cons.length > 0 && (
           <ul class="reward-lines res-cons">
             {cons.map(([id, c]) => <li key={id}><Icon name="medical-pack" size={18} /> {consumableName(id)} ×{c}</li>)}
           </ul>
         )}
         {step >= final && !!r.auto_scrapped && <p class="dim res-full">{say(`Pack full: extra gear scrapped for ${r.auto_scrapped} salvage.`, `no room. the extra was torn down for ${r.auto_scrapped} salvage.`)}</p>}
-        {step >= final && n === 0 && cons.length === 0 && !r.auto_scrapped && <p class="dim">{say('No drops this time.', 'nothing left to take.')}</p>}
+        {step >= final && n === 0 && cons.length === 0 && notes.length === 0 && !r.auto_scrapped && <p class="dim">{say('No drops this time.', 'nothing left to take.')}</p>}
       </div>
       <div class="res-foot">
         <button ref={btn} class="btn primary block" onClick={step >= final ? onContinue : skip}>

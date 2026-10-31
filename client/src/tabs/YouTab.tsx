@@ -1,6 +1,7 @@
 import { me } from '../state/store';
 import { Profile } from '../you/Profile';
 import { Feed } from '../you/Feed';
+import { Archive } from '../notes/Archive';
 import { Store } from '../you/Store';
 import { Settings } from '../you/Settings';
 import { GuestNote } from '../you/Account';
@@ -13,6 +14,7 @@ export function YouTab() {
     <div class="panel scroll you-tab">
       <GuestNote />
       <Profile />
+      <Archive />
       <Feed />
       <Store />
       <Settings />

@@ -1,5 +1,6 @@
 import { tab, type TabId } from '../state/store';
 import { Icon, type IconName } from '../ui/Icon';
+import { unreadCount } from '../notes/store';
 import './shell.css';
 
 const TABS: { id: TabId; label: string; icon: IconName }[] = [
@@ -17,6 +18,7 @@ export function TabBar() {
         <button key={t.id} class="tab" role="tab" aria-selected={tab.value === t.id} onClick={() => { tab.value = t.id; }}>
           <Icon name={t.icon} size={26} />
           <span>{t.label}</span>
+          {t.id === 'you' && unreadCount.value > 0 && <i class="tab-dot" role="img" aria-label="Unread notes" />}
         </button>
       ))}
     </nav>

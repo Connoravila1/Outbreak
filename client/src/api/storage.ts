@@ -88,6 +88,8 @@ export const KEYS = {
   guestNudge: 'outbreak.guestNudge',
   /** The stance chosen last, offered again next fight. */
   stance: 'outbreak.stance',
+  /** Ids of the found notes the player has opened. */
+  notesSeen: 'outbreak.notesSeen',
 } as const;
 
 /** Device settings that outlive a sign-out: they are about the phone, not the player. */

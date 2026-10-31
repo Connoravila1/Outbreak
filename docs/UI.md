@@ -148,6 +148,15 @@ simulator panel beside it.
 3. **CONTACT**: interrupts anything. Full-screen alert, a strong haptic pattern, "A Zombie is
    close. Level 14." Its gear names appear, then the fight plays automatically.
 4. **Level up**: a full-screen takeover with the new number, then the unlocks, named one per line.
+5. **A found note** (docs/LORE.md): after the gear, the result stack adds a torn scrap with the
+   note's title. Survey: paper with a strip of tape. Heat: a smeared, warm fragment. Tap it and a
+   full-screen reader opens, drawn on the paper of the note's form (ruled notebook, memo, email,
+   phone bubbles, receipt, sticky notes, radio log, poster, handwritten letter, review, index
+   card; handwriting in marker). The Heat lens warms and glows the paper but keeps the ink dark.
+   A note found outside a fight (cache, landmark, raid event) shows in the reward list and in a
+   toast that opens the reader. The **Archive** in the You tab lists sets with progress, finds as
+   rows, the rest as `???` silhouettes with their rarity, and a Claim button on a finished set (its
+   title joins the profile). Unread notes carry a red dot, also on the You tab.
 
 ## Rules
 

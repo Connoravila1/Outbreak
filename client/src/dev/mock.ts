@@ -102,6 +102,8 @@ const CATALOG: Catalog = {
   ],
 };
 
+import { allVisibleIds, archiveFor, claimable, FIRST_BLOOD_NOTE, noteNamed, refOf, rollNote, titlesFor, visibleTotal, type Held } from './mock_notes';
+
 // ---------- database ----------
 interface Clan { id: string; name: string; tag: string; faction: Faction; code: string; strongholds: number }
 interface Ident { provider: string; subject: string; email: string | null }
@@ -114,6 +116,7 @@ interface DB {
   userClans: Clan[];
   rec: PlayerRecord;
   stance?: Stance; bestiary?: Record<string, number>;
+  notes?: Held[]; noteClaims?: string[];
 }
 function fresh(): DB {
   return {
@@ -214,6 +217,8 @@ function buildMe(): Me {
     record: db.rec,
     account: { guest: db.ids.length === 0, providers: db.ids.map((i) => i.provider), email: db.ids.find((i) => i.email)?.email ?? null },
     stance: db.stance ?? 'careful', bestiary: db.bestiary ?? {},
+    notes: { found: (db.notes ?? []).length, total: visibleTotal(db.faction ?? 'human') },
+    titles_extra: titlesFor(db.noteClaims ?? []),
   };
 }
 
@@ -352,6 +357,16 @@ function lootRewards(xp: number, items: number, legendaryBias = 0): Rewards {
   return r;
 }
 
+/** Hold a note (a given one, else a roll at `chance`) and list it in `r`. */
+function giveNote(r: Rewards, id: string | null, chance: number, allowZero = false) {
+  const held = db.notes ?? (db.notes = []);
+  const n = id ? noteNamed(id) : null;
+  const ref = n ? (held.some((h) => h.id === n.id) ? null : refOf(n)) : rollNote(db.faction ?? 'human', held, chance, allowZero);
+  if (!ref) return;
+  held.push({ id: ref.id, at: Date.now() });
+  r.notes = [...(r.notes ?? []), ref];
+}
+
 function pushFeed(type: GameEvent['type'], text: string, extra: Partial<GameEvent> = {}): GameEvent {
   const ev: GameEvent = { id: 'ev' + db.n++, at: Date.now(), type, text, ...extra };
   db.feed = [ev, ...db.feed].slice(0, 50);
@@ -365,6 +380,7 @@ function resolve(foe: Combatant, kind: Battle['kind'], xpBase: number, warPts: n
   db.hp = Math.max(1, last ? last.hp_a : db.hp);
   const rewards = win ? lootRewards(xpBase, 0.4, bias) : lootRewards(Math.round(xpBase * 0.25), 0);
   if (win) { rewards.war_points = warPts; db.warPoints += warPts; db.mprog[0]++; if (kind !== 'pve') db.wprog++; }
+  if (win) giveNote(rewards, db.rec.wins === 0 && kind === 'pve' ? FIRST_BLOOD_NOTE : null, kind === 'pve' ? 0.03 : 0);
   if (kind === 'pvp') db.rec.contacts++;
   if (win) db.rec.wins++; else db.rec.losses++;
   if (kind === 'echo') db.rec.echoes++;
@@ -560,8 +576,21 @@ function route(method: string, path: string, body: any, authed: boolean): unknow
       db.rec.caches++;
       db.mprog[1]++;
       const loot = lootRewards(10 + 2 * db.level, 0.55);
+      giveNote(loot, null, id.startsWith('a:') ? 0.35 : 0.12, true);
       grantXp(loot); save();
       return { loot, me: buildMe() };
+    }
+
+    // ----- notes -----
+    case 'GET /api/notes': guard(); return archiveFor(db.faction ?? 'human', db.notes ?? [], db.noteClaims ?? []);
+    case 'POST /api/notes/claim': {
+      guard();
+      const set = String(need(body, 'set'));
+      const c = claimable(db.faction ?? 'human', db.notes ?? [], db.noteClaims ?? [], set);
+      if (!c) throw new HttpError(409, 'set_incomplete', 'That set cannot be claimed.');
+      (db.noteClaims = db.noteClaims ?? []).push(set);
+      db.salvage += c.salvage; save();
+      return { rewards: { ...emptyRewards(), salvage: c.salvage }, title: c.title, me: buildMe() };
     }
 
     // ----- gear -----
@@ -720,6 +749,11 @@ function route(method: string, path: string, body: any, authed: boolean): unknow
       if (body?.xp) { const r = emptyRewards(body.xp); grantXp(r); }
       if (body?.salvage) db.salvage += body.salvage;
       if (body?.item) { const it = makeItem(body.item.base, body.item.rarity, 0, body.item.unique ?? null); db.items.push(it); }
+      if (body?.note) {
+        const ids = body.note === 'all' ? allVisibleIds(db.faction ?? 'human') : [String(body.note)];
+        const held = db.notes ?? (db.notes = []);
+        for (const id of ids) if (!held.some((h) => h.id === id)) held.push({ id, at: Date.now() });
+      }
       if (body?.consumable) db.consumables[body.consumable.id] = (db.consumables[body.consumable.id] ?? 0) + body.consumable.n;
       save();
       return mine();

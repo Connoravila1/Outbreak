@@ -57,12 +57,12 @@ export function Action({ children, onClick, reason, busy, primary, danger, block
 }
 
 // ---- toasts ----
-export interface Toast { id: number; text: string; kind: 'info' | 'echo' | 'good' | 'bad' }
+export interface Toast { id: number; text: string; kind: 'info' | 'echo' | 'good' | 'bad'; act?: () => void }
 export const toasts = signal<Toast[]>([]);
 let toastId = 1;
-export function pushToast(text: string, kind: Toast['kind'] = 'info') {
+export function pushToast(text: string, kind: Toast['kind'] = 'info', act?: () => void) {
   const id = toastId++;
-  toasts.value = [...toasts.value.slice(-2), { id, text, kind }];
+  toasts.value = [...toasts.value.slice(-2), { id, text, kind, act }];
   window.setTimeout(() => { toasts.value = toasts.value.filter((t) => t.id !== id); }, 4500);
 }
 export function Toasts() {
@@ -70,7 +70,7 @@ export function Toasts() {
   return (
     <div class="toasts" role="status" aria-live="polite">
       {toasts.value.map((t) => (
-        <button key={t.id} class={'toast ' + t.kind} onClick={() => { toasts.value = toasts.value.filter((x) => x.id !== t.id); }}>{t.text}</button>
+        <button key={t.id} class={'toast ' + t.kind} onClick={() => { toasts.value = toasts.value.filter((x) => x.id !== t.id); t.act?.(); }}>{t.text}</button>
       ))}
     </div>
   );

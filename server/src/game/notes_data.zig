@@ -276,14 +276,14 @@ pub const notes = [_]Note{
         .rarity = .rare,
         .body =
         \\THE STARLITE DINER -- OPEN ALL NIGHT
-        \\Server: RHONDA   Table: 4   Guests: 1
-        \\ 1  Cherry Pie (slice) ........ 4.25
-        \\ 1  Coffee (bottomless) ....... 2.10
-        \\ 1  Extra napkins ............. NO CHARGE
-        \\ 1  Napkins (more) ............ NO CHARGE
-        \\ 1  Napkins (a lot) ........... NO CHARGE
-        \\SUBTOTAL 6.35   TAX 0.51   TOTAL 6.86
-        \\TIP: ________   PAID: ________
+        \\Server: RHONDA  Table: 4  Guests: 1
+        \\ 1  Cherry Pie (slice) ..... 4.25
+        \\ 1  Coffee (bottomless) .... 2.10
+        \\ 1  Extra napkins ......... FREE
+        \\ 1  Napkins (more) ........ FREE
+        \\ 1  Napkins (a lot) ....... FREE
+        \\SUBTOTAL 6.35  TAX .51  TOTAL 6.86
+        \\TIP: ______  PAID: ______
         \\(handwritten) guy at 4 left w/o paying. left blood on the bill. we comped it. he looked sad. hope he's ok.
         \\THANK YOU! COME AGAIN!
         ,

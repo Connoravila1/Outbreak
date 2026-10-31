@@ -17,6 +17,7 @@ import { coachDone, recordCache } from '../state/record';
 import { enqueueLevelUp } from '../battle/session';
 import type { PlaceKind, Rewards, WorldEnemy, WorldLandmark } from '../api';
 import { clock } from '../shell/Vitals';
+import { notesFound } from '../notes/store';
 
 type Result = { kind: 'loot'; loot: Rewards } | { kind: 'note'; text: string };
 
@@ -99,6 +100,7 @@ function ObjectSheet({ o, onClose, onResult }: { o: GameObject; onClose: () => v
         const r = await api.open(o.id);
         applyMe(r.me);
         recordCache();
+        notesFound(r.loot.notes, true);
         onResult({ kind: 'loot', loot: r.loot });
         enqueueLevelUp(r.loot.level_up, r.me);
       } else if (o.kind === 'stronghold') {

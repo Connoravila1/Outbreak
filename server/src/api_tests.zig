@@ -2454,7 +2454,6 @@ test "notes: a completed set is claimed once for salvage and a title" {
     try testing.expectEqual(want, (try noteSet(&arch, "starlite")).?.get("reward").?.integer);
 }
 
-
 test "notes: landmark caches can drop one, never twice; deleting the account takes them" {
     var h: Harness = undefined;
     try h.init(.{ .dev = true, .limits = false });

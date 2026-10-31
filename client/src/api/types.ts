@@ -26,6 +26,12 @@ export interface Item {
   upgrade_cost: number | null;
 }
 
+/** How a note is drawn: each form gets its own paper. */
+export type NoteForm = 'notebook' | 'memo' | 'email' | 'chat' | 'receipt' | 'sticky' | 'radio' | 'poster' | 'letter' | 'review' | 'card';
+export type NoteSetId = 'lantern' | 'starlite' | 'ordinary' | 'containment' | 'survey' | 'hunger' | 'zero' | 'road';
+/** A note found with a payout; read it through the archive. */
+export interface NoteRef { id: string; title: string; set: NoteSetId; rarity: Rarity; form: NoteForm }
+
 export interface Rewards {
   xp: number;
   salvage: number;
@@ -35,7 +41,21 @@ export interface Rewards {
   level_up: { from: number; to: number; unlocks: string[] } | null;
   /** Salvage from items that did not fit in the pack (already counted in `salvage`). */
   auto_scrapped?: number;
+  /** Notes found with this payout (absent from older servers). */
+  notes?: NoteRef[];
 }
+
+export interface NoteSet {
+  id: NoteSetId; name: string; title: string; blurb: string;
+  total: number; found: number; reward: number; claimed: boolean;
+}
+/** Locked notes carry only set and rarity. */
+export interface ArchiveNote {
+  id: string; set: NoteSetId; rarity: Rarity; locked: boolean;
+  title: string | null; author: string | null; date: string | null; form: NoteForm | null;
+  body: string | null; found_at: number | null;
+}
+export interface NoteArchive { sets: NoteSet[]; notes: ArchiveNote[] }
 
 export interface Mission {
   id: string;
@@ -91,6 +111,10 @@ export interface Me {
   stance: Stance;
   /** Fights per enemy archetype; hints unlock at 3. */
   bestiary: Record<string, number>;
+  /** Notes found, and how many this faction can find in all. */
+  notes?: { found: number; total: number };
+  /** Cosmetic titles from completed note sets. */
+  titles_extra?: string[];
 }
 
 export interface MeLite {

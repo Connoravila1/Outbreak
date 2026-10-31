@@ -9,6 +9,7 @@ import { pushToast } from '../ui/kit';
 import { battleActive, enqueueBattle, enqueueLevelUp } from '../battle/session';
 import { showRewards } from '../ui/RewardsSheet';
 import { say } from '../ui/voice';
+import { notesFound } from '../notes/store';
 
 export const inSanctuary = signal(false);
 export const pollError = signal<string | null>(null);
@@ -38,6 +39,7 @@ async function tick() {
         void api.me().then((m) => { applyMe(m); enqueueLevelUp(up, m); }, () => pushToast(ev.text, 'info'));
       } else if (ev.type === 'raid' && ev.rewards) {
         showRewards(say('Raid won', 'the horde falls'), ev.rewards);
+        notesFound(ev.rewards.notes);
         pushToast(ev.text, 'good');
       } else pushToast(ev.text, ev.type === 'echo_report' ? 'echo' : 'info');
     }
