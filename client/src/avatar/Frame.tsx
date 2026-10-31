@@ -25,8 +25,48 @@ function Leaf({ deg, side }: { deg: number; side: 1 | -1 }) {
 }
 const LEAVES = [102, 118, 134, 150, 166, 182, 198, 214, 230];
 
+/** A set of three parallel scratches across the ring at `deg` (claws, or tally marks struck through). */
+function Claws({ deg }: { deg: number }) {
+  const [x, y] = polar(45, deg);
+  return <path d="M-5 -6 L-2 7 M0 -7 L3 8 M5 -6 L8 6" transform={`translate(${f1(x)} ${f1(y)}) rotate(${deg + 90})`} />;
+}
+const CLAW_AT = [20, 110, 200, 290];
+const GILT_AT = [0, 45, 90, 135, 180, 225, 270, 315];
+
 function FrameArt({ id }: { id: string }) {
   switch (id) {
+    case 'frame_horde':
+      return (
+        <g fill="none" stroke="var(--fa)" stroke-linecap="round">
+          <circle cx="50" cy="50" r="44.5" stroke="var(--fb)" stroke-width="1.4" />
+          <g stroke-width="2.6">{CLAW_AT.map((d) => <Claws key={d} deg={d} />)}</g>
+        </g>
+      );
+    case 'frame_echo':
+      return (
+        <g fill="none">
+          <circle cx="50" cy="50" r="44.5" stroke="var(--fa)" stroke-width="2.6" />
+          <circle cx="53" cy="48" r="44.5" stroke="var(--fb)" stroke-width="1.6" stroke-dasharray="5 3" />
+          <circle cx="47" cy="52" r="44.5" stroke="var(--fb)" stroke-width="1" opacity=".6" />
+        </g>
+      );
+    case 'frame_dayzero':
+      return (
+        <g fill="none" stroke="var(--fa)" stroke-linecap="round">
+          <path stroke-width="4" d="M50 5.5 A44.5 44.5 0 0 1 91 33 M95 52 A44.5 44.5 0 0 1 71 90 M50 94.5 A44.5 44.5 0 0 1 12 72 M6 45 A44.5 44.5 0 0 1 28 12" />
+          <g stroke="var(--fb)" stroke-width="2"><path d="M91 33 L97 29 M95 52 L100 52 M71 90 L75 96 M12 72 L6 76 M6 45 L0 44 M28 12 L25 6" /></g>
+        </g>
+      );
+    case 'frame_gilt':
+      return (
+        <g fill="none">
+          <circle cx="50" cy="50" r="45.5" stroke="var(--fa)" stroke-width="2.4" />
+          <circle cx="50" cy="50" r="41.5" stroke="var(--fb)" stroke-width="1" />
+          <g fill="var(--fa)" stroke="none">
+            {GILT_AT.map((d) => { const [x, y] = polar(45.5, d); return <path key={d} d="M0 -4.4 L3.2 0 L0 4.4 L-3.2 0 Z" transform={`translate(${f1(x)} ${f1(y)}) rotate(${d})`} />; })}
+          </g>
+        </g>
+      );
     case 'frame_grease':
       return (
         <g fill="none" stroke="var(--fa)" stroke-linecap="round">

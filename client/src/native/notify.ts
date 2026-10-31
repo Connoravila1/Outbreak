@@ -7,6 +7,8 @@ import { reportPluginError } from '../report/errors';
 const DAILY_BASE = 100; // ids 100..106: the next seven resets
 const DAILY_DAYS = 7;
 const DOWNED_ID = 200;
+const EVENT_BASE = 300; // ids 300..303: the next four world events
+const EVENT_SLOTS = 4;
 const DAY = 86_400_000;
 
 const quiet = (p: Promise<unknown>, call: string) => { void p.catch((e) => reportPluginError(call, e)); };
@@ -42,6 +44,26 @@ export async function scheduleDailyReset() {
         title: 'Daily missions reset',
         body: 'New missions are waiting.',
         schedule: { at: new Date(first + i * DAY), allowWhileIdle: true },
+        smallIcon: 'ic_notify',
+      })),
+    });
+  } catch { /* alerts are a nicety */ }
+}
+
+/** (Re)schedule "an event has begun" alerts for the events still to come. Each call replaces the last set. */
+export async function scheduleEventStarts(list: { at: number; title: string; body: string }[]) {
+  if (!isNative || !(await allowed())) return;
+  const ids = Array.from({ length: EVENT_SLOTS }, (_, i) => ({ id: EVENT_BASE + i }));
+  try {
+    await LocalNotifications.cancel({ notifications: ids });
+    const future = list.filter((e) => e.at > Date.now()).slice(0, EVENT_SLOTS);
+    if (!future.length) return;
+    await LocalNotifications.schedule({
+      notifications: future.map((e, i) => ({
+        id: EVENT_BASE + i,
+        title: e.title,
+        body: e.body,
+        schedule: { at: new Date(e.at), allowWhileIdle: true },
         smallIcon: 'ic_notify',
       })),
     });

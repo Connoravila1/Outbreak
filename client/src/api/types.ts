@@ -45,6 +45,8 @@ export interface Rewards {
   notes?: NoteRef[];
   /** Achievements this payout completed; their salvage is paid on top of `salvage`. */
   achievements?: EarnedAchievement[];
+  /** Cosmetics and titles this payout unlocked (event rewards, Exchange). */
+  unlocks?: { kind: 'color' | 'frame' | 'title'; id: string; name: string }[];
 }
 
 /** A newly earned achievement, named for the player's own faction. */
@@ -192,7 +194,7 @@ export interface WorldLandmark {
 }
 export interface WorldTime { phase: 'day' | 'night'; changes_at: number }
 
-export type EventType = 'contact' | 'echo_report' | 'level_up' | 'raid' | 'war_result' | 'clan' | 'achievement';
+export type EventType = 'contact' | 'echo_report' | 'level_up' | 'raid' | 'war_result' | 'clan' | 'achievement' | 'event_reward';
 export interface GameEvent {
   id: string;
   at: number;
@@ -216,6 +218,32 @@ export interface WorldView {
   strongholds: WorldStronghold[];
   raids: WorldRaid[];
   events: GameEvent[];
+  /** The world event running now, for the map banner (absent from older servers). */
+  event?: EventBrief | null;
+}
+
+// ---- world events (DESIGN.md section 18) ----
+export type WorldEventType = 'blood_moon' | 'supply_run' | 'horde' | 'echo_week' | 'last_light' | 'day_zero';
+export interface EventBrief {
+  id: number; type: WorldEventType; kind: string | null;
+  starts_at: number; ends_at: number;
+  target: number; progress: number; mine: number;
+}
+export interface EventLive {
+  id: number; type: WorldEventType; kind: string | null; admin: boolean;
+  starts_at: number; ends_at: number; active_players: number;
+  goal: { target: number; progress: number; done: boolean };
+  /** The district you stand in, once it has a goal of its own. */
+  district: { id: string; target: number; progress: number; done: boolean } | null;
+  mine: { n: number; tier: 0 | 1 | 2 | 3; next_at: number | null; goal_met: boolean };
+}
+export interface EventUpcoming { type: WorldEventType; kind: string | null; starts_at: number; ends_at: number }
+export interface EventExchangeItem { sku: string; price: number; limit: number; bought: number; owned: boolean }
+export interface EventsState {
+  now: number;
+  live: EventLive | null;
+  upcoming: EventUpcoming[];
+  exchange: { open: boolean; min_level: number; items: EventExchangeItem[] };
 }
 
 /** One worn item as its owner's faction names it. Drawn on a silhouette; carries no id and no stats. */
@@ -297,7 +325,18 @@ export interface CatalogCosmetic {
   /** Callsign colours: the hex to draw it in on paper (Survey) and on thermal (Heat). */
   survey: string | null; heat: string | null;
   unlock: string | null;
+  /** Earned in a world event / sold only at the Event Exchange (absent from older servers). */
+  event?: WorldEventType | null;
+  exchange?: boolean;
 }
+/** An event as the catalog describes it: names in each voice, the goal and what it pays. */
+export interface CatalogEvent {
+  id: WorldEventType; names: Record<Faction, string>; blurb: Record<Faction, string>; unit: Record<Faction, string>;
+  monthly: boolean; goal: string; per_player: number; min_target: number;
+  tiers: [number, number, number]; salvage: [number, number, number]; consolation: number;
+  cosmetic: string | null; title: Record<Faction, string> | null;
+}
+export interface CatalogExchangeItem { sku: string; names: Record<Faction, string>; text: string; price: number; limit: number }
 export interface CatalogStoreEntry { sku: string; name: string; price: number; text: string }
 export interface Catalog {
   version: number | string;
@@ -312,6 +351,8 @@ export interface Catalog {
   places?: CatalogPlace[];
   achievements?: CatalogAchievement[];
   cosmetics?: CatalogCosmetic[];
+  events?: CatalogEvent[];
+  event_exchange?: { min_level: number; items: CatalogExchangeItem[] };
   levels: {
     xp_to_next: number[];
     titles: Record<Faction, string[]>;

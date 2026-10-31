@@ -55,7 +55,9 @@ const names = (human: string, zombie: string) => ({ human, zombie });
 const CATALOG: Catalog = {
   version: 1,
   achievements: MOCK_ACHIEVEMENTS,
-  cosmetics: MOCK_COSMETICS,
+  cosmetics: [...MOCK_COSMETICS, ...MOCK_EVENT_COSMETICS],
+  events: MOCK_EVENT_DEFS,
+  event_exchange: { min_level: 10, items: MOCK_EXCHANGE },
   items: [
     { id: 'bat', slot: 'weapon', req: 1, names: names('Baseball Bat', 'Rotten Teeth'), stats: { hp: 0, atk: 7, def: 0, spd: 0 } },
     { id: 'knife', slot: 'weapon', req: 1, names: names('Kitchen Knife', 'Broken Nails'), stats: { hp: 0, atk: 5, def: 0, spd: 3 } },
@@ -126,6 +128,7 @@ const CATALOG: Catalog = {
 };
 
 import { earnNew, freshCollection, MOCK_ACHIEVEMENTS, MOCK_COSMETICS, metricsOf, titlesFrom, type CollectionState } from './mock_collection';
+import { MOCK_EVENT_COSMETICS, MOCK_EVENT_DEFS, MOCK_EXCHANGE, mockBrief, mockEvents, type MockEventState } from './mock_events';
 import { allVisibleIds, archiveFor, claimable, FIRST_BLOOD_NOTE, noteNamed, refOf, rollNote, titlesFor, visibleTotal, type Held } from './mock_notes';
 
 // ---------- database ----------
@@ -144,6 +147,8 @@ interface DB {
   /** Moderation: a forced callsign change, reports sent (to dedupe), and a suspension. */
   mustRename?: boolean; reported?: string[]; banned?: { reason: string; until: number | null } | null;
   col?: CollectionState;
+  /** The always-running mock event: your part in it and what you bought at the Exchange. */
+  ev?: MockEventState;
   /** The terms version accepted (0: none). */
   terms?: number;
 }
@@ -219,6 +224,10 @@ function equipped(): Record<Slot, string | null> {
 }
 
 const slotsAt = (l: number) => (l >= 25 ? 3 : l >= 12 ? 2 : l >= 3 ? 1 : 0);
+
+/** The mock's one event started a day ago on page load and runs for another day; it never ends. */
+const EVENT_ANCHOR = Math.floor(Date.now() / 3_600_000) * 3_600_000;
+function evState(): MockEventState { return (db.ev ??= { mine: 0, bought: {} }); }
 
 function emptyRewards(xp = 0): Rewards {
   return { xp, salvage: 0, items: [], consumables: {}, war_points: 0, level_up: null };
@@ -622,6 +631,7 @@ function route(method: string, path: string, body: any, authed: boolean): unknow
       mockSimulated = body.mock === true;
       const v = world(need(body, 'lat'), need(body, 'lon'), (body.places as PlaceReport[] | undefined) ?? []);
       v.in_transit = observeTransit(body.lat, body.lon);
+      v.event = mockBrief(EVENT_ANCHOR, evState());
       if (v.in_transit) v.hostiles_near = false;
       v.me.hp = buildMe().hp;
       db.mprog[2] += 18;
@@ -640,6 +650,7 @@ function route(method: string, path: string, body: any, authed: boolean): unknow
     }
     case 'POST /api/engage': {
       guard();
+      evState().mine++;
       if (inTransit()) throw new HttpError(409, 'in_transit', "You're moving too fast. Fights wait until you're on foot.");
       const id = String(need(body, 'id'));
       const m = /^e:(-?\d+):(-?\d+):(\d+):(\d+)$/.exec(id);
@@ -818,6 +829,37 @@ function route(method: string, path: string, body: any, authed: boolean): unknow
       if (CATALOG.consumables.some((c) => c.id === sku)) db.consumables[sku] = (db.consumables[sku] ?? 0) + 1;
       save();
       return mine();
+    }
+
+    // ----- world events -----
+    case 'GET /api/events': guard(); return mockEvents(EVENT_ANCHOR, evState(), collection().owned);
+    case 'POST /api/events/exchange': {
+      guard();
+      const sku = String(need(body, 'sku'));
+      const x = MOCK_EXCHANGE.find((c) => c.sku === sku);
+      if (!x) throw new HttpError(404, 'not_found', 'Not on the Exchange.');
+      const st = evState();
+      if (db.level < 10) throw new HttpError(409, 'locked', 'The Exchange opens at level 10.');
+      if ((st.bought[sku] ?? 0) >= x.limit) throw new HttpError(409, 'sold_out', 'You have bought all you can of that this event.');
+      if (collection().owned.includes(sku)) throw new HttpError(409, 'owned', 'You already own that.');
+      if (db.salvage < x.price) throw new HttpError(409, 'not_enough_salvage', 'Not enough salvage.');
+      db.salvage -= x.price;
+      st.bought[sku] = (st.bought[sku] ?? 0) + 1;
+      const rw = emptyRewards();
+      const cos = MOCK_EVENT_COSMETICS.find((c) => c.id === sku);
+      if (cos) {
+        collection().owned.push(sku);
+        rw.unlocks = [{ kind: cos.kind, id: cos.id, name: cos.names[db.faction ?? 'human'] }];
+      } else {
+        const elig = CATALOG.items.filter((c) => c.req <= db.level);
+        const it = makeItem(elig[Math.floor(Math.random() * elig.length)].id, sku === 'ex_crate' ? 'rare' : 'uncommon');
+        db.items.push(it);
+        rw.items = [it];
+        if (sku === 'ex_crate') { db.consumables.heal_m = (db.consumables.heal_m ?? 0) + 2; rw.consumables = { heal_m: 2 }; }
+        checkAchievements(rw);
+      }
+      save();
+      return { rewards: rw, me: buildMe() };
     }
 
     // ----- war and social -----

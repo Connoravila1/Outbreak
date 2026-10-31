@@ -21,6 +21,7 @@ import { PatrolButton } from '../patrol/PatrolButton';
 import { notesFound } from '../notes/store';
 import { achievementsEarned } from '../collection/store';
 import { NearbyList, nearbyObjects } from '../map/Nearby';
+import { EventBanner } from '../events/EventBanner';
 
 type Result = { kind: 'loot'; loot: Rewards } | { kind: 'note'; text: string };
 
@@ -179,6 +180,7 @@ export function MapTab() {
       {!inSanctuary.value && !pollError.value && world.value?.in_transit && (
         <p class="map-banner transit" role="status"><Icon name="sprint" size={20} />{say('Moving fast. Fights wait until you\'re on foot.', 'too fast. the hunt waits for your feet.')}</p>
       )}
+      <EventBanner low={inSanctuary.value || !!pollError.value || !!world.value?.in_transit} />
       {nothing && !inSanctuary.value && (
         <p class="map-note">{say('Nothing within 450 m. Walk a block and it changes every 10 minutes.', 'nothing warm within 450 m. walk. it shifts every 10 minutes.')}</p>
       )}

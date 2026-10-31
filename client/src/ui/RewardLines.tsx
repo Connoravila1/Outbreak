@@ -17,6 +17,7 @@ export function RewardLines({ r }: { r: Rewards }) {
       ))}
       {cons.map(([id, n]) => <li key={id}><Icon name="medical-pack" size={18} /> {consumableName(id)} ×{n}</li>)}
       {!!r.auto_scrapped && <li class="dim"><Icon name="recycle" size={18} /> {say(`Pack full: extra gear scrapped for ${r.auto_scrapped} salvage.`, `no room. the extra was torn down for ${r.auto_scrapped} salvage.`)}</li>}
+      {(r.unlocks ?? []).map((u) => <li key={u.kind + u.id}><Icon name={u.kind === 'title' ? 'laurels' : 'star-medal'} size={18} /> {u.kind === 'title' ? say('Title', 'title') : u.kind === 'color' ? say('Callsign colour', 'callsign colour') : say('Portrait frame', 'portrait frame')}: <b>{u.name}</b></li>)}
       {(r.notes ?? []).map((nt) => <li key={nt.id} class="scrap-li"><NoteScrap r={nt} /></li>)}
       {r.level_up && <li class="lvl"><Icon name="laurels" size={18} /> {say(`Level ${r.level_up.to}.`, `level ${r.level_up.to}. stronger.`)}</li>}
     </ul>
@@ -24,5 +25,5 @@ export function RewardLines({ r }: { r: Rewards }) {
 }
 
 export function rewardsEmpty(r: Rewards): boolean {
-  return !r.xp && !r.salvage && !r.auto_scrapped && !r.war_points && !r.items.length && !Object.keys(r.consumables).length && !r.notes?.length;
+  return !r.xp && !r.salvage && !r.auto_scrapped && !r.war_points && !r.items.length && !Object.keys(r.consumables).length && !r.notes?.length && !r.unlocks?.length;
 }

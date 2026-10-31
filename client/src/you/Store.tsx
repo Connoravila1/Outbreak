@@ -11,6 +11,7 @@ import { achievementsEarned } from '../collection/store';
 import { FramedAvatar } from '../avatar/Frame';
 import { colorHex } from '../ui/Callsign';
 import { wear } from './Wardrobe';
+import { Exchange } from '../events/Exchange';
 import type { CatalogCosmetic } from '../api';
 import '../collection/collection.css';
 
@@ -72,6 +73,7 @@ export function Store() {
         })}
       </ul>
       <Looks buy={buy} pick={pick} setPick={setPick} busy={busy} />
+      <Exchange />
       <ErrorLine text={err} />
     </Section>
   );

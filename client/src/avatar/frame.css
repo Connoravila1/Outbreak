@@ -14,6 +14,10 @@
 :root[data-lens='survey'] .portrait.frame-barbed { --fa: var(--ink); --fb: var(--survey-brown); }
 :root[data-lens='survey'] .portrait.frame-bloom { --fa: #5E7F3A; --fb: color-mix(in srgb, var(--ink) 40%, transparent); }
 :root[data-lens='survey'] .portrait.frame-wreath { --fa: #A9780A; --fb: var(--survey-brown); }
+:root[data-lens='survey'] .portrait.frame-horde { --fa: #9B1C1C; --fb: color-mix(in srgb, var(--ink) 50%, transparent); }
+:root[data-lens='survey'] .portrait.frame-echo { --fa: var(--survey-blue); --fb: color-mix(in srgb, var(--survey-blue) 55%, transparent); }
+:root[data-lens='survey'] .portrait.frame-dayzero { --fa: #9B1C1C; --fb: var(--ink); }
+:root[data-lens='survey'] .portrait.frame-gilt { --fa: #8A6D0B; --fb: color-mix(in srgb, #8A6D0B 55%, transparent); }
 
 :root[data-lens='heat'] .portrait { --fa: var(--hot); --fb: color-mix(in srgb, var(--vein) 80%, transparent); }
 :root[data-lens='heat'] .portrait.frame-grease { --fa: var(--hot); }
@@ -23,6 +27,10 @@
 :root[data-lens='heat'] .portrait.frame-barbed { --fa: var(--warm); --fb: var(--vein); }
 :root[data-lens='heat'] .portrait.frame-bloom { --fa: var(--white-hot); --fb: var(--vein); }
 :root[data-lens='heat'] .portrait.frame-wreath { --fa: var(--white-hot); --fb: var(--hot); }
+:root[data-lens='heat'] .portrait.frame-horde { --fa: var(--hot); --fb: var(--vein); }
+:root[data-lens='heat'] .portrait.frame-echo { --fa: var(--white-hot); --fb: var(--cold); }
+:root[data-lens='heat'] .portrait.frame-dayzero { --fa: var(--hot); --fb: var(--white-hot); }
+:root[data-lens='heat'] .portrait.frame-gilt { --fa: #F2E28B; --fb: var(--warm); }
 :root[data-lens='heat'] .portrait.framed .frame-ring { filter: drop-shadow(0 0 3px color-mix(in srgb, var(--hot) 70%, transparent)); }
 
 /* In a frame the plate loses its own glow so the ring is the one bright thing. */

@@ -9,6 +9,7 @@ import { longClock, useNow } from '../ui/hooks';
 import { FactionBar } from '../war/FactionBar';
 import { Leaderboard } from '../war/Boards';
 import { ClanSection } from '../war/Clan';
+import { EventsCard } from '../events/EventsCard';
 import '../shell/shell.css';
 import '../war/war.css';
 
@@ -28,6 +29,7 @@ export function WarTab() {
   return (
     <div class="panel scroll war">
       <h2 class="display">{say('The War', 'the war')}</h2>
+      <EventsCard />
       <ErrorLine text={err} />
       {!war && !err && <p class="empty dim">{say('Reading the front…', 'listening…')}</p>}
       {war && (

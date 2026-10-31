@@ -238,3 +238,10 @@ Heat's body (14.3:1) and secondary text (5.2:1) already passed and are unchanged
 **Motion.** The Reduce motion setting (default: the system setting) removes the screen shake, lunges, breathing, flashing
 and slow-motion beats in fights, ends ambient loops, and shortens the level-up reveal pauses.
 
+
+**World events (DESIGN.md section 18).** No new visual language: the map banner is a bordered strip like the other map banners (square
+and ruled in Survey, rounded with a heat glow in Heat) with the kit's progress bar; the War tab's Events card, the "Upcoming" list and
+the Event Exchange rows reuse `card`, `store-row` and `Action`. Event names, blurbs and goal units come from `/api/catalog` and are
+read in the player's voice (`say`). Four more portrait frames (Tally Marks / Claw Marks, Static / Afterimage, Quarantine Seal /
+Open Wound, Gilt) are drawn in `avatar/Frame.tsx` with the two lens inks in `frame.css`. A start alert is scheduled for each of the next
+four events through the same local-notification code as the daily reset.

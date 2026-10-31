@@ -135,6 +135,10 @@ export const api = {
   /** Wear an owned colour or frame; `id` null takes it off. */
   equipCosmetic: (kind: T.CosmeticKind, id: string | null) => post<{ me: T.Me }>('/api/cosmetics/equip', { kind, id }),
 
+  // world events
+  events: () => get<T.EventsState>('/api/events'),
+  exchangeBuy: (sku: string) => post<{ rewards: T.Rewards; me: T.Me }>('/api/events/exchange', { sku }),
+
   // social and war
   war: () => get<T.WarState>('/api/war'),
   leaderboard: (board: 'weekly' | 'contacts' | 'level') =>
@@ -165,6 +169,8 @@ export const api = {
     heal: () => post<{ me: T.Me }>('/api/dev/heal'),
     resetCooldowns: () => post<unknown>('/api/dev/reset_cooldowns'),
     botContact: () => post<unknown>('/api/dev/bot_contact'),
+    startEvent: (type: T.WorldEventType, hours = 6) => post<unknown>('/api/dev/event', { type, hours }),
+    stopEvent: () => post<unknown>('/api/dev/event_stop'),
   },
 };
 

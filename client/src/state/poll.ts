@@ -15,6 +15,7 @@ import { addToReport, AWAY_MS } from '../patrol/PatrolReport';
 import { notesFound } from '../notes/store';
 import { achievementsEarned } from '../collection/store';
 import { appActive } from '../native/active';
+import { noteLiveEvent, refreshEvents } from '../events/store';
 
 export const inSanctuary = signal(false);
 export const pollError = signal<string | null>(null);
@@ -35,6 +36,7 @@ async function tick() {
     const mock = await locationIsMocked();
     const w = await api.location(fix.lat, fix.lon, fix.acc, sanctuary, places, mock);
     world.value = w;
+    noteLiveEvent(w.event?.id);
     pollError.value = null;
     // A contact interrupts everything; take it before the HP numbers move so the fight is not spoiled.
     for (const ev of w.events) {
@@ -44,6 +46,13 @@ async function tick() {
         addToReport([ev]);
       } else if (ev.type === 'contact' && ev.battle) enqueueBattle(ev.battle, true);
       else if (ev.type === 'achievement') achievementsEarned(ev.rewards?.achievements);
+      else if (ev.type === 'event_reward' && ev.rewards) {
+        // Paid when the event ended: salvage, maybe an item, a colour or frame, a title.
+        showRewards(say('Event rewards', 'the spoils of the event'), ev.rewards);
+        notesFound(ev.rewards.notes);
+        void api.me().then(applyMe, () => undefined);
+        void refreshEvents(true);
+      }
       else if (ev.type === 'level_up' && ev.rewards?.level_up) {
         // Gained while walking (or from an item): same takeover as a fight, with the fresh Me.
         const up = ev.rewards.level_up;

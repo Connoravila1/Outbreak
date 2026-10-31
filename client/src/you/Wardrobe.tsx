@@ -1,4 +1,5 @@
 import { useState } from 'preact/hooks';
+import { eventName } from '../events/store';
 import { api, errorMessage, type CatalogCosmetic, type CosmeticKind } from '../api';
 import { applyMe, catalog, faction, lens, me } from '../state/store';
 import { say } from '../ui/voice';
@@ -22,9 +23,11 @@ export async function wear(kind: CosmeticKind, id: string | null, setErr?: (e: s
   }
 }
 
-/** The achievement that unlocks an earned-only cosmetic, by name. */
+/** The achievement, event or Exchange that gives an earned-only cosmetic, by name. */
 function earnedBy(c: CatalogCosmetic): string {
   const f = faction.value ?? 'human';
+  if (c.event) return `${eventName(c.event)}`;
+  if (c.exchange) return say('the Event Exchange', 'the turning market');
   const a = catalog.value?.achievements?.find((x) => x.id === c.unlock);
   return a ? a.names[f] : '';
 }
