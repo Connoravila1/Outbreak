@@ -25,6 +25,29 @@ function Leaf({ deg, side }: { deg: number; side: 1 | -1 }) {
 }
 const LEAVES = [102, 118, 134, 150, 166, 182, 198, 214, 230];
 
+/** Chain-link round the portrait: two zigzag strands that cross into diamonds, cut open at the lower right. */
+function fenceStrand(phase: 0 | 1): string {
+  const pts: string[] = [];
+  for (let k = 0; k <= 40; k++) {
+    const deg = 70 + k * 9;
+    if (deg > 410) break;
+    const [x, y] = polar((k + phase) % 2 ? 47.4 : 42.6, deg);
+    pts.push(`${pts.length ? 'L' : 'M'}${f1(x)} ${f1(y)}`);
+  }
+  return pts.join('');
+}
+
+/** A burst of sparks, longer and denser across the top like a crown. */
+const SPARK_LEN = [7, 3, 5, 9, 4, 6, 3, 8, 5, 4, 9, 3, 6, 5, 8, 3, 4, 7, 5, 9, 3, 6, 4, 8];
+function Spark({ i }: { i: number }) {
+  const deg = i * 15;
+  const top = 0.5 + 0.5 * Math.cos(((deg - 270) * Math.PI) / 180);
+  const len = 2.5 + SPARK_LEN[i] * (0.35 + 0.65 * top);
+  const [x0, y0] = polar(43.5, deg);
+  const [x1, y1] = polar(43.5 + len, deg);
+  return <path d={`M${f1(x0)} ${f1(y0)} L${f1(x1)} ${f1(y1)}`} stroke-width={1.2 + top * 1.3} />;
+}
+
 function FrameArt({ id }: { id: string }) {
   switch (id) {
     case 'frame_grease':
@@ -70,6 +93,22 @@ function FrameArt({ id }: { id: string }) {
         <g fill="var(--fa)" stroke="none">
           <circle cx="50" cy="50" r="44" fill="none" stroke="var(--fb)" stroke-width="1" stroke-dasharray="2 3" />
           {SPORE_AT.map((d, i) => { const [x, y] = polar(SPORE_R[i], d); return <circle key={d} cx={f1(x)} cy={f1(y)} r={SPORE_S[i]} />; })}
+        </g>
+      );
+    case 'frame_fence':
+      return (
+        <g fill="none" stroke-linejoin="round" stroke-linecap="round">
+          <path d={fenceStrand(0)} stroke="var(--fa)" stroke-width="2" />
+          <path d={fenceStrand(1)} stroke="var(--fb)" stroke-width="2" />
+          <path d={`M${polar(44.7, 50).map(f1).join(' ')} L${polar(53, 42).map(f1).join(' ')} M${polar(44.7, 70).map(f1).join(' ')} L${polar(53, 78).map(f1).join(' ')}`} stroke="var(--fa)" stroke-width="1.8" />
+        </g>
+      );
+    case 'frame_flare':
+      return (
+        <g fill="none" stroke="var(--fa)" stroke-linecap="round">
+          <circle cx="50" cy="50" r="43.5" stroke="var(--fb)" stroke-width="1.6" opacity=".85" />
+          {Array.from({ length: 24 }, (_, i) => <Spark key={i} i={i} />)}
+          <g fill="var(--fb)" stroke="none"><circle cx="30" cy="2" r="1.6" /><circle cx="73" cy="0" r="1.2" /><circle cx="52" cy="-4" r="1.5" /><circle cx="94" cy="20" r="1.2" /><circle cx="6" cy="22" r="1.3" /></g>
         </g>
       );
     case 'frame_wreath':

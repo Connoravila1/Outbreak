@@ -36,6 +36,12 @@ const fight_hp_floor = 0.60; // fights only at or above this HP fraction
 const heal_below = 0.50; // uses a stocked heal under this HP fraction
 const heal_stock = 3; // buys small heals up to this many
 const echo_interval_s = 2 * 3600.0;
+// Finds the pacing model does not play out (they would change the economy): counted on a side
+// ledger with their own random stream, to size XP tokens and cosmetic drops.
+const landmarks_per_hour = 1.5; // real places searched
+const airdrops_per_hour = 0.25; // from level 8: one in four hours
+const raid_kills_per_hour = 0.035; // from level 20: about one raid win per 28 active hours
+const raid_top_share = 0.15; // of those, finishing in the top three
 const elite_hp_floor = 0.80;
 const step_seconds = 30.0; // waiting granularity
 const max_hours = 450.0;
@@ -76,7 +82,7 @@ const Player = struct {
     salvage: u32 = 0,
     /// Every salvage ever gained (spending does not take it away): for the economy report.
     earned: u64 = 0,
-    cons: [9]u32 = [_]u32{0} ** 9,
+    cons: [10]u32 = [_]u32{0} ** 10,
     comp: stats.Computed = undefined,
     abilities: std.EnumSet(data.Ability) = .initEmpty(),
 
@@ -89,6 +95,13 @@ const Player = struct {
     downed_left: f64 = 0,
     echo_timer: f64 = 0,
     total_wins: u32 = 0,
+    /// Side ledger (see landmarks_per_hour): its own stream, XP tokens it would have paid, cosmetic
+    /// finds by source, and the active hours of the first and last find.
+    side: Rng = undefined,
+    side_token_xp: f64 = 0,
+    finds: [5]u32 = [_]u32{0} ** 5,
+    token_n: u32 = 0,
+    first_find_h: f64 = std.math.inf(f64),
 
     streak: u32 = 0,
     last_claim_day: i64 = -10,
@@ -99,7 +112,7 @@ const Player = struct {
     weekly_prog: u32 = 0,
     weekly_claimed: bool = false,
 
-    xp_by: [max_lvl + 1][5]f64 = [_][5]f64{.{ 0, 0, 0, 0, 0 }} ** (max_lvl + 1),
+    xp_by: [max_lvl + 1][6]f64 = [_][6]f64{.{ 0, 0, 0, 0, 0, 0 }} ** (max_lvl + 1),
     reach_h: [max_lvl + 1]f64 = [_]f64{std.math.inf(f64)} ** (max_lvl + 1),
     reach_salvage: [max_lvl + 1]u32 = [_]u32{0} ** (max_lvl + 1),
     reach_earned: [max_lvl + 1]u64 = [_]u64{0} ** (max_lvl + 1),
@@ -116,6 +129,7 @@ const Player = struct {
             .id = id,
             .faction = if (id % 2 == 0) .human else .zombie,
             .rng = game.rng.derive(seed, .{ "player", id }),
+            .side = game.rng.derive(seed, .{ "side", id }),
             .day_budget_s = cfg.hours_per_day * 3600.0,
             .policy = cfg.stance,
         };
@@ -230,6 +244,7 @@ const Player = struct {
                 p.missionEvent(.{ .kind = .walk, .amount = whole });
             }
             if (p.rng.chance(1.0 - @exp(-caches_per_hour * dt / 3600.0))) p.openCache();
+            p.sideFinds(dt);
         }
         if (p.day_clock >= p.day_budget_s) {
             p.day_clock -= p.day_budget_s;
@@ -240,7 +255,7 @@ const Player = struct {
 
     // --- XP, levels, loot -------------------------------------------------------------------------------
 
-    const Src = enum { fight, cache, walk, mission, echo };
+    const Src = enum { fight, cache, walk, mission, echo, token };
 
     fn gainXp(p: *Player, src: Src, amount: u32) void {
         p.xp_by[p.level][@intFromEnum(src)] += @floatFromInt(amount);
@@ -311,7 +326,13 @@ const Player = struct {
 
     fn takeDrop(p: *Player, d: loot.Drop) void {
         p.earn(d.salvage);
-        for (d.consumableSlice()) |c| p.cons[@intFromEnum(c)] += 1;
+        for (d.consumableSlice()) |c| {
+            // An XP token is read at once.
+            if (c == .xp_token) {
+                p.token_n += 1;
+                p.gainXp(.token, progression.tokenXp(p.level));
+            } else p.cons[@intFromEnum(c)] += 1;
+        }
         for (d.itemSlice()) |it| p.handleItem(it, true);
     }
 
@@ -323,6 +344,35 @@ const Player = struct {
         p.gainXp(.cache, progression.cacheXp(p.level));
         p.takeDrop(loot.rollCache(&p.rng, p.level, p.lootMult()));
         p.missionEvent(.{ .kind = .cache_open });
+    }
+
+    fn findCosmetic(p: *Player, src: game.cosmetics.Source) void {
+        if (game.cosmetics.roll(&p.side, src, 1.0) == null) return;
+        p.finds[@intFromEnum(src)] += 1;
+        p.first_find_h = @min(p.first_find_h, p.t / 3600.0);
+    }
+
+    fn sideTokens(p: *Player, d: loot.Drop) void {
+        for (d.consumableSlice()) |c| {
+            if (c == .xp_token) p.side_token_xp += @floatFromInt(progression.tokenXp(p.level));
+        }
+    }
+
+    /// Landmark searches, airdrops and raid wins over `dt` seconds of walking.
+    fn sideFinds(p: *Player, dt: f64) void {
+        const rate = dt / 3600.0;
+        if (p.side.chance(1.0 - @exp(-landmarks_per_hour * rate))) {
+            const row = data.place_kinds[p.side.below(data.place_kinds.len)];
+            p.sideTokens(loot.rollLandmark(&p.side, p.level, p.lootMult(), row));
+            p.findCosmetic(.landmark);
+        }
+        if (p.level >= 8 and p.side.chance(1.0 - @exp(-airdrops_per_hour * rate))) {
+            p.sideTokens(loot.rollAirdrop(&p.side, p.level, p.lootMult()));
+            p.findCosmetic(.airdrop);
+        }
+        if (p.level >= 20 and p.side.chance(1.0 - @exp(-raid_kills_per_hour * rate))) {
+            p.findCosmetic(if (p.side.chance(raid_top_share)) .raid_top else .raid);
+        }
     }
 
     // --- Missions ------------------------------------------------------------------------------------------
@@ -487,6 +537,7 @@ const Player = struct {
             if (first_blood) p.handleItem(loot.rollItem(&p.rng, .{ .level = lvl, .min_rarity = .uncommon }), true);
             p.gainXp(.fight, win_xp);
             p.missionEvent(.{ .kind = .pve_win, .archetype = arch, .elite = elite });
+            if (elite) p.findCosmetic(.elite);
         } else {
             p.lose();
             p.gainXp(.fight, progression.pveLossXp(win_xp));
@@ -635,9 +686,46 @@ pub fn main(init: std.process.Init) !void {
     if (cfg.players > 0) {
         try reportPlayers(w, gpa, players, cfg);
         try reportStances(w, players);
+        try reportFinds(w, gpa, players);
     }
     try reportPvp(w, cfg);
     try w.flush();
+}
+
+/// XP tokens (share of all XP) and found cosmetics (per active hour, by source).
+fn reportFinds(w: *std.Io.Writer, gpa: std.mem.Allocator, players: []const Player) !void {
+    var hours: f64 = 0;
+    var xp: f64 = 0;
+    var token_xp: f64 = 0;
+    var side_xp: f64 = 0;
+    var tokens: f64 = 0;
+    var by = [_]f64{0} ** 5;
+    var first = try gpa.alloc(f64, players.len);
+    defer gpa.free(first);
+    var n_first: usize = 0;
+    for (players) |p| {
+        hours += p.t / 3600.0;
+        for (p.xp_by) |row| {
+            for (row) |v| xp += v;
+        }
+        for (p.xp_by) |row| token_xp += row[@intFromEnum(Player.Src.token)];
+        side_xp += p.side_token_xp;
+        tokens += @floatFromInt(p.token_n);
+        for (p.finds, 0..) |f, k| by[k] += @floatFromInt(f);
+        if (p.first_find_h < max_hours) {
+            first[n_first] = p.first_find_h;
+            n_first += 1;
+        }
+    }
+    var total_finds: f64 = 0;
+    for (by) |v| total_finds += v;
+    try w.print("\nXP TOKENS AND FOUND COSMETICS (all sim players, whole careers)\n", .{});
+    try w.print("XP from tokens: {d:.2}% of all XP (caches played out {d:.0} tokens; landmarks and airdrops on the side ledger)\n", .{ 100.0 * (token_xp + side_xp) / @max(1.0, xp + side_xp), tokens });
+    try w.print("Cosmetic finds per active hour: {d:.4} (one per {d:.1} h)\n", .{ total_finds / hours, hours / @max(1.0, total_finds) });
+    for ([_]game.cosmetics.Source{ .airdrop, .elite, .landmark, .raid_top, .raid }, 0..) |s, k| {
+        try w.print("  {s:<9} {d:.4}/h (one per {d:.1} h)\n", .{ @tagName(s), by[k] / hours, hours / @max(1.0, by[k]) });
+    }
+    if (n_first > 0) try w.print("Median active hours to a first find: {d:.1}\n", .{median(first[0..n_first])});
 }
 
 fn reportPlayers(w: *std.Io.Writer, gpa: std.mem.Allocator, players: []const Player, cfg: Config) !void {
@@ -727,12 +815,12 @@ fn reportPlayers(w: *std.Io.Writer, gpa: std.mem.Allocator, players: []const Pla
     }
 
     try w.print("\nXP SOURCES, share of all XP earned at levels in the band\n", .{});
-    try w.print("{s:>8} {s:>7} {s:>7} {s:>7} {s:>8} {s:>7}\n", .{ "levels", "fights", "caches", "walking", "missions", "echoes" });
+    try w.print("{s:>8} {s:>7} {s:>7} {s:>7} {s:>8} {s:>7} {s:>7}\n", .{ "levels", "fights", "caches", "walking", "missions", "echoes", "tokens" });
     for ([_][2]u8{ .{ 1, 10 }, .{ 11, 20 }, .{ 21, 30 }, .{ 31, 40 }, .{ 41, 50 } }) |band| {
-        var tot = [_]f64{0} ** 5;
+        var tot = [_]f64{0} ** 6;
         for (players) |p| {
             for (band[0]..band[1] + 1) |l| {
-                for (0..5) |k| tot[k] += p.xp_by[l][k];
+                for (0..6) |k| tot[k] += p.xp_by[l][k];
             }
         }
         var sum: f64 = 0;

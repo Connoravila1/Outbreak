@@ -183,7 +183,38 @@ function GearSeen() {
           })}
         </ul>
       </section>
+      <FoundInField />
     </>
+  );
+}
+
+/** Drop-only cosmetics: a silhouette until one turns up, then its name and where it is worn. */
+function FoundInField() {
+  const f = faction.value ?? 'human';
+  const found = (catalog.value?.cosmetics ?? []).filter((c) => c.found);
+  if (!found.length) return null;
+  const owned = new Set(me.value?.cosmetics?.owned ?? []);
+  return (
+    <section class="col-group">
+      <h4 class="display col-group-h"><span>{say('Found in the field', 'dug up')}</span><span class="num dim">{found.filter((c) => owned.has(c.id)).length}/{found.length}</span></h4>
+      <ul class="col-list">
+        {found.map((c) => {
+          const have = owned.has(c.id);
+          return (
+            <li key={c.id} class={'card gear-seen' + (have ? '' : ' unseen')}>
+              <span class="beast-ico"><Icon name={have ? (c.kind === 'frame' ? 'bullseye' : 'laurels') : 'padlock'} size={26} /></span>
+              <span class="beast-main">
+                <b>{have ? c.names[f] : '???'}</b>
+                <small class="dim">{have
+                  ? (c.kind === 'frame' ? say('Avatar frame. Wear it from the You tab.', 'portrait frame. wear it from the you tab.') : say('Callsign colour. Wear it from the You tab.', 'name colour. wear it from the you tab.'))
+                  : say('Rare. Airdrops, elites, raids and landmark caches.', 'rare. airdrops, marked prey, raids, old places.')}</small>
+              </span>
+              {have && <Icon name="check-mark" size={18} />}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }
 

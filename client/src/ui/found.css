@@ -1,0 +1,23 @@
+/* A found cosmetic in a reveal: its own card, set apart from the gear around it. Survey: a tagged
+   specimen on paper with a hazard edge. Heat: a bright thing in the dark, haloed. */
+.reward-lines li.found-li { display: block; }
+.found { position: relative; display: grid; justify-items: center; gap: 6px; text-align: center; padding: 14px 16px 16px; border: 2px solid var(--accent); border-radius: 6px; background: var(--surface-2); animation: found-in .6s var(--ease) both; overflow: hidden; }
+.found::before { content: ''; position: absolute; inset: 0; pointer-events: none; opacity: .5; }
+.found-eyebrow { display: flex; gap: 6px; align-items: center; margin: 0; font-size: var(--fs-12); letter-spacing: .14em; text-transform: uppercase; font-weight: 800; color: var(--text); }
+.found-art { display: grid; place-items: center; min-height: 104px; padding: 4px 0; }
+.found-name { font-size: var(--fs-40); line-height: 1; padding: 6px 12px; }
+.found-title { font-size: var(--fs-28); line-height: 1.05; }
+.found-text { font-weight: 500; font-size: var(--fs-14); }
+.found-new { font-size: var(--fs-14); font-weight: 600; }
+.found-dup { display: flex; gap: 6px; align-items: center; font-size: var(--fs-14); font-weight: 600; }
+.found.dup { border-style: dashed; animation: found-fade .4s var(--ease) both; }
+.found.dup .found-art { opacity: .7; }
+
+:root[data-lens='survey'] .found { box-shadow: 4px 4px 0 var(--ink); background: color-mix(in srgb, var(--paper) 78%, var(--hazard)); }
+:root[data-lens='survey'] .found::before { background: repeating-linear-gradient(135deg, transparent 0 7px, color-mix(in srgb, var(--ink) 9%, transparent) 7px 8px); }
+:root[data-lens='heat'] .found { border-color: var(--hot); box-shadow: 0 0 34px color-mix(in srgb, var(--hot) 45%, transparent), inset 0 0 40px color-mix(in srgb, var(--hot) 14%, transparent); }
+:root[data-lens='heat'] .found::before { background: radial-gradient(circle at 50% 38%, color-mix(in srgb, var(--white-hot) 22%, transparent), transparent 62%); }
+:root[data-lens='heat'] .found-name { text-shadow: 0 0 14px currentColor; }
+
+@keyframes found-fade { from { opacity: 0; } }
+@keyframes found-in { 0% { opacity: 0; transform: scale(.82) rotate(-2deg); } 55% { opacity: 1; transform: scale(1.04) rotate(.6deg); } 100% { transform: none; } }

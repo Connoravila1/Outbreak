@@ -3899,3 +3899,210 @@ test "simulated location: a recently simulated player is not served as an Echo; 
     }
     try testing.expect(real_seen);
 }
+
+// --- XP tokens, found cosmetics, faction looks ------------------------------------------------------------
+
+test "XP tokens: caches and landmarks drop them" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var tok: [64]u8 = undefined;
+    try h.player("Scribe", "human", &tok);
+
+    // Police stations hold the most. Search one each window until a token turns up.
+    var b1: [200]u8 = undefined;
+    const arr = try std.fmt.allocPrint(testing.allocator, "[{s}]", .{try placeJson(&b1, "p1", "police", 5, "")});
+    defer testing.allocator.free(arr);
+    var got = false;
+    for (0..400) |_| {
+        h.advance(game.landmarks.window_ms);
+        var w = try locationWith(&h, &tok, base_lat, base_lon, arr);
+        const id = try testing.allocator.dupe(u8, (try landmarkIn(&w, "police")).?.get("id").?.string);
+        w.deinit();
+        defer testing.allocator.free(id);
+        var o = try h.ok("/api/open", &tok, "{{\"id\":\"{s}\"}}", .{id});
+        defer o.deinit();
+        if ((try o.at("loot.consumables")).object.get("xp_token") != null) {
+            got = true;
+            try testing.expect((try o.int("me.consumables.xp_token")) >= 1);
+            break;
+        }
+    }
+    try testing.expect(got);
+}
+
+test "XP tokens: using one pays a standard win's XP at your level, can level up, and is not for sale" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var tok: [64]u8 = undefined;
+    try h.player("Reader", "zombie", &tok);
+
+    var cat = try h.get("/api/catalog", null);
+    defer cat.deinit();
+    try testing.expectEqualStrings("Fresh Brain", try cat.str("consumables.9.names.zombie"));
+    try testing.expect(!(try hasEntry(&cat, "store", "sku", "xp_token")));
+
+    var none = try h.post("/api/use", &tok, "{\"consumable\":\"xp_token\"}");
+    defer none.deinit();
+    try testing.expectEqualStrings("none_left", try none.errorCode());
+
+    var g = try h.ok("/api/dev/grant", &tok, "{{\"consumable\":{{\"id\":\"xp_token\",\"n\":2}},\"xp\":90}}", .{});
+    g.deinit();
+    // Level 1 needs 100: a token (a level-1 win is 26 XP) tips it over, whatever buffs say.
+    var first = try h.ok("/api/use", &tok, "{{\"consumable\":\"xp_token\"}}", .{});
+    defer first.deinit();
+    try testing.expectEqual(@as(i64, game.progression.tokenXp(1)), try first.int("rewards.xp"));
+    try testing.expectEqual(@as(i64, 2), try first.int("rewards.level_up.to"));
+    try testing.expectEqual(@as(i64, 2), try first.int("me.level"));
+    try testing.expectEqual(@as(i64, 90 + 26 - 100), try first.int("me.xp"));
+    try testing.expectEqual(@as(i64, 1), try first.int("me.consumables.xp_token"));
+
+    // The second is worth a level-2 win, and the last one empties the stack.
+    var second = try h.ok("/api/use", &tok, "{{\"consumable\":\"xp_token\"}}", .{});
+    defer second.deinit();
+    try testing.expectEqual(@as(i64, game.progression.tokenXp(2)), try second.int("rewards.xp"));
+    try testing.expect((try second.at("rewards.level_up")) == .null);
+    try testing.expectEqual(@as(i64, 16 + 32), try second.int("me.xp"));
+    try testing.expect((try second.at("me.consumables")).object.get("xp_token") == null);
+}
+
+test "found cosmetics: a landmark cache can drop one, it is owned and wearable, a duplicate becomes salvage" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var tok: [64]u8 = undefined;
+    try h.player("Finder", "human", &tok);
+    var odds = try h.ok("/api/dev/cosmetic_odds", &tok, "{{\"scale\":1000}}", .{});
+    odds.deinit();
+
+    var cat = try h.get("/api/catalog", null);
+    defer cat.deinit();
+    var found_in_catalog: usize = 0;
+    for ((try cat.at("cosmetics")).array.items) |c| {
+        if (c.object.get("found").?.bool) {
+            found_in_catalog += 1;
+            try testing.expectEqual(@as(i64, 0), c.object.get("price").?.integer);
+            try testing.expect(c.object.get("unlock").? == .null);
+        }
+    }
+    try testing.expectEqual(game.cosmetics.found_count, found_in_catalog);
+
+    // Five places in one window: with four to find, one of the five is a repeat.
+    var arr: std.ArrayList(u8) = .empty;
+    defer arr.deinit(testing.allocator);
+    try arr.append(testing.allocator, '[');
+    for (0..5) |i| {
+        if (i > 0) try arr.append(testing.allocator, ',');
+        var item: [200]u8 = undefined;
+        var key: [16]u8 = undefined;
+        const key_s = try std.fmt.bufPrint(&key, "c{d}", .{i});
+        try arr.appendSlice(testing.allocator, try placeJson(&item, key_s, "diner", 5 + @as(f64, @floatFromInt(i)), ""));
+    }
+    try arr.append(testing.allocator, ']');
+    var w = try locationWith(&h, &tok, base_lat, base_lon, arr.items);
+    w.deinit();
+    const window = @divFloor(h.ctx.now(), game.landmarks.window_ms);
+
+    var seen: std.StringHashMapUnmanaged(void) = .empty;
+    defer {
+        var it = seen.keyIterator();
+        while (it.next()) |k| testing.allocator.free(k.*);
+        seen.deinit(testing.allocator);
+    }
+    var dups: usize = 0;
+    for (0..5) |i| {
+        var o = try h.ok("/api/open", &tok, "{{\"id\":\"l.c{d}.{d}\"}}", .{ i, window });
+        defer o.deinit();
+        try testing.expectEqual(@as(usize, 1), try o.len("loot.cosmetics"));
+        const id = try o.str("loot.cosmetics.0.id");
+        const ci = game.cosmetics.find(id).?;
+        try testing.expect(game.cosmetics.list[ci].found);
+        try testing.expect(try hasId(&o, "me.cosmetics.owned", id));
+        const dup = (try o.at("loot.cosmetics.0.duplicate")).bool;
+        try testing.expectEqual(seen.contains(id), dup);
+        if (dup) {
+            dups += 1;
+            // The repeat is salvage instead, and it is in the payout's total.
+            const want: i64 = game.cosmetics.duplicateSalvage(game.cosmetics.list[ci]);
+            try testing.expectEqual(want, try o.int("loot.cosmetics.0.salvage"));
+            try testing.expect(try o.int("loot.salvage") >= want);
+        } else {
+            try testing.expectEqual(@as(i64, 0), try o.int("loot.cosmetics.0.salvage"));
+            try seen.put(testing.allocator, try testing.allocator.dupe(u8, id), {});
+        }
+        h.advance(1000);
+    }
+    try testing.expect(dups >= 1);
+
+    // Worn like any other.
+    var it = seen.keyIterator();
+    const first = it.next().?.*;
+    const kind = game.cosmetics.list[game.cosmetics.find(first).?].kind;
+    var wear = try h.ok("/api/cosmetics/equip", &tok, "{{\"kind\":\"{s}\",\"id\":\"{s}\"}}", .{ @tagName(kind), first });
+    defer wear.deinit();
+    try testing.expectEqualStrings(first, try wear.str(if (kind == .color) "me.cosmetics.color" else "me.cosmetics.frame"));
+}
+
+test "found cosmetics: not for sale, and not wearable before they are found" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var tok: [64]u8 = undefined;
+    try h.player("Browser", "zombie", &tok);
+    try h.reachLevel(&tok, 2);
+    var gr = try h.ok("/api/dev/grant", &tok, "{{\"salvage\":5000}}", .{});
+    gr.deinit();
+    for (game.cosmetics.list) |c| {
+        if (!c.found) continue;
+        var r = try h.postf("/api/store/buy", &tok, "{{\"sku\":\"{s}\"}}", .{c.id});
+        defer r.deinit();
+        try testing.expectEqualStrings("not_for_sale", try r.errorCode());
+        var eq = try h.postf("/api/cosmetics/equip", &tok, "{{\"kind\":\"{s}\",\"id\":\"{s}\"}}", .{ @tagName(c.kind), c.id });
+        defer eq.deinit();
+        try testing.expectEqualStrings("not_owned", try eq.errorCode());
+    }
+}
+
+test "avatar looks: a faction treatment opens with its title tier; one above your level is refused" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var tok: [64]u8 = undefined;
+    try h.player("Mirror", "human", &tok);
+
+    var cat = try h.get("/api/catalog", null);
+    defer cat.deinit();
+    try testing.expectEqual(game.data.avatar_looks.len, try cat.len("avatar_looks"));
+    try testing.expectEqual(@as(i64, 5), try cat.int("avatar_looks.1.level"));
+    try testing.expectEqualStrings("Riot visor", try cat.str("avatar_looks.2.names.human"));
+
+    // An avatar without a look (every older save) is still fine, and so is the automatic one.
+    var plain = try h.ok("/api/avatar", &tok, "{{\"avatar\":{{\"skin\":3,\"hair\":9}}}}", .{});
+    plain.deinit();
+    var auto = try h.ok("/api/avatar", &tok, "{{\"avatar\":{{\"skin\":3,\"look\":0}}}}", .{});
+    auto.deinit();
+
+    var locked = try h.post("/api/avatar", &tok, "{\"avatar\":{\"skin\":3,\"look\":1}}");
+    defer locked.deinit();
+    try testing.expectEqual(@as(u16, 409), locked.status);
+    try testing.expectEqualStrings("look_locked", try locked.errorCode());
+    var out_of_range = try h.post("/api/avatar", &tok, "{\"avatar\":{\"look\":7}}");
+    defer out_of_range.deinit();
+    try testing.expectEqual(@as(u16, 400), out_of_range.status);
+    var me0 = try h.get("/api/me", &tok);
+    defer me0.deinit();
+    try testing.expect((try me0.at("avatar")).object.get("look").?.integer == 0);
+
+    try h.reachLevel(&tok, 10);
+    var ok1 = try h.ok("/api/avatar", &tok, "{{\"avatar\":{{\"skin\":3,\"look\":2}}}}", .{});
+    defer ok1.deinit();
+    try testing.expectEqual(@as(i64, 2), try ok1.int("me.avatar.look"));
+    // Level 10 does not reach the level-20 look.
+    var too_high = try h.post("/api/avatar", &tok, "{\"avatar\":{\"look\":3}}");
+    defer too_high.deinit();
+    try testing.expectEqualStrings("look_locked", try too_high.errorCode());
+    var me1 = try h.get("/api/me", &tok);
+    defer me1.deinit();
+    try testing.expectEqual(@as(i64, 2), try me1.int("avatar.look"));
+}

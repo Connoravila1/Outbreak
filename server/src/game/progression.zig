@@ -175,6 +175,11 @@ pub fn pveLossXp(win_xp: u32) u32 {
     return lossXp(win_xp, pve_loss_fraction);
 }
 
+/// XP in an XP token: one standard win at the player's own level. Paid as it is, no bonuses.
+pub fn tokenXp(level: u32) u32 {
+    return pveWinXp(level, .normal, 1.0);
+}
+
 pub fn cacheXp(level: u32) u32 {
     return 10 + 2 * level;
 }
@@ -297,7 +302,7 @@ test "unlock tables" {
     try std.testing.expectEqual(@as(usize, 1), unlockTexts(1, 2, &buf));
     try std.testing.expectEqualStrings("The Store", buf[0]);
     try std.testing.expectEqual(@as(usize, 0), unlockTexts(5, 6, &buf));
-    try std.testing.expectEqual(@as(usize, 5), unlockTexts(2, 5, &buf));
+    try std.testing.expectEqual(@as(usize, 6), unlockTexts(2, 5, &buf)); // ...and the first avatar look
     try std.testing.expectEqual(@as(usize, 0), abilitySlots(2));
     try std.testing.expectEqual(@as(usize, 1), abilitySlots(3));
     try std.testing.expectEqual(@as(usize, 1), abilitySlots(11));
@@ -331,6 +336,7 @@ test "pvp protection and level bands" {
 test "xp sources" {
     try std.testing.expectEqual(@as(u32, 20 + 60), pveWinXp(10, .normal, 1.0));
     try std.testing.expectEqual(@as(u32, 120), pveWinXp(10, .elite, 1.0));
+    try std.testing.expectEqual(@as(u32, 80), tokenXp(10));
     try std.testing.expectEqual(@as(u32, 320), pveWinXp(10, .boss, 1.0));
     try std.testing.expectEqual(@as(u32, 120), pveWinXp(10, .normal, 1.5));
     try std.testing.expectEqual(@as(u32, 20), pveLossXp(80));

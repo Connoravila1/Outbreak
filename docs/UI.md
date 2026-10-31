@@ -110,7 +110,8 @@ simulator panel beside it.
 - **Gear**: three slot cards at top (tap to see the item; long text in a sheet). Below them the
   inventory grid, filterable by slot and sortable by power or rarity. Item sheet: stats with a
   delta against equipped (▲▼), perks, Equip, Upgrade (cost), Scrap (value). Multi-select scrap
-  mode. Consumables row with Use. Abilities section: unlocked abilities and slots.
+  mode. Consumables row with Use (an XP token shows what it is worth, "+N XP at your level", and reading
+  it toasts the XP and plays the level-up scene if it tips a level). Abilities section: unlocked abilities and slots.
 - **Tasks**: daily missions with progress bars, a reset countdown, the streak, the weekly mission,
   and Claim buttons.
 - **War**: global faction bar, district bar, week countdown, top players this week, a leaderboard
@@ -162,6 +163,15 @@ simulator panel beside it.
 3. **CONTACT**: interrupts anything. Full-screen alert, a strong haptic pattern, "A Zombie is
    close. Level 14." Its gear names appear, then the fight plays automatically.
 4. **Level up**: a full-screen takeover with the new number, then the unlocks, named one per line.
+4b. **A found cosmetic**: a rare drop gets a card of its own, after the gear in a fight's result stack (or
+   in the reward list of a cache, airdrop or landmark): "Found in the field" over a preview (a colour shows
+   your callsign in it, a frame rings your portrait), its name and "Yours now. Wear it from the You tab."
+   Survey: a hazard-paper specimen card with a hard shadow. Heat: a haloed card that glows. It arrives with
+   the Legendary sound. A repeat is a quiet dashed card: "You already had it. +N salvage instead."
+4c. **Avatar looks**: the avatar editor's first tab ("Look" / "strain") lists the faction treatments with a
+   preview each, drawn for the player's own faction. Locked ones are dimmed, dashed and say "Level N" (the
+   level title tier they open at); tapping one does nothing. Not offered while making the very first face.
+   Reaching a look's level says so on the level-up screen and queues a first-time card.
 5. **A found note** (docs/LORE.md): after the gear, the result stack adds a torn scrap with the
    note's title. Survey: paper with a strip of tape. Heat: a smeared, warm fragment. Tap it and a
    full-screen reader opens, drawn on the paper of the note's form (ruled notebook, memo, email,

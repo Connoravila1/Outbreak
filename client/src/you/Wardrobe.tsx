@@ -29,6 +29,12 @@ function earnedBy(c: CatalogCosmetic): string {
   return a ? a.names[f] : '';
 }
 
+/** Why a locked one is locked: found in the field, or earned by an achievement. */
+function lockedHint(c: CatalogCosmetic): string {
+  if (c.found) return say('Found in the field: a rare drop from airdrops, elites, raids and landmark caches.', 'dug up in the field. rare. airdrops, elites, raids and landmarks.');
+  return say(`Earned by: ${earnedBy(c)}`, `earned: ${earnedBy(c).toLowerCase()}`);
+}
+
 /** Callsign colour and avatar frame: everything you own, one tap to wear. */
 export function Wardrobe() {
   const m = me.value;
@@ -59,11 +65,11 @@ export function Wardrobe() {
               <button
                 type="button" class="swatch" aria-pressed={color === c.id} disabled={busy || !have}
                 style={have ? { color: colorHex(c.id) } : undefined}
-                title={have ? c.names[f] : say(`Earned by: ${earnedBy(c)}`, `earned: ${earnedBy(c).toLowerCase()}`)}
+                title={have ? c.names[f] : lockedHint(c)}
                 onClick={() => set('color', c.id)}
               >
                 {have ? <span class="dot" /> : <Icon name="padlock" size={14} />}
-                <span class="sw-name">{c.names[f]}</span>
+                <span class="sw-name">{have ? c.names[f] : c.found ? say('Found in the field', 'dug up') : c.names[f]}</span>
               </button>
             </li>
           );
@@ -84,19 +90,19 @@ export function Wardrobe() {
             <li key={c.id}>
               <button
                 type="button" class={'frame-pick' + (have ? '' : ' locked')} aria-pressed={frame === c.id} disabled={busy || !have}
-                title={have ? c.text : say(`Earned by: ${earnedBy(c)}`, `earned: ${earnedBy(c).toLowerCase()}`)}
+                title={have ? c.text : lockedHint(c)}
                 onClick={() => set('frame', c.id)}
               >
                 {have
                   ? <FramedAvatar frame={c.id} spec={m.avatar} faction={f} level={m.level} lens={lens.value} size={68} />
                   : <span class="fp-lock"><Icon name="padlock" size={26} /></span>}
-                <span>{c.names[f]}</span>
+                <span>{have ? c.names[f] : c.found ? say('Found in the field', 'dug up') : c.names[f]}</span>
               </button>
             </li>
           );
         })}
       </ul>
-      <p class="dim wardrobe-note">{say('Colours and frames are for sale in the Store, or earned. They show on your profile, the boards and your clan, never in a fight.', 'bought, or earned. shown on your profile, the boards and your clan. never in a fight.')}</p>
+      <p class="dim wardrobe-note">{say('Colours and frames are for sale in the Store, earned, or found in the field. They show on your profile, the boards and your clan, never in a fight.', 'bought, earned, or dug up. shown on your profile, the boards and your clan. never in a fight.')}</p>
       <ErrorLine text={err} />
     </Section>
   );

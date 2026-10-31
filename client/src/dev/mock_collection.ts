@@ -52,11 +52,16 @@ const COS: Cos[] = [
   ['frame_barbed', 'frame', 'Barbed Wire', 'Bramble', 'A ring of wire and barbs.', 1000],
   ['frame_bloom', 'frame', 'Kessler Bloom', 'The Bloom', 'Spores creeping round the frame. Earned by claiming four sets of notes.', 0],
   ['frame_wreath', 'frame', 'Laurels', 'Thorn Crown', 'A wreath for the last survivor. Earned by reaching level 50.', 0],
+  ['color_tag', 'color', 'Bus Stop Tag', 'Livid', 'Your callsign in spray-can magenta. Found in the field.', 0, '#A0246B', '#FF8AC8'],
+  ['color_glow', 'color', 'Dead Glowstick', 'Marrow Glow', 'Your callsign in a dying chemical green. Found in the field.', 0, '#5A7A0A', '#D4F26B'],
+  ['frame_fence', 'frame', 'Cut Fence', 'Rib Cage', 'A scrap of chain-link, bent round your portrait. Found in the field.', 0],
+  ['frame_flare', 'frame', 'Spent Flare', 'Cinder Crown', 'The last sparks of a road flare. Found in the field.', 0],
 ];
 
 export const MOCK_COSMETICS: CatalogCosmetic[] = COS.map(([id, kind, h, z, text, price, survey, heat]) => ({
   id, kind, names: pair(h, z), text, price, survey: survey ?? null, heat: heat ?? null,
   unlock: ROWS.find((r) => r[9] === id)?.[0] ?? null,
+  found: text.endsWith('Found in the field.'),
 }));
 
 /** What the mock keeps per player for all of this. */

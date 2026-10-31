@@ -29,6 +29,12 @@ export function consumableName(id: string): string {
   return catalog.value?.consumables.find((c) => c.id === id)?.names[f] ?? id.replace(/_/g, ' ');
 }
 
+/** The icon of a consumable. XP tokens are a page to read for the living, something to eat for the infected. */
+export function consumableIcon(id: string): IconName {
+  if (id === 'xp_token') return faction.value === 'zombie' ? 'brain' : 'scroll-unfurled';
+  return 'medical-pack';
+}
+
 export function abilityName(id: string, f = faction.value ?? 'human'): string {
   return catalog.value?.abilities.find((a) => a.id === id)?.names[f] ?? id.replace(/_/g, ' ');
 }

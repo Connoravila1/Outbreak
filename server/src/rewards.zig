@@ -30,6 +30,8 @@ pub const Acc = struct {
     war_points: u32 = 0,
     /// Indexes into `game.notes.notes` found with this payout.
     notes: std.ArrayList(u16) = .empty,
+    /// Indexes into `game.cosmetics.list` found with this payout.
+    cosmetics: std.ArrayList(u8) = .empty,
     /// Queue the level-up as an undelivered event (for gains the player is not looking at, like
     /// walking); otherwise the response already shows it and the event only goes to the feed.
     deliver_level_up: bool = false,
@@ -52,6 +54,13 @@ pub const Acc = struct {
         for (self.notes.items) |i| found.set(i);
         var rng = game.rng.Rng.init(game.rng.hash(seed, .{"note"}));
         if (game.notes.roll(&rng, p.fac(), found, src, place)) |i| try self.notes.append(req.arena, i);
+    }
+
+    /// Roll for a found cosmetic from `src`, on its own random stream (from `seed`) so item drops
+    /// are the same with or without it.
+    pub fn rollCosmetic(self: *Acc, req: *Req, src: game.cosmetics.Source, seed: u64) error{OutOfMemory}!void {
+        var rng = game.rng.Rng.init(game.rng.hash(seed, .{"cosmetic"}));
+        if (game.cosmetics.roll(&rng, src, req.ctx.cosmetic_odds)) |i| try self.cosmetics.append(req.arena, i);
     }
 
     pub fn addConsumable(self: *Acc, c: data.Consumable, n: u32) void {
@@ -124,6 +133,22 @@ pub fn apply(req: *Req, p: *Player, acc: *Acc, district: ?[]const u8) HandlerErr
         }
     }
     out.items = item_views[0..kept];
+
+    // Found cosmetics: new ones are owned for good; one you already have becomes salvage.
+    if (acc.cosmetics.items.len > 0) {
+        const finds = try a.alloc(views.CosmeticFind, acc.cosmetics.items.len);
+        var n: usize = 0;
+        for (acc.cosmetics.items) |ci| {
+            const c = game.cosmetics.list[ci];
+            const dup = try ach_db.owns(req, p.id, c.id);
+            const sv: u32 = if (dup) game.cosmetics.duplicateSalvage(c) else 0;
+            if (!dup) try ach_db.grantCosmetic(req, p.id, c.id);
+            salvage += sv;
+            finds[n] = .{ .id = c.id, .kind = @tagName(c.kind), .duplicate = dup, .salvage = sv };
+            n += 1;
+        }
+        out.cosmetics = finds[0..n];
+    }
     out.salvage = salvage;
     p.salvage += salvage;
 

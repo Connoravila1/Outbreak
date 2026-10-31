@@ -45,7 +45,12 @@ export interface Rewards {
   notes?: NoteRef[];
   /** Achievements this payout completed; their salvage is paid on top of `salvage`. */
   achievements?: EarnedAchievement[];
+  /** Cosmetics found with this payout (rare drops). */
+  cosmetics?: FoundCosmetic[];
 }
+
+/** A cosmetic that dropped. A duplicate was turned into `salvage` (already counted in the payout's). */
+export interface FoundCosmetic { id: string; kind: CosmeticKind; duplicate: boolean; salvage: number }
 
 /** A newly earned achievement, named for the player's own faction. */
 export interface EarnedAchievement {
@@ -113,6 +118,8 @@ export interface Me {
   level: number;
   xp: number;
   xp_next: number;
+  /** What an XP token is worth now (a standard win at your level). */
+  token_xp: number;
   title: string;
   hp: number;
   max_hp: number;
@@ -294,10 +301,14 @@ export interface CatalogCosmetic {
   id: string; kind: CosmeticKind; names: Record<Faction, string>; text: string;
   /** Salvage; 0 means it is earned, not bought (`unlock` names the achievement). */
   price: number;
+  /** Drop-only: found in the field, never sold. */
+  found?: boolean;
   /** Callsign colours: the hex to draw it in on paper (Survey) and on thermal (Heat). */
   survey: string | null; heat: string | null;
   unlock: string | null;
 }
+/** A faction treatment for the avatar; index 0 is the automatic look. Opens when the player reaches `level`. */
+export interface CatalogLook { index: number; level: number; names: Record<Faction, string> }
 export interface CatalogStoreEntry { sku: string; name: string; price: number; text: string }
 export interface Catalog {
   version: number | string;
@@ -312,6 +323,7 @@ export interface Catalog {
   places?: CatalogPlace[];
   achievements?: CatalogAchievement[];
   cosmetics?: CatalogCosmetic[];
+  avatar_looks?: CatalogLook[];
   levels: {
     xp_to_next: number[];
     titles: Record<Faction, string[]>;

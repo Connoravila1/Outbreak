@@ -509,6 +509,7 @@ fn engageEnemy(req: *Req, jw: *Stringify, p: *Player, pos: live.Pos, id: []const
         if (en.tutorial) {
             try acc.addNote(req, game.notes.indexOf(game.notes.first_blood_id).?);
         } else try acc.rollNote(req, p, if (en.elite) .elite else .pve, null, o.seed);
+        if (en.elite and !en.tutorial) try acc.rollCosmetic(req, .elite, o.seed);
         acc.war_points = game.war.points(if (en.elite) .pve_elite else .pve_win);
         p.wins += 1;
         try ach_db.bump(req, p.id, .pve_wins, 1);
@@ -626,6 +627,7 @@ pub fn open(req: *Req, jw: *Stringify) HandlerError!void {
     var acc = rewards.Acc{ .xp = progression.cacheXp(p.level), .war_points = game.war.points(.cache) };
     try acc.addDrop(req, if (airdrop) loot.rollAirdrop(&lrng, p.level, mult) else loot.rollCache(&lrng, p.level, mult));
     try acc.rollNote(req, &p, if (airdrop) .airdrop else .cache, null, lrng.next());
+    if (airdrop) try acc.rollCosmetic(req, .airdrop, game.rng.hash(req.ctx.seed, .{ "cosmetic", p.id, id, req.now }));
     p.caches += 1;
     if (airdrop) try ach_db.bump(req, p.id, .airdrops, 1);
     const rw = try rewards.apply(req, &p, &acc, try districtOf(req.arena, lat, lon));
@@ -653,6 +655,7 @@ fn openLandmark(req: *Req, jw: *Stringify, p: *Player, pos: live.Pos, id: []cons
     var acc = rewards.Acc{ .xp = progression.cacheXp(p.level), .war_points = game.war.points(.cache) };
     try acc.addDrop(req, loot.rollLandmark(&lrng, p.level, rewards.lootMult(p, req.now), data.placeKind(place.place.kind)));
     try acc.rollNote(req, p, .landmark, place.place.kind, lrng.next());
+    try acc.rollCosmetic(req, .landmark, game.rng.hash(ctx.seed, .{ "cosmetic", p.id, id, req.now }));
     p.caches += 1;
     try ach_db.bump(req, p.id, .landmarks, 1);
     const rw = try rewards.apply(req, p, &acc, try districtOf(req.arena, place.place.lat, place.place.lon));

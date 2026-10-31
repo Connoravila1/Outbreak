@@ -3,12 +3,13 @@ import type { Battle, Item } from '../api';
 import { catalog, faction } from '../state/store';
 import { say } from '../ui/voice';
 import { Icon } from '../ui/Icon';
-import { consumableName, itemTitle, perkInfo, SLOT_ICON, statLine, uniqueLore } from '../gear/util';
+import { consumableIcon, consumableName, itemTitle, perkInfo, SLOT_ICON, statLine, uniqueLore } from '../gear/util';
 import * as fx from '../audio/fx';
 import { damageTaken, foeLabel, isPvp, outcomeLine, outcomeWord } from './names';
 import { stanceName } from '../state/stance';
 import type { ContactRank } from '../api';
 import { NoteScrap } from '../notes/Scrap';
+import { FoundCosmetic } from '../ui/FoundCosmetic';
 
 /** XP position before the fight, as a fraction of that level's bar, and after. */
 function xpSpan(b: Battle): { from: number; to: number; gain: number } {
@@ -151,9 +152,11 @@ export function Result({ battle, onContinue }: { battle: Battle; onContinue: () 
   const n = r.items.length;
   const cons = Object.entries(r.consumables);
   const notes = r.notes ?? [];
-  // After the gear: found notes get a step of their own.
+  const finds = r.cosmetics ?? [];
+  // After the gear: found notes get a step of their own, and a found cosmetic the last one.
   const noteStep = 4 + n;
-  const final = noteStep + (notes.length ? 1 : 0);
+  const cosStep = noteStep + (notes.length ? 1 : 0);
+  const final = cosStep + (finds.length ? 1 : 0);
   const [step, setStep] = useState(0);
   const [fast, setFast] = useState(false);
   const btn = useRef<HTMLButtonElement>(null);
@@ -161,13 +164,14 @@ export function Result({ battle, onContinue }: { battle: Battle; onContinue: () 
   useEffect(() => {
     if (step >= final) return;
     const nextLegendary = step >= 3 && step < 3 + n && r.items[step - 3].rarity === 'legendary';
-    const d = step === 0 ? 650 : step === 1 ? 950 : step === 2 ? 650 : step < 3 + n ? (nextLegendary ? 1500 : 600) : 450;
+    const d = finds.length && step === cosStep - 1 ? 900 : step === 0 ? 650 : step === 1 ? 950 : step === 2 ? 650 : step < 3 + n ? (nextLegendary ? 1500 : 600) : 450;
     const t = window.setTimeout(() => setStep(step + 1), d);
     return () => clearTimeout(t);
   }, [step]);
 
   useEffect(() => {
     if (step === 0) { if (won) fx.held(); else fx.fell(); return; }
+    if (finds.length && step === cosStep) { if (finds[0].duplicate) fx.lootFlip('rare'); else fx.legendary(); return; }
     if (notes.length && step === noteStep) { fx.lootFlip(notes[0].rarity === 'legendary' ? 'rare' : notes[0].rarity); return; }
     const flipped = step - 3; // items flipped so far
     if (step > 3 && flipped >= 1 && flipped <= n) {
@@ -210,13 +214,18 @@ export function Result({ battle, onContinue }: { battle: Battle; onContinue: () 
             {notes.map((nt, k) => <NoteScrap key={nt.id} r={nt} delay={k * 160} />)}
           </div>
         )}
+        {finds.length > 0 && step >= cosStep && (
+          <ul class="reward-lines res-found">
+            {finds.map((c) => <li key={c.id} class="found-li"><FoundCosmetic find={c} /></li>)}
+          </ul>
+        )}
         {step >= final && cons.length > 0 && (
           <ul class="reward-lines res-cons">
-            {cons.map(([id, c]) => <li key={id}><Icon name="medical-pack" size={18} /> {consumableName(id)} ×{c}</li>)}
+            {cons.map(([id, c]) => <li key={id}><Icon name={consumableIcon(id)} size={18} /> {consumableName(id)} ×{c}</li>)}
           </ul>
         )}
         {step >= final && !!r.auto_scrapped && <p class="dim res-full">{say(`Pack full: extra gear scrapped for ${r.auto_scrapped} salvage.`, `no room. the extra was torn down for ${r.auto_scrapped} salvage.`)}</p>}
-        {step >= final && n === 0 && cons.length === 0 && notes.length === 0 && !r.auto_scrapped && <p class="dim">{say('No drops this time.', 'nothing left to take.')}</p>}
+        {step >= final && n === 0 && cons.length === 0 && notes.length === 0 && finds.length === 0 && !r.auto_scrapped && <p class="dim">{say('No drops this time.', 'nothing left to take.')}</p>}
       </div>
       <p class="sr-only" role="status" aria-live="polite">
         {step >= final ? `${outcomeWord(won, battle)}. ${say('Salvage', 'salvage')} ${r.salvage}. ${say('War points', 'war points')} ${r.war_points}.${n ? ` ${n} ${n === 1 ? 'item' : 'items'}: ${r.items.map(itemTitle).join(', ')}.` : ''}` : ''}

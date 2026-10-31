@@ -342,8 +342,16 @@ heals.
 | buff_xp | Field Manual | Hive Memory | +25% XP for 30 min |
 | buff_loot | Lucky Coin | Carrion Scent | +50% cache/loot chance for 30 min |
 | flag | Territory Flag | Infestation Marker | Claim a Stronghold for your clan |
+| xp_token | Veteran's Logbook | Fresh Brain | Gain XP equal to one standard win at your level (`pveWinXp(L)` = `20 + 6L`) |
 
 Human Resolve makes heals 25% stronger. Buffs of the same kind refresh, they don't stack.
+
+**XP tokens** are the original's "XP tokens" loot. Found only in caches, airdrops and landmark caches
+(never from fights), never sold (the Store already has the XP Boost). Using one from the pack pays its XP
+as it is, with none of the XP bonuses (no buff, boost or underdog multiplier), through the normal payout:
+the level-up scene and achievements follow. `Me.token_xp` says what one is worth now. Because they are a
+win's worth and drop at a few percent of cache rolls, they add about 1.5% to the XP a player earns over a
+whole career (simulator, "XP tokens" report), which leaves every pacing target where it was.
 
 ## 7. The world
 
@@ -400,6 +408,18 @@ each 75% item (Uncommon or better, Legendary ×3), with double salvage. Contact 
 `req ≤ L`, weighted toward the top (`weight = 1 + 3*max(0, 1 - (L - req)/8)`), then a rarity from
 the table above. Consumable drops (relative weights): heal_s 38, heal_m 20, revive 4, each buff 6;
 never flags. Lucky perks and the loot buff multiply the item and consumable chances.
+
+XP tokens join the consumable roll of caches (weight 10 beside the others' 92, so about 10% of a cache's
+consumables), airdrops (16, about 15%) and landmark caches (by kind: Pharmacy 0, Gas Station 3, Grocery 3,
+Hardware 5, Outfitter 5, Diner 6, Police 8). PvE, Contact and Echo wins never drop one.
+
+**Found cosmetics.** The original lists cosmetics as loot. Four drop-only cosmetics (two callsign colours,
+two avatar frames, section 17) can turn up with a payout, rolled on their own random stream so item drops are
+unchanged: an airdrop 8%, a landmark cache 1.6%, an elite win 0.6%, and a raid kill 40% for the top three
+damage dealers, 15% for the other contributors. The simulator, with stated assumptions about places and
+airdrops met (1.5 landmarks and 0.25 airdrops per active hour, one raid win per 28 hours), puts a dedicated
+player at one find per 20.7 active hours (median time to the first: 21 hours; target 15-30). A repeat of a
+cosmetic you own is converted to salvage (colour 150, frame 250) and says so.
 
 ### Sanctuaries (Safe Zones, from the original)
 
@@ -610,6 +630,7 @@ deferred, cosmetic-only if ever added).
 | Supply Requisition (random item of your level, Uncommon+) | 150 |
 | Inventory +10 slots | 400, then +200 each |
 | XP Boost (+50% for 1 h) | 200 |
+| XP tokens, found cosmetics | not sold (found in the field) |
 | Cosmetics: callsign colours 250–400, avatar frames 400–1000 (section 17) | 250–1000 |
 
 ## 14. Identity and avatar
@@ -618,7 +639,25 @@ deferred, cosmetic-only if ever added).
   real-world encounter.
 - **Avatar** (original: gender, race, faction skins): layered illustrated portrait — face shape,
   skin tone, hair, and a faction treatment (human: grime, bandages, gear; zombie: decay stages that
-  advance with level). More faction skins unlock with titles.
+  advance with level). That automatic treatment is the avatar's **look 0**. More faction skins unlock
+  with titles: each is a look the player chooses in the avatar editor (tab "Look" / "strain"), opening at
+  the level where a new title does. The avatar's `look` field (0-6) carries the choice; an avatar saved
+  before it existed has none and reads as 0. The server refuses a look above the player's level (409
+  `look_locked`); the client shows locked ones with their level.
+
+  | Look | Opens at | Human | Zombie |
+  |---|---|---|---|
+  | 0 | 1 | Standard issue (gear by level) | As it comes (decay by level) |
+  | 1 | 5 (Forager / Lurcher) | Scavenged scarf: a knitted scarf, a cheek bandage | Veined: veins, hot in Heat |
+  | 2 | 10 (Defender / Lurker) | Riot visor: hard-shell helmet, clear visor, straps | Torn skin: torn cheek, open jaw |
+  | 3 | 20 (Sentinel / Ravager) | Field paint: camouflage stripes, a camouflage bandana | Bared bone: the jaw laid open |
+  | 4 | 30 (Vanguard / Alpha) | Hardened kit: helmet and lamp, respirator, pouches, shoulder pad | Fungal bloom: bracket fungus on the temple, jaw and shoulder, spores |
+  | 5 | 35 (Commander / Dread) | Command coat: stand-up collar, lapels, epaulettes, peaked cap | Burning eyes: the bloom, and eyes that flare |
+  | 6 | 50 (Last Hope / Patient Zero) | Last Hope sash: a hazard sash and a medal, a bandaged brow | Spore crown: the bloom, burning eyes, antlers of bone and fungus |
+
+  Each opens a line on the level-up screen ("A new avatar look") and a first-time card. Both lenses draw
+  every look: Survey in ink and paper, Heat in the thermal ramp (plastic reads cold and dark, veins and
+  fungus hot).
 - **Account**: three ways in. **Sign in with Google** or **Sign in with Apple** ties the survivor to
   an account so it can be picked up on any phone; the game keeps only the provider's sign-in ID and,
   if shared, an email. **Guest** play needs nothing: the survivor lives on one phone and can be
@@ -703,6 +742,16 @@ portrait on the profile. Each colour has two inks, one for paper (Survey) and on
 | Violet Ink / Bruise | 400 | Barbed Wire / Bramble | 1,000 |
 | Verdigris / Gill | 400 | Kessler Bloom / The Bloom: earned (four sets) | - |
 | Heirloom Gold / Trophy Gold: earned (named Legendary) | - | Laurels / Thorn Crown: earned (level 50) | - |
+| Bus Stop Tag / Livid: found | - | Cut Fence / Rib Cage: found | - |
+| Dead Glowstick / Marrow Glow: found | - | Spent Flare / Cinder Crown: found | - |
+
+**Found in the field.** Four cosmetics are drop-only (see Loot in section 7 for the rates): the colours Bus
+Stop Tag (spray-can magenta) / Livid and Dead Glowstick (chemical green) / Marrow Glow, and the frames Cut
+Fence (chain-link, cut open) / Rib Cage and Spent Flare (a burst of sparks) / Cinder Crown. They cannot be bought
+(409 `not_for_sale`). A find is a moment: the reveal gives it a card of its own after the gear (Survey: a tagged
+specimen on hazard paper; Heat: a haloed bright thing in the dark), and a repeat reads "You already had it" with
+the salvage it became. The collection log's Gear tab lists them under "Found in the field" as `???` until found;
+the wardrobe shows the ones not yet found locked with the same words.
 
 Map themes were left out on purpose: each lens owns its map palette, and a purchasable map colour
 would blur which side you are looking through.

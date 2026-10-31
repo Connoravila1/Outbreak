@@ -12,7 +12,10 @@ export interface Ctx {
   id: string;
   zombie: boolean;
   stage: number; // zombie decay, 0..4
-  tier: number; // human gear tier (level / 5)
+  tier: number; // human gear tier (level / 5): dirt, cheek bandage, brow wrap
+  bodyTier: number; // neckwear, straps, pouches, shoulder pad
+  headTier: number; // helmet and lamp
+  look: number; // faction look (0 = automatic, by level)
   /** Skin as drawn: tone and thermal value after decay. */
   skin: string;
   skinH: number;
@@ -417,7 +420,7 @@ export function HumanFace({ c }: { c: Ctx }) {
 
 /** Gear worn on the neck and shoulders (drawn over the garment). */
 export function HumanGearBody({ c }: { c: Ctx }) {
-  const { P, tier, nk, sw } = c;
+  const { P, bodyTier: tier, nk, sw } = c;
   const acc = P.heat ? P.fill(0.72) : P.accent;
   const dark = P.heat ? P.fill(0.22) : P.ink;
   return (
@@ -451,7 +454,7 @@ export function HumanGearBody({ c }: { c: Ctx }) {
 
 /** Headgear (drawn over the hair). */
 export function HumanGearHead({ c }: { c: Ctx }) {
-  const { P, tier, g } = c;
+  const { P, headTier: tier, g } = c;
   if (tier < 3) return null;
   const hw = g.w + 1.2;
   const dark = P.heat ? P.fill(0.18) : P.ink;
@@ -471,7 +474,8 @@ const TEAR = 'M57 55.4L61.6 53L63.6 57L67 56.4L66.4 61L69.4 63.6L65.2 65.4L66 69
 
 export function ZombieFace({ c }: { c: Ctx }) {
   const { P, stage } = c;
-  const vein = P.heat ? P.fill(0.2) : P.accent;
+  // A chosen look shows the veins hot (blood runs warm); the automatic one keeps them dark.
+  const vein = P.heat ? P.fill(c.look > 0 ? 0.9 : 0.2) : P.accent;
   const muscle = P.heat ? P.fill(0.66) : mix(P.paper, P.accent, 0.62);
   const deep = P.heat ? P.fill(0.28) : P.ink;
   const bone = P.heat ? P.fill(0.5) : P.paper;

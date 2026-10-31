@@ -101,6 +101,7 @@ pub fn settle(req: *Req, raid_id: []const u8, killed: bool) HandlerError!void {
         } else if (rng.chance(0.5)) {
             try acc.items.append(req.arena, game.loot.rollItem(&rng, .{ .level = pl.level, .min_rarity = .uncommon }));
         }
+        try acc.rollCosmetic(req, if (rank < 3) .raid_top else .raid, game.rng.hash(req.ctx.seed, .{ "raidcosmetic", raid_id, c.pid }));
         // Everyone who helped takes a note from the wreckage.
         try acc.rollNote(req, &pl, .raid, null, game.rng.hash(req.ctx.seed, .{ "raidnote", raid_id, c.pid }));
         try ach_db.bump(req, pl.id, .raid_kills, 1);
