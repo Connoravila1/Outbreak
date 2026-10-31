@@ -55,17 +55,19 @@ const TimeView = struct { phase: []const u8, changes_at: i64 };
 
 const Fix = struct { lat: f64, lon: f64, acc: f64 = 0, sanctuary: bool = false, places: []const landmarks.Report = &.{} };
 
-pub fn location(req: *Req, jw: *Stringify) HandlerError!void {
-    const fix = try req.json(Fix);
+/// Validate a posted fix against the player's last position (speed limit), pay walking XP and
+/// store it as their live position. A rejected jump keeps the old position.
+fn acceptFix(req: *Req, p: *Player, fix: Fix, source: live.Source) HandlerError!live.Pos {
     if (!(fix.lat >= -90 and fix.lat <= 90 and fix.lon >= -180 and fix.lon <= 180)) {
         return req.fail(400, "bad_request", "That is not a valid position.");
     }
     const ctx = req.ctx;
     const now = req.now;
-    var p = (try model.load(req, req.pid)).?;
     const acc: f32 = @floatCast(std.math.clamp(if (std.math.isNan(fix.acc)) 0 else fix.acc, 0, 10_000));
 
-    var pos = live.Pos{ .lat = fix.lat, .lon = fix.lon, .acc = acc, .sanctuary = fix.sanctuary, .faction = p.fac(), .at = now };
+    var pos = live.Pos{ .lat = fix.lat, .lon = fix.lon, .acc = acc, .sanctuary = fix.sanctuary, .faction = p.fac(), .at = now, .source = source };
+    // Patrol fixes come about once a minute, so a walk is credited over a longer gap.
+    const walk_gap_ms: i64 = if (source == .patrol) patrol_walk_gap_ms else 60_000;
     if (ctx.live.position(p.id, now)) |prev| {
         const d = geo.haversineM(prev.lat, prev.lon, fix.lat, fix.lon);
         const dt_s = @max(1.0, @as(f64, @floatFromInt(now - prev.at)) / 1000.0);
@@ -74,12 +76,24 @@ pub fn location(req: *Req, jw: *Stringify) HandlerError!void {
             pos = prev;
         } else {
             pos.carry_m = prev.carry_m;
-            if (d / dt_s <= progression.walk_max_speed_ms and now - prev.at <= 60_000 and d >= 3.0) pos.carry_m += d;
+            if (d / dt_s <= progression.walk_max_speed_ms and now - prev.at <= walk_gap_ms and d >= 3.0) pos.carry_m += d;
         }
     }
 
-    try payWalking(req, &p, &pos);
+    try payWalking(req, p, &pos);
     try ctx.live.setPosition(p.id, pos);
+    return pos;
+}
+
+/// A Patrol check-in may follow the last one by up to this long and still count as walking.
+const patrol_walk_gap_ms: i64 = 150_000;
+
+pub fn location(req: *Req, jw: *Stringify) HandlerError!void {
+    const fix = try req.json(Fix);
+    const ctx = req.ctx;
+    const now = req.now;
+    var p = (try model.load(req, req.pid)).?;
+    const pos = try acceptFix(req, &p, fix, .foreground);
 
     // Everything below is a function of the accepted position.
     var enemies: std.ArrayList(EnemyView) = .empty;
@@ -132,6 +146,22 @@ pub fn location(req: *Req, jw: *Stringify) HandlerError!void {
         .raids = raids.items,
         .events = try events.takeUndelivered(req, p.id),
     });
+}
+
+// --- /api/patrol -----------------------------------------------------------------------------------------
+
+const PatrolFix = struct { lat: f64, lon: f64, acc: f64 = 0, sanctuary: bool = false };
+
+/// A background check-in from the phone's Patrol service: keeps the player live (Contact can find
+/// them), pays walking, and returns only what a notification needs. Nothing about the world
+/// around the player is computed.
+pub fn patrol(req: *Req, jw: *Stringify) HandlerError!void {
+    const fix = try req.json(PatrolFix);
+    var p = (try model.load(req, req.pid)).?;
+    _ = try acceptFix(req, &p, .{ .lat = fix.lat, .lon = fix.lon, .acc = fix.acc, .sanctuary = fix.sanctuary }, .patrol);
+    const evs = try events.takeUnnotified(req, p.id);
+    const me = views.meLite(&p, req.now);
+    try jw.write(.{ .events = evs, .hp = me.hp, .downed_until = me.downed_until });
 }
 
 fn timeView(now: i64, lon: f64) TimeView {
@@ -341,7 +371,7 @@ fn hostilesNear(req: *Req, p: *const Player, pos: live.Pos) bool {
     while (it.next()) |e| {
         if (e.key_ptr.* == p.id) continue;
         const o = e.value_ptr.*;
-        if (req.now - o.at > live.position_ttl_ms or o.sanctuary or o.faction == p.fac()) continue;
+        if (!o.fresh(req.now) or o.sanctuary or o.faction == p.fac()) continue;
         if (geo.haversineM(pos.lat, pos.lon, o.lat, o.lon) <= hostile_radius_m) return true;
     }
     return false;

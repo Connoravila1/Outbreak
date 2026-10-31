@@ -458,6 +458,10 @@ const migrations = [_][:0]const u8{
     \\ALTER TABLE players ADD COLUMN stance INTEGER NOT NULL DEFAULT 1;
     \\ALTER TABLE players ADD COLUMN bestiary TEXT NOT NULL DEFAULT '';
     ,
+    // Patrol: an event can be announced by a notification (notified) before the app shows it (delivered).
+    \\ALTER TABLE events ADD COLUMN notified INTEGER NOT NULL DEFAULT 0;
+    \\UPDATE events SET notified = delivered;
+    ,
 };
 
 // --- Tests -------------------------------------------------------------------------------------------

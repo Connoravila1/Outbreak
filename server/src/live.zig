@@ -11,6 +11,10 @@ const landmarks = game.landmarks;
 const Allocator = std.mem.Allocator;
 
 pub const position_ttl_ms: i64 = 2 * 60 * 1000;
+/// A Patrol check-in comes about once a minute, so it keeps a player matchable for longer.
+pub const patrol_ttl_ms: i64 = 4 * 60 * 1000;
+
+pub const Source = enum { foreground, patrol };
 
 pub const Pos = struct {
     lat: f64,
@@ -21,6 +25,16 @@ pub const Pos = struct {
     at: i64,
     /// Metres walked since walking XP was last paid out.
     carry_m: f64 = 0,
+    source: Source = .foreground,
+
+    pub fn ttlMs(self: Pos) i64 {
+        return if (self.source == .patrol) patrol_ttl_ms else position_ttl_ms;
+    }
+
+    /// Still current at `now` (a Patrol position lasts longer than a foreground one).
+    pub fn fresh(self: Pos, now: i64) bool {
+        return now - self.at <= self.ttlMs();
+    }
 };
 
 /// An Echo offered to one player (or a tombstone recording that this window rolled nothing).
@@ -115,10 +129,10 @@ pub const Live = struct {
         self.landmark_opens.deinit(self.gpa);
     }
 
-    /// The latest accepted position, or null if there is none or it is older than two minutes.
+    /// The latest accepted position, or null if there is none or it has expired (two minutes; four for Patrol).
     pub fn position(self: *const Live, pid: i64, now: i64) ?Pos {
         const p = self.positions.get(pid) orelse return null;
-        if (now - p.at > position_ttl_ms) return null;
+        if (!p.fresh(now)) return null;
         return p;
     }
 
@@ -130,7 +144,7 @@ pub const Live = struct {
         var n: usize = 0;
         var it = self.positions.valueIterator();
         while (it.next()) |p| {
-            if (now - p.at <= position_ttl_ms) n += 1;
+            if (p.fresh(now)) n += 1;
         }
         return n;
     }
@@ -288,7 +302,7 @@ pub const Live = struct {
     pub fn prune(self: *Live, now: i64) void {
         pruneMap(Pos, &self.positions, now, struct {
             fn old(p: Pos, t: i64) bool {
-                return t - p.at > position_ttl_ms;
+                return !p.fresh(t);
             }
         }.old);
         pruneMap(Echo, &self.echoes, now, struct {
@@ -336,6 +350,19 @@ test "positions expire after two minutes" {
     try std.testing.expect(live.position(2, 1000) == null);
     try std.testing.expectEqual(@as(usize, 1), live.online(2000));
     live.prune(1000 + position_ttl_ms + 5);
+    try std.testing.expectEqual(@as(usize, 0), live.positions.count());
+}
+
+test "a patrol position lasts four minutes" {
+    var live = Live.init(std.testing.allocator);
+    defer live.deinit();
+    try live.setPosition(1, .{ .lat = 1, .lon = 2, .acc = 5, .sanctuary = false, .at = 1000, .source = .patrol });
+    try std.testing.expect(live.position(1, 1000 + position_ttl_ms + 1) != null);
+    try std.testing.expect(live.position(1, 1000 + patrol_ttl_ms) != null);
+    try std.testing.expect(live.position(1, 1001 + patrol_ttl_ms) == null);
+    live.prune(1000 + position_ttl_ms + 5);
+    try std.testing.expectEqual(@as(usize, 1), live.positions.count());
+    live.prune(1001 + patrol_ttl_ms);
     try std.testing.expectEqual(@as(usize, 0), live.positions.count());
 }
 

@@ -423,7 +423,7 @@ pub fn refreshSnapshot(req: *Req, p: *const Player) HandlerError!void {
 
 pub fn pushEvent(req: *Req, pid: i64, kind: []const u8, text: []const u8, battle: ?[]const u8, rewards: ?[]const u8, delivered: bool) HandlerError!void {
     try req.ctx.db.run(
-        "INSERT INTO events(player_id, at, type, text, battle, rewards, delivered) VALUES(?,?,?,?,?,?,?)",
-        .{ pid, req.now, kind, text, battle, rewards, @intFromBool(delivered) },
+        "INSERT INTO events(player_id, at, type, text, battle, rewards, delivered, notified) VALUES(?,?,?,?,?,?,?,?)",
+        .{ pid, req.now, kind, text, battle, rewards, @intFromBool(delivered), @intFromBool(delivered) },
     );
 }

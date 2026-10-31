@@ -56,7 +56,7 @@ fn contacts(ctx: *Ctx, now: i64) !void {
     var it = ctx.live.positions.iterator();
     while (it.next()) |e| {
         const pos = e.value_ptr.*;
-        if (now - pos.at > live.position_ttl_ms or pos.sanctuary) continue;
+        if (!pos.fresh(now) or pos.sanctuary) continue;
         try ids.append(gpa, e.key_ptr.*);
     }
     if (ids.items.len < 2) return;

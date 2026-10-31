@@ -39,7 +39,38 @@ pub const EventView = struct {
     }
 };
 
-/// Undelivered events, oldest first, marked delivered.
+/// What a notification needs: no Battle, no Rewards.
+pub const NoticeView = struct { id: []const u8, type: []const u8, text: []const u8, at: i64 };
+
+/// Events not yet notified (a Patrol check-in), oldest first, marked notified but not delivered:
+/// the app still receives them, with the full Battle, when it opens.
+pub fn takeUnnotified(req: *Req, pid: i64) HandlerError![]const NoticeView {
+    const a = req.arena;
+    var list: std.ArrayList(NoticeView) = .empty;
+    var last: i64 = 0;
+    {
+        var st = try req.ctx.db.query(
+            "SELECT id, at, type, text FROM events WHERE player_id = ? AND notified = 0 ORDER BY id LIMIT 20",
+            .{pid},
+        );
+        defer st.finalize();
+        while (try st.step()) {
+            last = st.int(0);
+            try list.append(a, .{
+                .id = try std.fmt.allocPrint(a, "{d}", .{last}),
+                .at = st.int(1),
+                .type = try st.dupe(a, 2),
+                .text = try st.dupe(a, 3),
+            });
+        }
+    }
+    if (list.items.len > 0) {
+        try req.ctx.db.run("UPDATE events SET notified = 1 WHERE player_id = ? AND notified = 0 AND id <= ?", .{ pid, last });
+    }
+    return list.items;
+}
+
+/// Undelivered events, oldest first, marked delivered (and notified: the player has seen them).
 pub fn takeUndelivered(req: *Req, pid: i64) HandlerError![]const EventView {
     const a = req.arena;
     var list: std.ArrayList(EventView) = .empty;
@@ -61,7 +92,7 @@ pub fn takeUndelivered(req: *Req, pid: i64) HandlerError![]const EventView {
         }
     }
     if (list.items.len > 0) {
-        try req.ctx.db.run("UPDATE events SET delivered = 1 WHERE player_id = ? AND delivered = 0 AND id <= ?", .{ pid, lastId(list.items) });
+        try req.ctx.db.run("UPDATE events SET delivered = 1, notified = 1 WHERE player_id = ? AND delivered = 0 AND id <= ?", .{ pid, lastId(list.items) });
     }
     return list.items;
 }

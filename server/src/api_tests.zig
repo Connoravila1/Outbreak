@@ -2314,3 +2314,153 @@ test "day: Zombies earn +15% PvE XP, and the same enemy is softer for a Human th
     const got: u32 = @intCast(try b.int("rewards.xp"));
     try testing.expect(got >= expect_xp and got <= expect_xp * 5 / 4 + 1);
 }
+
+// --- Patrol ------------------------------------------------------------------------------------------------
+
+fn patrol(h: *Harness, token: []const u8, lat: f64, lon: f64) !Res {
+    return h.ok("/api/patrol", token, "{{\"lat\":{d},\"lon\":{d},\"acc\":20}}", .{ lat, lon });
+}
+
+test "patrol: a check-in answers with events, hp and downed_until only, and needs a faction" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var a: [64]u8 = undefined;
+    try h.player("Walker", "human", &a);
+
+    var r = try patrol(&h, &a, base_lat, base_lon);
+    defer r.deinit();
+    try testing.expectEqual(@as(usize, 3), r.root().object.count());
+    try testing.expectEqual(@as(usize, 0), try r.len("events"));
+    try testing.expect(try r.int("hp") > 0);
+    try testing.expect((try r.at("downed_until")) == .null);
+    const pid = try h.playerId("Walker");
+    try testing.expect(h.ctx.live.position(pid, h.ctx.now()).?.source == .patrol);
+
+    var bad = try h.post("/api/patrol", &a, "{\"lat\":91,\"lon\":0}");
+    defer bad.deinit();
+    try testing.expectEqual(@as(u16, 400), bad.status);
+    var nobody = try h.post("/api/patrol", null, "{\"lat\":1,\"lon\":2}");
+    defer nobody.deinit();
+    try testing.expectEqual(@as(u16, 401), nobody.status);
+}
+
+test "patrol: a check-in keeps a player live for four minutes; a jump is refused" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var a: [64]u8 = undefined;
+    try h.player("Walker", "human", &a);
+    const pid = try h.playerId("Walker");
+
+    var r = try patrol(&h, &a, base_lat, base_lon);
+    r.deinit();
+    h.advance(live.position_ttl_ms + 1000);
+    try testing.expect(h.ctx.live.position(pid, h.ctx.now()) != null);
+    h.advance(live.patrol_ttl_ms - live.position_ttl_ms - 1000);
+    try testing.expect(h.ctx.live.position(pid, h.ctx.now()) != null);
+    h.advance(1);
+    try testing.expect(h.ctx.live.position(pid, h.ctx.now()) == null);
+
+    // A fresh foreground fix has the short life again.
+    var w = try h.location(&a, base_lat, base_lon);
+    w.deinit();
+    try testing.expect(h.ctx.live.position(pid, h.ctx.now()).?.source == .foreground);
+
+    // An impossible jump keeps the old position.
+    h.advance(60_000);
+    var j = try patrol(&h, &a, base_lat + 0.5, base_lon);
+    j.deinit();
+    const pos = h.ctx.live.position(pid, h.ctx.now()).?;
+    try testing.expect(@abs(pos.lat - base_lat) < 0.001);
+}
+
+test "patrol: walking is paid over a one minute cadence" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var a: [64]u8 = undefined;
+    try h.player("Walker", "human", &a);
+    const pid = try h.playerId("Walker");
+
+    var r = try patrol(&h, &a, base_lat, base_lon);
+    r.deinit();
+    // 80 m in 60 s is a walk.
+    for (1..4) |i| {
+        h.advance(60_000);
+        var s = try patrol(&h, &a, base_lat + @as(f64, @floatFromInt(i)) * 80.0 / 111_320.0, base_lon);
+        s.deinit();
+    }
+    const walked = (try h.ctx.db.scalar("SELECT distance_m FROM players WHERE id = ?", .{pid})).?;
+    try testing.expect(walked >= 200);
+}
+
+test "patrol: a foreground and a patrol player fight; patrol notifies, the app still delivers" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var a: [64]u8 = undefined;
+    var z: [64]u8 = undefined;
+    try h.player("Hank", "human", &a);
+    try h.player("Zed", "zombie", &z);
+    try h.reachLevel(&a, 6);
+    try h.reachLevel(&z, 7);
+
+    // Hank is out on patrol; Zed has the app open. Three minutes pass, then Zed's next fix arrives.
+    var p0 = try patrol(&h, &a, base_lat, base_lon);
+    p0.deinit();
+    h.advance(3 * 60 * 1000);
+    var wz = try h.location(&z, base_lat + 30.0 / 111_320.0, base_lon);
+    defer wz.deinit();
+    tick.runLocked(&h.ctx, h.ctx.now());
+    try testing.expectEqual(@as(?i64, 1), try h.ctx.db.scalar("SELECT COUNT(*) FROM contact_log", .{}));
+    try testing.expect((try eventOfType(&wz, "contact")) == null); // Zed's fix came before the fight
+
+    // The patrol check-in carries a plain notice: no Battle, no Rewards.
+    var p1 = try patrol(&h, &a, base_lat, base_lon);
+    defer p1.deinit();
+    try testing.expectEqual(@as(usize, 1), try p1.len("events"));
+    const notice = (try eventOfType(&p1, "contact")).?.object;
+    try testing.expectEqual(@as(usize, 4), notice.count());
+    try testing.expect(std.mem.startsWith(u8, notice.get("text").?.string, "CONTACT. A Zombie, level 7."));
+    try testing.expect(notice.get("battle") == null and notice.get("rewards") == null);
+    // XP, HP and loot applied as in any Contact.
+    const pid = try h.playerId("Hank");
+    try testing.expectEqual(@as(?i64, 1), try h.ctx.db.scalar("SELECT contacts FROM players WHERE id = ?", .{pid}));
+
+    // Notified once.
+    var p2 = try patrol(&h, &a, base_lat, base_lon);
+    defer p2.deinit();
+    try testing.expectEqual(@as(usize, 0), try p2.len("events"));
+    try testing.expectEqual(@as(?i64, 1), try h.ctx.db.scalar("SELECT COUNT(*) FROM events WHERE player_id = ? AND type = 'contact' AND notified = 1 AND delivered = 0", .{pid}));
+
+    // Opening the app still delivers it, with the full Battle, exactly once.
+    var wa = try h.location(&a, base_lat, base_lon);
+    defer wa.deinit();
+    const full = (try eventOfType(&wa, "contact")).?.object;
+    try testing.expectEqualStrings("pvp", full.get("battle").?.object.get("kind").?.string);
+    try testing.expect(full.get("rewards").?.object.get("xp").?.integer > 0);
+    try testing.expectEqualStrings(notice.get("id").?.string, full.get("id").?.string);
+    var wa2 = try h.location(&a, base_lat, base_lon);
+    defer wa2.deinit();
+    try testing.expect((try eventOfType(&wa2, "contact")) == null);
+    try testing.expectEqual(@as(?i64, 1), try h.ctx.db.scalar("SELECT COUNT(*) FROM events WHERE player_id = ? AND type = 'contact' AND notified = 1 AND delivered = 1", .{pid}));
+}
+
+test "patrol: events seen in the app are not notified afterwards" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var a: [64]u8 = undefined;
+    try h.player("Hank", "human", &a);
+    var w0 = try h.location(&a, base_lat, base_lon);
+    w0.deinit();
+    var r = try h.ok("/api/dev/bot_contact", &a, "{{}}", .{});
+    r.deinit();
+    var w = try h.location(&a, base_lat, base_lon);
+    defer w.deinit();
+    try testing.expect((try eventOfType(&w, "contact")) != null);
+    var p = try patrol(&h, &a, base_lat, base_lon);
+    defer p.deinit();
+    try testing.expectEqual(@as(usize, 0), try p.len("events"));
+}
