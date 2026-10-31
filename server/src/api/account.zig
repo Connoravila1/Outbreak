@@ -90,6 +90,7 @@ pub fn health(req: *Req, jw: *Stringify) HandlerError!void {
     try jw.write(.{
         .ok = true,
         .version = ctx_mod.version,
+        .terms_version = data.terms_version,
         .players_online = req.ctx.live.online(req.now),
         .providers = .{
             .google = auth.configured(.google),
@@ -146,9 +147,30 @@ pub fn rotateToken(req: *Req, pid: i64) HandlerError![64]u8 {
 }
 
 /// Create a guest. The callsign is optional here; it can be chosen later with /api/callsign.
+/// A new account must start from the terms in force: the client sends the version it showed.
+pub fn requireTerms(req: *Req, version: ?u32) HandlerError!void {
+    if ((version orelse 0) != data.terms_version) {
+        return req.fail(400, "terms_required", "Accept the terms of service to play.");
+    }
+}
+
+/// Record that a player accepted the terms in force, and when.
+pub fn recordTerms(req: *Req, pid: i64) HandlerError!void {
+    try req.ctx.db.run("UPDATE players SET terms_accepted = ?, terms_accepted_at = ? WHERE id = ?", .{ data.terms_version, req.now, pid });
+}
+
+/// POST /api/terms: accept the terms now in force (the re-accept sheet).
+pub fn acceptTerms(req: *Req, jw: *Stringify) HandlerError!void {
+    const body = try req.json(struct { version: u32 });
+    try requireTerms(req, body.version);
+    try recordTerms(req, req.pid);
+    try jw.write(.{ .me = try views.meFresh(req, req.pid) });
+}
+
 pub fn register(req: *Req, jw: *Stringify) HandlerError!void {
-    const Body = struct { callsign: ?[]const u8 = null };
+    const Body = struct { callsign: ?[]const u8 = null, terms: ?u32 = null };
     const body = if (req.body.len == 0) Body{} else try req.json(Body);
+    try requireTerms(req, body.terms);
     var name: ?[]const u8 = null;
     if (body.callsign) |c| {
         const t = std.mem.trim(u8, c, " ");
@@ -156,6 +178,7 @@ pub fn register(req: *Req, jw: *Stringify) HandlerError!void {
     }
     try req.begin();
     const np = try createPlayer(req, name);
+    try recordTerms(req, np.id);
     const me = try views.meFresh(req, np.id);
     try jw.write(.{ .token = @as([]const u8, &np.token), .recovery_code = @as([]const u8, &np.recovery_code), .me = me });
 }

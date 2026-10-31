@@ -21,8 +21,12 @@ import { isNative } from './native/platform';
 import { PatrolSheet } from './patrol/PatrolSheet';
 import { PatrolReport } from './patrol/PatrolReport';
 import { GuideHost } from './guide/Guide';
+import { SafetyStep, safetySeen } from './safety/Safety';
+import { TermsSheet } from './safety/TermsSheet';
+import { bootTip } from './safety/tips';
 import { lazy } from './ui/lazy';
 import './shell/shell.css';
+import './onboarding/onboarding.css';
 
 // Code that is not needed to draw the first map is split out and fetched on demand (or when idle).
 const GearTab = lazy(() => import('./tabs/GearTab').then((m) => m.GearTab));
@@ -36,6 +40,8 @@ const NoteReader = lazy(() => import('./notes/Reader').then((m) => m.NoteReader)
 const idle = (fn: () => void) => { const ric = (window as { requestIdleCallback?: (f: () => void, o?: object) => number }).requestIdleCallback; if (ric) ric.call(window, fn, { timeout: 4000 }); else window.setTimeout(fn, 2000); };
 
 const bootError = signal<string | null>(null);
+/** A phone that signed in to an existing account reads the safety notice once before its first map. */
+const safetyRead = signal(false);
 const desktop = signal(isDesktop());
 if (typeof matchMedia === 'function' && !isNative) {
   matchMedia('(min-width: 900px) and (pointer: fine)').addEventListener('change', (e) => { desktop.value = e.matches; });
@@ -77,11 +83,13 @@ function Shell() {
       <PatrolSheet />
       <PatrolReport />
       <GuideHost />
+      <TermsSheet />
     </div>
   );
 }
 
 function Boot() {
+  const tip = bootTip();
   return (
     <div class="ob-screen" style={{ background: '#000' }}>
       {bootError.value ? (
@@ -90,7 +98,12 @@ function Boot() {
           <p>{bootError.value}</p>
           <button class="btn primary block" onClick={() => { bootError.value = null; void start(); }}>Try again</button>
         </div>
-      ) : <Icon name="radar-sweep" size={48} class="spin" />}
+      ) : (
+        <>
+          <Icon name="radar-sweep" size={48} class="spin" />
+          {tip && <p class="boot-tip">{tip}</p>}
+        </>
+      )}
     </div>
   );
 }
@@ -118,7 +131,7 @@ export function App() {
         {!banned.value && p === 'boot' && <Boot />}
         {!banned.value && p === 'server' && <ServerAddress onDone={() => { phase.value = 'boot'; void start(); }} />}
         {!banned.value && p === 'onboarding' && <Onboarding />}
-        {!banned.value && p === 'app' && <Shell />}
+        {!banned.value && p === 'app' && (safetyRead.value || safetySeen() ? <Shell /> : <SafetyStep onDone={() => { safetyRead.value = true; }} />)}
       </main>
       {desktop.value && <SimPanel />}
     </div>

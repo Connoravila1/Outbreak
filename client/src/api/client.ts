@@ -82,11 +82,13 @@ export const api = {
   catalog: () => get<T.Catalog>('/api/catalog'),
   factions: () => get<T.Factions>('/api/factions'),
   /** Creates a guest. The callsign comes later (`setCallsign`). */
-  register: () => post<T.RegisterResult>('/api/register', {}),
+  register: (terms: number) => post<T.RegisterResult>('/api/register', { terms }),
+  /** Accept the terms now in force (the re-accept sheet). */
+  acceptTerms: (version: number) => post<{ me: T.Me }>('/api/terms', { version }),
   setCallsign: (callsign: string) => post<{ me: T.Me }>('/api/callsign', { callsign }),
   /** Sign in (or create) with a provider; a guest's token, if sent, is linked or replaced. */
-  authSignIn: (provider: T.AuthProvider, c: T.Credentials, opts: { switch?: boolean } = {}) =>
-    post<T.AuthResult>('/api/auth/' + provider, { ...c, ...(opts.switch ? { switch: true } : {}) }),
+  authSignIn: (provider: T.AuthProvider, c: T.Credentials, opts: { switch?: boolean; terms?: number } = {}) =>
+    post<T.AuthResult>('/api/auth/' + provider, { ...c, ...(opts.switch ? { switch: true } : {}), ...(opts.terms ? { terms: opts.terms } : {}) }),
   authLink: (provider: T.AuthProvider, c: T.Credentials) => post<{ me: T.Me }>('/api/auth/link/' + provider, c),
   authUnlink: (provider: T.AuthProvider) => post<{ me: T.Me }>('/api/auth/unlink/' + provider),
   deleteAccount: () => del<{ ok: boolean }>('/api/account'),

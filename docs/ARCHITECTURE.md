@@ -77,14 +77,15 @@ degrees (WGS84). `faction` is `"human"` or `"zombie"`. Slots are `"weapon" | "ar
 ### Account
 | Method | Path | Body | Returns |
 |---|---|---|---|
-| GET | `/api/health` | | `{ok, version, players_online, providers:{google, apple, dev, google_web_client_id?, apple_web_service_id?}, tiles:{pmtiles, glyphs}|null}` — which sign-ins this server offers, and the IDs a browser needs; `tiles` points the map at a self-hosted PMTiles archive (null: OpenFreeMap) |
+| GET | `/api/health` | | `{ok, version, terms_version, players_online, providers:{google, apple, dev, google_web_client_id?, apple_web_service_id?}, tiles:{pmtiles, glyphs}|null}` — which sign-ins this server offers, and the IDs a browser needs; `tiles` points the map at a self-hosted PMTiles archive (null: OpenFreeMap) |
 | GET | `/tiles/map.pmtiles` | | the `--tiles` archive, HTTP range requests (206); only routed when the server was started with `--tiles` |
 | GET | `/api/catalog` | | static game data (below); cacheable by `version` |
 | GET | `/api/factions` | | `{human:{share, players}, zombie:{...}, underdog:"human"|"zombie"|null, underdog_bonus}` |
-| POST | `/api/register` | `{}` (optional `{callsign}`) | `{token, me}` — creates a **guest**: a player with no sign-in identity |
+| POST | `/api/register` | `{terms, callsign?}` | `{token, me}` — creates a **guest**: a player with no sign-in identity. `terms` is the terms version the player accepted (`health.terms_version`); anything else is 400 `terms_required` and nothing is created |
+| POST | `/api/terms` | `{version}` | `{me}` — accept the terms now in force (the re-accept sheet); 400 `terms_required` for any other version |
 | POST | `/api/callsign` | `{callsign}` | `{me}` — once only (again after a moderator reset it, while `me.must_rename`); 409 `callsign_set`, `callsign_taken`; 400 `callsign_invalid` (also for a name on the blocklist: message "That name is not allowed here. Please pick another name.") |
 | POST | `/api/faction` | `{faction}` | `{me}` — once only; 409 `already_chosen`. Works before or after the callsign |
-| POST | `/api/auth/{google\|apple}` | `{id_token, nonce?, switch?}` + optional `Authorization` of the current player | `{token, me, created}` — see below |
+| POST | `/api/auth/{google\|apple}` | `{id_token, nonce?, switch?, terms}` + optional `Authorization` of the current player | `{token, me, created}` — see below |
 | POST | `/api/auth/link/{google\|apple}` | `{id_token, nonce?}` (auth) | `{me}` — 409 `identity_in_use` (taken by another player), 409 `already_linked` (this player already has that provider) |
 | POST | `/api/auth/unlink/{provider}` | | `{me}` — 404 `not_linked`; 409 `last_identity` for the only identity |
 | DELETE | `/api/account` | | `{ok}` — deletes the player and everything owned (auth) |
@@ -102,6 +103,15 @@ and `nonce` when the client sends one: the claim may equal the raw nonce or its 
   which case the guest is deleted.
 - identity is new and a token was sent: it is linked to that player (`created:false`).
 - identity is new and no token: a new player (no faction, no callsign) is created (`created:true`).
+  The body must carry `terms` (the current terms version) or this is 400 `terms_required`; on an
+  existing identity a matching `terms` is recorded as accepted, a missing one changes nothing.
+
+**Terms and age.** `data.terms_version` (`server/src/game/data.zig`) is the version of
+`client/public/terms.html`. `players.terms_accepted` / `terms_accepted_at` record the version a
+player accepted and when (0: never; players from before terms existed are asked once). `Me.terms`
+tells the client: `current`, `accepted`, `needs_accept` (accepted < current), and the client then
+shows a short re-accept sheet that posts `/api/terms`. The age screen is entirely on the device:
+the birth year is never sent, never stored, and an under-13 answer sends nothing to the server.
 
 Errors: 503 `provider_not_configured` (server has no client IDs for it), 503 `provider_unavailable`
 (JWKS fetch failed), 401 `token_expired` / `invalid_token`, 400 `invalid_token` (not a JWT).
@@ -121,9 +131,19 @@ accounts that have a recovery code but is no longer used by the client.
 |---|---|---|---|
 | POST | `/api/location` | `{lat, lon, acc, sanctuary, places?:[{key, kind, lat, lon, name?}]}` (<= 40) | `WorldView` — call every ~5 s in foreground |
 | POST | `/api/patrol` | `{lat, lon, acc?, sanctuary?}` | `{events:[{id, type, text, at}], hp, downed_until}` — Patrol check-in, see below |
-| POST | `/api/engage` | `{id, stance?}` (enemy spawn or echo id; stance `aggressive`/`careful`/`evasive`, default careful) | `Battle` |
+| POST | `/api/engage` | `{id, stance?}` (enemy spawn or echo id; stance `aggressive`/`careful`/`evasive`, default careful; 409 `in_transit`) | `Battle` |
 | POST | `/api/stance` | `{stance}` (default for Contact PvP) | `{me}` |
-| POST | `/api/open` | `{id}` (cache, airdrop or landmark id; 409 `landmark_limit`) | `{loot: Rewards, me}` |
+| POST | `/api/open` | `{id}` (cache, airdrop or landmark id; 409 `landmark_limit`, 409 `in_transit`) | `{loot: Rewards, me}` |
+
+**In transit.** The server watches the speed between a player's consecutive fixes (from
+`/api/location` and `/api/patrol`; `game/transit.zig`). A speed over 7 m/s (distance reduced by both
+fixes' accuracy radii; fixes vaguer than 100 m ignored; a rejected jump counts as fast) two fixes in a
+row puts the player *in transit*; each further fast fix extends it to 60 s past the last one. While in
+transit: `/api/engage`, `/api/open`, `/api/stronghold/claim` and `/api/raid/attack` answer 409
+`in_transit`; the 5 s Contact tick leaves the player out (and `hostiles_near` ignores them);
+`hostiles_near` is false for them; a Patrol check-in returns no events (they stay queued). The state is
+in memory only. `WorldView.in_transit` carries it so the client can show the banner and disable Engage.
+There is no passenger override.
 
 **Patrol mode.** `POST /api/patrol` is the background check-in (the phone's Patrol service sends
 one about every 60 s, bearer token as usual). It validates the position exactly like
@@ -245,6 +265,7 @@ Me = { id, callsign: string|null, must_rename: boolean, faction: Faction|null, l
        record: { wins, losses, contacts, contacts_won, contacts_lost, echoes, echoes_won, caches, distance_m },
        contact_rank: { name, tier: 0..5, wins, next_at: number|null, next_name: string|null }, // lifetime Contact wins
        account: { guest: boolean, providers: ("google"|"apple"|"dev")[], email: string|null },
+       terms: { current: number, accepted: number /* 0: never */, needs_accept: boolean },
        notes: { found: number, total: number /* notes this faction can find */ },
        titles_extra: string[] /* cosmetic titles from claimed note sets and achievements */,
        cosmetics: {owned:[ids], color:id|null, frame:id|null}, achievements: {earned, total} }
@@ -253,6 +274,7 @@ Mission = { id, kind, text, target, progress, rewards: Rewards, claimed: boolean
 
 WorldView = { now, me: MeLite /* hp, max_hp, downed_until, level, xp, xp_next, salvage */,
   hostiles_near: boolean,
+  in_transit: boolean, // moving faster than walking pace: fights wait (see In transit)
   enemies: {id, archetype, level, elite, tutorial: boolean, lat, lon, expires_at}[], // undefeated only
   caches: {id, kind:"cache"|"airdrop", lat, lon, expires_at}[],        // unopened only
   echoes: {id, level, faction, title, rogue: boolean, lat, lon, expires_at}[],

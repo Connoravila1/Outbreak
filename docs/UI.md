@@ -128,6 +128,16 @@ simulator panel beside it.
      framed by need: "Outbreak uses your location to build the world around you. It's never shown
      to other players." A quiet "Already playing? Sign in" link on the very first screen goes to a
      sign-in sheet; if the account already has a character it is restored and onboarding is skipped.
+   - **The checkpoint** (the very first screens, before the broadcast, so the cold open runs unbroken; neutral lens): "Your papers."
+     asks month and year of birth, without saying what the cutoff is. Under 13 sees a kind refusal
+     ("Come back when you are older"), the screen stays shut for a day on that phone, and nothing is
+     sent anywhere. Then "House rules": three plain lines, links to the Terms and the Privacy policy,
+     and a checkbox with an explicit Accept. Then the broadcast, and after it the safety notice, a hazard-taped card with five
+     numbered lines (traffic, private property, never driving or cycling, after dark, sanctuaries) and
+     one "I understand". A phone that signs in to an existing account sees the notice once before its
+     first map. **Play safe** in Settings reads it again in the player's lens; every third launch the
+     boot screen carries one line of it. The re-accept sheet (a changed or missing terms version) is
+     a bottom sheet with Accept and "Not now".
    - "You've been bitten." Heartbeat audio and haptics, and veins creep in from the edges.
    - The split lens over your real streets, from the live map. The left side is labelled
      "Fight it. Stay human." and the right side "Let it in." Each side lists three plain lines
@@ -146,6 +156,9 @@ simulator panel beside it.
    (Survey) or flare as heat (Heat). Crits shake the screen. It's skippable. The result is a card
    stack: outcome, XP bar fill, and loot cards flipped one by one with a rarity glow (Legendary
    gets a held beat).
+2b. **In transit**: when the server says the player is moving faster than walking pace, a calm banner
+   under the top bar reads "Moving fast. Fights wait until you're on foot." (Heat: "too fast. the hunt
+   waits for your feet."), and Engage, Open, Claim and Attack are disabled with the same reason.
 3. **CONTACT**: interrupts anything. Full-screen alert, a strong haptic pattern, "A Zombie is
    close. Level 14." Its gear names appear, then the fight plays automatically.
 4. **Level up**: a full-screen takeover with the new number, then the unlocks, named one per line.

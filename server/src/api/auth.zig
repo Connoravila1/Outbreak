@@ -10,11 +10,13 @@ const views = @import("../views.zig");
 const warstate = @import("../warstate.zig");
 const account = @import("account.zig");
 const social = @import("social.zig");
+const game = @import("game");
 
 const Req = ctx_mod.Req;
 const HandlerError = ctx_mod.HandlerError;
 const Stringify = std.json.Stringify;
 const Provider = auth_mod.Provider;
+const data = game.data;
 
 const Body = struct {
     id_token: ?[]const u8 = null,
@@ -24,6 +26,8 @@ const Body = struct {
     /// `dev` provider only.
     subject: ?[]const u8 = null,
     email: ?[]const u8 = null,
+    /// The terms version the player accepted; needed to create an account, recorded on sign-in.
+    terms: ?u32 = null,
 };
 
 /// The provider named by the last path segment ("/api/auth/link/google" -> google).
@@ -147,6 +151,7 @@ pub fn signIn(req: *Req, jw: *Stringify) HandlerError!void {
             if ((try identityCount(req, req.pid)) == 0) try deletePlayer(req, req.pid);
         }
         try refreshEmail(req, p, ident);
+        if ((body.terms orelse 0) == data.terms_version) try account.recordTerms(req, target);
         const token = try account.rotateToken(req, target);
         const me = try views.meFresh(req, target);
         return jw.write(.{ .token = @as([]const u8, &token), .me = me, .created = false });
@@ -162,7 +167,9 @@ pub fn signIn(req: *Req, jw: *Stringify) HandlerError!void {
         return jw.write(.{ .token = @as([]const u8, &token), .me = me, .created = false });
     }
 
+    try account.requireTerms(req, body.terms);
     const np = try account.createPlayer(req, null);
+    try account.recordTerms(req, np.id);
     try addIdentity(req, np.id, p, ident);
     const me = try views.meFresh(req, np.id);
     try jw.write(.{ .token = @as([]const u8, &np.token), .me = me, .created = true });

@@ -13,6 +13,10 @@ pub const Faction = enum {
     }
 };
 
+/// Version of the terms of service (client/public/terms.html). Raise it when the terms change in a
+/// way players must agree to again; everyone whose accepted version is lower is asked once.
+pub const terms_version: u32 = 1;
+
 pub const Slot = enum { weapon, armor, utility };
 pub const Rarity = enum { common, uncommon, rare, legendary };
 pub const Perk = enum { keen, swift, brutal, sturdy, vital, leech, thorns, lucky };

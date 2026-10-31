@@ -7,6 +7,7 @@ const snapshot = @import("snapshot.zig");
 
 const geo = game.geo;
 const landmarks = game.landmarks;
+const transit = game.transit;
 
 const Allocator = std.mem.Allocator;
 
@@ -108,6 +109,8 @@ pub const Live = struct {
     buckets: std.AutoHashMapUnmanaged(i64, Bucket) = .empty,
     tutorials: std.AutoHashMapUnmanaged(i64, Tutorial) = .empty,
     chat_last: std.AutoHashMapUnmanaged(i64, i64) = .empty,
+    /// Whether each player has been moving faster than walking pace (memory only).
+    transit: std.AutoHashMapUnmanaged(i64, transit.State) = .empty,
     /// Reported real places by geohash-6 area (never persisted).
     places: std.AutoHashMapUnmanaged([landmarks.area_precision]u8, Area) = .empty,
     place_count: usize = 0,
@@ -123,6 +126,7 @@ pub const Live = struct {
         self.buckets.deinit(self.gpa);
         self.tutorials.deinit(self.gpa);
         self.chat_last.deinit(self.gpa);
+        self.transit.deinit(self.gpa);
         var it = self.places.valueIterator();
         while (it.next()) |a| a.places.deinit(self.gpa);
         self.places.deinit(self.gpa);
@@ -134,6 +138,18 @@ pub const Live = struct {
         const p = self.positions.get(pid) orelse return null;
         if (!p.fresh(now)) return null;
         return p;
+    }
+
+    /// Fold in the speed between a player's last two fixes.
+    pub fn observeSpeed(self: *Live, pid: i64, speed_ms: f64, acc_m: f64, now: i64) Allocator.Error!void {
+        const prev = self.transit.get(pid) orelse transit.State{};
+        try self.transit.put(self.gpa, pid, transit.observe(prev, speed_ms, acc_m, now));
+    }
+
+    /// Moving faster than walking pace: fights, claims and Contact wait (DESIGN.md section 5).
+    pub fn inTransit(self: *const Live, pid: i64, now: i64) bool {
+        const s = self.transit.get(pid) orelse return false;
+        return transit.active(s, now);
     }
 
     pub fn setPosition(self: *Live, pid: i64, pos: Pos) Allocator.Error!void {
@@ -171,6 +187,7 @@ pub const Live = struct {
         _ = self.buckets.remove(pid);
         _ = self.tutorials.remove(pid);
         _ = self.chat_last.remove(pid);
+        _ = self.transit.remove(pid);
         _ = self.landmark_opens.remove(pid);
         var areas = self.places.valueIterator();
         while (areas.next()) |a| {
@@ -323,6 +340,11 @@ pub const Live = struct {
         pruneMap(landmarks.Opens, &self.landmark_opens, now, struct {
             fn old(o: landmarks.Opens, t: i64) bool {
                 return o.blockedUntil(t) == null;
+            }
+        }.old);
+        pruneMap(transit.State, &self.transit, now, struct {
+            fn old(s: transit.State, t: i64) bool {
+                return transit.stale(s, t);
             }
         }.old);
         self.prunePlaces(now);

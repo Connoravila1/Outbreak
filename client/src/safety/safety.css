@@ -1,0 +1,22 @@
+/* The checkpoint after the broadcast: age, terms, safety. Builds on the onboarding card. */
+.dob { display: grid; grid-template-columns: 1fr 96px; gap: 10px; }
+.dob .field { font-size: var(--fs-16); }
+.agree { display: grid; grid-template-columns: 28px 1fr; gap: 12px; align-items: start; font-size: var(--fs-14); line-height: 1.35; cursor: pointer; padding: 4px 0; }
+.agree input { width: 24px; height: 24px; margin: 0; accent-color: var(--accent); }
+.terms-links { display: flex; gap: 6px; flex-wrap: wrap; }
+.terms-links a { color: var(--text); font-weight: 600; }
+
+.safety-card { overflow: hidden; }
+.safety-tape { height: 10px; margin: -24px -20px 2px; background: repeating-linear-gradient(-45deg, var(--hazard, #F2BE1A) 0 12px, var(--ink, #1F2326) 12px 24px); }
+:root[data-lens='heat'] .safety-tape { height: 3px; background: linear-gradient(to right, transparent, var(--hot), transparent); box-shadow: 0 0 16px var(--hot); }
+.safety-list { margin: 0; padding: 0; list-style: none; counter-reset: rule; display: grid; gap: 12px; }
+.safety-list li { counter-increment: rule; position: relative; padding-left: 34px; font-size: var(--fs-14); line-height: 1.35; color: var(--text-dim); }
+.safety-list li b { display: block; color: var(--text); font-size: var(--fs-16); }
+.safety-list li::before { content: counter(rule); position: absolute; left: 0; top: 0; width: 24px; height: 24px; display: grid; place-items: center; font-weight: 800; font-size: var(--fs-14); color: var(--accent-ink, #000); background: var(--accent); border-radius: 4px; }
+:root[data-lens='heat'] .safety-list li::before { border-radius: 50%; box-shadow: 0 0 10px var(--hot); }
+:root[data-lens='heat'] .safety-list li b { text-transform: lowercase; letter-spacing: .05em; }
+.safety-sheet { display: grid; gap: 14px; }
+.safety-sheet .safety-tape { margin: 0; }
+
+.boot-tip { position: absolute; left: 24px; right: 24px; bottom: calc(var(--sa-bottom) + 48px); text-align: center; color: var(--muted); font-size: var(--fs-14); letter-spacing: .04em; margin: 0; }
+.map-banner.transit { top: calc(var(--sa-top) + 104px); display: flex; gap: 10px; align-items: center; border-color: var(--accent); }

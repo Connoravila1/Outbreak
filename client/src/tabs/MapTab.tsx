@@ -64,6 +64,7 @@ function ObjectSheet({ o, onClose, onResult }: { o: GameObject; onClose: () => v
   const threat = o.level != null && m ? threatOf(o.level, m.level) : null;
   const isHeat = lens.value === 'heat';
   const downed = !!m?.downed_until && m.downed_until > Date.now();
+  const moving = !!world.value?.in_transit;
 
   const act = (() => {
     switch (o.kind) {
@@ -81,6 +82,7 @@ function ObjectSheet({ o, onClose, onResult }: { o: GameObject; onClose: () => v
   let reason: string | null = null;
   if (restock != null) reason = say(`Picked clean. Restocks in ${restockIn(restock)}.`, `picked clean. it feeds again in ${restockIn(restock)}.`);
   else if (lm && inSanctuary.value) reason = say('Nothing can be opened in a sanctuary.', 'quiet ground. nothing to take.');
+  else if (moving) reason = say('Moving fast. Fights wait until you\'re on foot.', 'too fast. nothing hunts from a wheel. get out and walk.');
   else if (!inRange) reason = say(`Move closer. ${formatDistance(Math.max(0, dist - INTERACT_RANGE_M))} to go.`, `too far. ${formatDistance(Math.max(0, dist - INTERACT_RANGE_M))} closer.`);
   else if (downed) reason = say('You are downed. Recover first.', 'you are down. wait.');
   else if (o.kind === 'stronghold' && (m?.level ?? 0) < 15) reason = say('Strongholds unlock at level 15.', 'not yet. level 15.');
@@ -166,7 +168,7 @@ export function MapTab() {
   const f = faction.value;
   const sel = selectedId.value;
   const obj = w && f && sel ? objectsFrom(w, f).find((o) => o.id === sel) : undefined;
-  const coach = !coachDone.value && !obj && !!w?.enemies.some((e) => e.tutorial);
+  const coach = !coachDone.value && !obj && !w?.in_transit && !!w?.enemies.some((e) => e.tutorial);
   const nothing = w && w.enemies.length + w.caches.length + w.echoes.length === 0;
   return (
     <>
@@ -174,6 +176,9 @@ export function MapTab() {
         <p class="map-banner" role="status">{say('Sanctuary. Nothing hunts here, and nothing can be fought.', 'quiet ground. nothing stirs. nothing can hurt you.')}</p>
       )}
       {!inSanctuary.value && pollError.value && <p class="map-banner err" role="alert">{pollError.value}</p>}
+      {!inSanctuary.value && !pollError.value && world.value?.in_transit && (
+        <p class="map-banner transit" role="status"><Icon name="sprint" size={20} />{say('Moving fast. Fights wait until you\'re on foot.', 'too fast. the hunt waits for your feet.')}</p>
+      )}
       {nothing && !inSanctuary.value && (
         <p class="map-note">{say('Nothing within 450 m. Walk a block and it changes every 10 minutes.', 'nothing warm within 450 m. walk. it shifts every 10 minutes.')}</p>
       )}

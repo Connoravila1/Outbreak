@@ -4,6 +4,10 @@ import { position } from '../location';
 import { lensOverride, me, phase, loadCatalog } from '../state/store';
 import { Broadcast } from './Broadcast';
 import { Locate } from './Locate';
+import { Age, AgeRefusal } from './Age';
+import { Terms } from './Terms';
+import { SafetyStep } from '../safety/Safety';
+import { ageBlocked } from '../safety/age';
 import { Bitten } from './Bitten';
 import { SplitLens } from './SplitLens';
 import { Commit } from './Commit';
@@ -20,21 +24,21 @@ import './onboarding.css';
 /** After onboarding: the one moment we ask to send alerts. */
 function askNotify() { void requestNotifyPermission().then((ok) => { if (ok) void scheduleDailyReset(); }); }
 
-type Step = 'broadcast' | 'signin' | 'locate' | 'bitten' | 'split' | 'commit' | 'save' | 'callsign' | 'avatar' | 'kit' | 'briefing';
+type Step = 'broadcast' | 'age' | 'refused' | 'terms' | 'safety' | 'signin' | 'locate' | 'bitten' | 'split' | 'commit' | 'save' | 'callsign' | 'avatar' | 'kit' | 'briefing';
 
 /** Where an account that already exists on the server picks up. */
 function resumeStep(): Step {
   const m = me.value;
-  if (!m) return 'broadcast';
+  if (!m) return 'age';
   if (m.faction && m.must_rename) return 'callsign';
   if (!m.faction) return 'locate';
   return m.account.guest ? 'save' : 'callsign';
 }
 
-/** First launch: broadcast, permission, the bite, the choosing, saving the survivor, identity, kit, briefing. */
+/** First launch: the checkpoint (age, terms) so the cold open runs unbroken, the broadcast, the safety card, permission, the bite, the choosing, saving the survivor, identity, kit, briefing. */
 export function Onboarding() {
   // An account quit mid-way skips the cold open.
-  const [step, setStep] = useState<Step>(resumeStep);
+  const [step, setStep] = useState<Step>(() => (!me.value && ageBlocked() ? 'refused' : resumeStep()));
   const [chosen, setChosen] = useState<Faction | null>(me.value?.faction ?? null);
   // Resumed accounts have seen the bite already.
   const [skipBite] = useState(!!me.value);
@@ -52,7 +56,11 @@ export function Onboarding() {
 
   const p = position.value;
   switch (step) {
-    case 'broadcast': return <Broadcast onDone={() => go('locate')} onSignIn={() => go('signin')} />;
+    case 'broadcast': return <Broadcast onDone={() => go('safety')} onSignIn={() => go('signin')} />;
+    case 'age': return <Age onPass={() => go('terms')} onRefuse={() => go('refused')} />;
+    case 'refused': return <AgeRefusal />;
+    case 'terms': return <Terms onDone={() => go('broadcast')} />;
+    case 'safety': return <SafetyStep onDone={() => go('locate')} />;
     case 'signin': return <SignIn onBack={() => go('broadcast')} onDone={signedIn} />;
     case 'locate': return <Locate onDone={() => go(skipBite ? 'split' : 'bitten')} />;
     case 'bitten': return <Bitten onDone={() => go('split')} />;

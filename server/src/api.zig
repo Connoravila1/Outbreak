@@ -56,6 +56,7 @@ const routes = [_]Route{
     .{ .method = .post, .path = "/api/callsign", .access = .player, .handler = account.setCallsign },
     .{ .method = .post, .path = "/api/faction", .access = .player, .handler = account.chooseFaction },
     .{ .method = .get, .path = "/api/me", .access = .player, .handler = account.getMe },
+    .{ .method = .post, .path = "/api/terms", .access = .player, .handler = account.acceptTerms },
     .{ .method = .post, .path = "/api/avatar", .access = .player, .handler = account.setAvatar },
     .{ .method = .delete, .path = "/api/account", .access = .player, .handler = auth.deleteAccount },
 
