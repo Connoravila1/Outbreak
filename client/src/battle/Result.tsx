@@ -218,6 +218,9 @@ export function Result({ battle, onContinue }: { battle: Battle; onContinue: () 
         {step >= final && !!r.auto_scrapped && <p class="dim res-full">{say(`Pack full: extra gear scrapped for ${r.auto_scrapped} salvage.`, `no room. the extra was torn down for ${r.auto_scrapped} salvage.`)}</p>}
         {step >= final && n === 0 && cons.length === 0 && notes.length === 0 && !r.auto_scrapped && <p class="dim">{say('No drops this time.', 'nothing left to take.')}</p>}
       </div>
+      <p class="sr-only" role="status" aria-live="polite">
+        {step >= final ? `${outcomeWord(won, battle)}. ${say('Salvage', 'salvage')} ${r.salvage}. ${say('War points', 'war points')} ${r.war_points}.${n ? ` ${n} ${n === 1 ? 'item' : 'items'}: ${r.items.map(itemTitle).join(', ')}.` : ''}` : ''}
+      </p>
       <div class="res-foot">
         <button ref={btn} class="btn primary block" onClick={step >= final ? onContinue : skip}>
           {step >= final ? say('Continue', 'continue') : say('Skip', 'skip')}

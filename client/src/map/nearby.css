@@ -1,0 +1,20 @@
+/* The map's "Nearby" button and the list it opens: the same objects as the markers, readable and reachable without the map. */
+.map-nearby {
+  position: absolute; right: calc(var(--sa-right) + 12px); bottom: 82px; z-index: 8; min-height: 48px; max-width: 60%;
+  display: inline-flex; align-items: center; gap: 6px; padding: 0 14px 0 10px;
+  background: var(--surface); color: var(--text); border: 2px solid var(--text); border-radius: 999px;
+  font-weight: 700; font-size: var(--fs-14);
+}
+:root[data-lens='survey'] .map-nearby { border-radius: 4px; box-shadow: 0 2px 0 var(--ink); }
+:root[data-lens='heat'] .map-nearby { border-color: var(--vein); text-transform: lowercase; letter-spacing: var(--track); box-shadow: 0 0 18px color-mix(in srgb, var(--warm) 40%, transparent); }
+.nb-lede { font-size: var(--fs-14); margin: 4px 0 0; }
+.nb-group { margin-top: 16px; }
+.nb-h { font-size: var(--fs-20); margin: 0 0 6px; display: flex; gap: 8px; align-items: baseline; }
+.nb-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.nb-row { width: 100%; min-height: var(--tap); display: flex; align-items: center; gap: 12px; padding: 8px 12px; text-align: left; background: var(--surface-2); color: var(--text); border: 1.5px solid var(--line); border-radius: 6px; }
+:root[data-lens='heat'] .nb-row { border-radius: 14px; }
+.nb-row.near { border-color: var(--accent); border-width: 2px; }
+.nb-text { flex: 1; min-width: 0; display: grid; gap: 1px; overflow-wrap: anywhere; font-size: var(--fs-14); }
+.nb-text b { font-size: var(--fs-16); }
+.nb-dist { flex: none; text-align: right; display: grid; font-weight: 700; font-size: var(--fs-14); }
+.nb-dist small { font-size: var(--fs-12); font-weight: 500; color: var(--text-dim); }

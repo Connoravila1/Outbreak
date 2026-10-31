@@ -38,7 +38,7 @@
 @media (prefers-reduced-motion: reduce) { .mk-first { animation: none; } }
 .mk-survey .mk-note { color: var(--grease); text-shadow: 0 0 3px var(--paper), 0 0 3px var(--paper), 0 0 2px var(--paper); }
 .mk-survey.mk-cache .mk-note, .mk-survey.mk-airdrop .mk-note { color: var(--survey-brown); }
-.mk-survey.mk-echo .mk-note { color: var(--survey-blue); }
+.mk-survey.mk-echo .mk-note { color: var(--blue-ink); }
 .mk-survey.mk-stronghold .mk-note, .mk-survey.mk-raid .mk-note { color: var(--ink); }
 .mk-survey.selected .grease { stroke-width: 4; }
 
@@ -68,12 +68,12 @@
 
 /* ----- Landmarks: real places. Survey stamps them; Heat smears them. ----- */
 .mk-landmark { width: 48px; height: 48px; }
-.mk-survey.mk-landmark { color: var(--survey-blue); }
+.mk-survey.mk-landmark { color: var(--blue-ink); }
 .mk-survey .mk-stamp { position: absolute; inset: -4px; width: 56px; height: 56px; overflow: visible; rotate: -5deg; }
 .mk-survey .stamp-o { fill: color-mix(in srgb, var(--paper) 82%, transparent); stroke: var(--survey-blue); stroke-width: 2.6; }
 .mk-survey .stamp-i { fill: none; stroke: var(--survey-blue); stroke-width: 1; opacity: .8; }
-.mk-survey.mk-landmark .mk-icon { color: var(--survey-blue); }
-.mk-survey.mk-landmark .mk-note { color: var(--survey-blue); font-size: 11px; top: 46px; max-width: 190px; overflow: hidden; text-overflow: ellipsis; text-shadow: 0 0 3px var(--paper), 0 0 3px var(--paper), 0 0 2px var(--paper); }
+.mk-survey.mk-landmark .mk-icon { color: var(--blue-ink); }
+.mk-survey.mk-landmark .mk-note { color: var(--blue-ink); font-size: calc(11px * var(--ts)); top: 46px; max-width: 190px; overflow: hidden; text-overflow: ellipsis; text-shadow: 0 0 3px var(--paper), 0 0 3px var(--paper), 0 0 2px var(--paper); }
 .mk-survey.mk-landmark.spent .mk-stamp { opacity: .55; }
 .mk-survey.mk-landmark.spent .stamp-o { stroke-dasharray: 4 3; }
 .mk-survey.mk-landmark.spent .mk-icon, .mk-survey.mk-landmark.spent .mk-note { opacity: .55; }
@@ -85,7 +85,7 @@
   animation: bloom 4.2s ease-in-out infinite;
 }
 .mk-heat.mk-landmark .mk-icon { color: var(--void); opacity: .8; }
-.mk-heat.mk-landmark .mk-note { font-size: 11px; top: 40px; }
+.mk-heat.mk-landmark .mk-note { font-size: calc(11px * var(--ts)); top: 40px; }
 .mk-heat.mk-landmark.spent .mk-smear { opacity: .3; animation: none; filter: blur(4px) saturate(.5); }
 .mk-heat.mk-landmark.spent .mk-icon { color: var(--flesh); opacity: .5; }
 .mk-heat.mk-landmark.spent .mk-note { opacity: .55; }
@@ -108,5 +108,5 @@
 .walk-target { width: 18px; height: 18px; border: 2px solid var(--accent); border-radius: 50%; pointer-events: none; }
 .walk-target::after { content: ''; position: absolute; inset: 5px; background: var(--accent); border-radius: 50%; }
 
-.maplibregl-ctrl-attrib { font-size: 10px; }
+.maplibregl-ctrl-attrib { font-size: calc(10px * var(--ts)); }
 .maplibregl-ctrl-bottom-left { z-index: 2; }

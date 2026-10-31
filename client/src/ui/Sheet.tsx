@@ -1,5 +1,6 @@
 import type { ComponentChildren } from 'preact';
 import { useEffect, useRef } from 'preact/hooks';
+import { trapTab } from './a11y';
 import { createPortal } from 'preact/compat';
 import { pushBack } from './back';
 import './sheet.css';
@@ -12,20 +13,20 @@ interface Props {
   tall?: boolean;
 }
 
-/** Bottom sheet inside the phone column. Esc or the scrim closes it; focus moves in. */
+/** Bottom sheet inside the phone column. Esc, back or the scrim closes it; focus moves in, stays in, and returns. */
 export function Sheet({ title, onClose, children, tall }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const prev = document.activeElement as HTMLElement | null;
     ref.current?.focus();
-    const key = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    const key = (e: KeyboardEvent) => trapTab(e, ref.current);
     window.addEventListener('keydown', key);
     const unback = pushBack(onClose);
     return () => { unback(); window.removeEventListener('keydown', key); prev?.focus?.(); };
   }, []);
   const node = (
     <div class="sheet-root">
-      <div class="scrim" onClick={onClose} />
+      <div class="scrim" onClick={onClose} aria-hidden="true" />
       <section class={'sheet' + (tall ? ' tall' : '')} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} ref={ref}>
         <div class="grip" aria-hidden="true" />
         <div class="sheet-body scroll">{children}</div>

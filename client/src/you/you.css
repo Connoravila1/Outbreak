@@ -5,7 +5,7 @@
 .callsign-big { font-size: var(--fs-28); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lvl-block { display: flex; gap: 16px; align-items: center; margin: 18px 0 10px; }
 .lvl-block .ring { width: 72px; height: 72px; }
-.lvl-block .ring b { font-size: 28px; }
+.lvl-block .ring b { font-size: calc(28px * var(--tsd)); }
 .xp-line { margin-top: 8px; font-size: var(--fs-14); }
 
 .stat-block { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
@@ -28,10 +28,10 @@
 .fr-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .fr-at { flex: none; font-size: var(--fs-12); }
 .salv-line { display: inline-flex; gap: 4px; align-items: center; }
-.store-row { display: flex; gap: 10px; align-items: center; padding: 10px; background: var(--surface-2); }
-.st-main { flex: 1; min-width: 0; display: grid; font-size: var(--fs-14); }
+.store-row { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; padding: 10px; background: var(--surface-2); }
+.st-main { flex: 1 1 120px; min-width: 0; display: grid; font-size: var(--fs-14); }
 .st-main b { font-size: var(--fs-16); }
-.store-row .action { flex: none; max-width: 46%; }
+.store-row .action, .st-confirm, .store-row > .btn { flex: none; max-width: 100%; margin-left: auto; }
 .store-row .reason { font-size: var(--fs-12); }
 .st-confirm { display: grid; gap: 6px; justify-items: end; flex: none; }
 .st-ask { font-weight: 700; font-size: var(--fs-14); }
@@ -63,3 +63,6 @@
 .rb-wl { margin: 0 0 0 auto; font-weight: 700; white-space: nowrap; }
 .rb-wl b { font-size: var(--fs-20); margin-left: 4px; }
 .rank-badge.tier-5 { box-shadow: 0 0 16px color-mix(in srgb, var(--r-legendary) 50%, transparent); }
+
+.text-size { display: grid; gap: 6px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.text-size .seg { width: 100%; }

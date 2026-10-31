@@ -14,7 +14,7 @@
 :root[data-lens='heat'] .contact-pulse { background: radial-gradient(circle, var(--hot), transparent 70%); animation: alarm-heat 1.1s ease-in-out 4; }
 @keyframes alarm-heat { 0%, 100% { opacity: 0; } 50% { opacity: .5; } }
 .ct-icon { color: var(--danger); }
-.ct-word { font-size: 56px; color: var(--danger); position: relative; }
+.ct-word { font-size: calc(56px * var(--tsd)); color: var(--danger); position: relative; }
 :root[data-lens='survey'] .ct-word { background: var(--hazard); color: var(--ink); padding: 6px 18px 2px; border: 3px solid var(--ink); }
 .ct-line { font-size: var(--fs-20); font-weight: 600; max-width: 20em; position: relative; }
 .ct-rank { margin: 0; font-size: var(--fs-20); font-weight: 700; letter-spacing: .06em; position: relative; white-space: nowrap; }
@@ -71,7 +71,7 @@
 :root[data-lens='survey'] .emb-b .ring-1, :root[data-lens='survey'] .emb-b .ring-2 { stroke: var(--grease); }
 :root[data-lens='survey'] .emb-a .ring-1, :root[data-lens='survey'] .emb-a .ring-2 { stroke: var(--survey-blue); }
 :root[data-lens='survey'] .emb-label { color: var(--grease); font-size: var(--fs-20); transform: rotate(-2deg); text-shadow: 0 0 3px var(--paper), 0 0 3px var(--paper); }
-:root[data-lens='survey'] .emb-a .emb-label { color: var(--survey-blue); }
+:root[data-lens='survey'] .emb-a .emb-label { color: var(--blue-ink); }
 .emb-x { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 3; }
 .emb-x path { fill: none; stroke: var(--grease); stroke-width: 6; stroke-linecap: round; stroke-dasharray: 1; animation: draw .45s ease-out both; }
 .emb-x path + path { animation-delay: .2s; }
@@ -99,8 +99,8 @@
 /* damage numbers rise from the target emblem, on the stage, never over a card */
 .floats { position: absolute; inset: 0; pointer-events: none; z-index: 6; }
 .float { position: absolute; left: calc(50% + var(--slot, 0) * 58px); top: calc(50% - 14px + var(--slot, 0) * 30px); display: grid; justify-items: center; line-height: .9; white-space: nowrap; translate: -50% -50%; animation: floatup 1.1s ease-out both; }
-.float b { font-family: var(--f-display); font-weight: 900; font-size: 46px; letter-spacing: .01em; }
-.float i { font-style: normal; font-family: var(--f-display); font-weight: 900; font-size: 22px; letter-spacing: .2em; margin-top: 2px; }
+.float b { font-family: var(--f-display); font-weight: 900; font-size: calc(46px * var(--tsd)); letter-spacing: .01em; }
+.float i { font-style: normal; font-family: var(--f-display); font-weight: 900; font-size: calc(22px * var(--ts)); letter-spacing: .2em; margin-top: 2px; }
 :root[data-lens='heat'] .float b { font-family: var(--f-body); font-weight: 800; }
 :root[data-lens='heat'] .float i { font-family: var(--f-body); text-transform: lowercase; letter-spacing: .24em; }
 /* Survey: red pencil number on a paper outline, ink shadow */
@@ -109,21 +109,21 @@
 /* Heat: white-hot number, void outline, fire glow */
 :root[data-lens='heat'] .float { color: var(--white-hot); text-shadow: 0 0 14px var(--hot), 0 0 28px var(--hot); }
 :root[data-lens='heat'] .float b, :root[data-lens='heat'] .float i { -webkit-text-stroke: 6px var(--void); paint-order: stroke fill; }
-.float.crit b { font-size: 72px; }
+.float.crit b { font-size: calc(72px * var(--tsd)); }
 :root[data-lens='survey'] .float.crit i { background: var(--hazard); color: var(--ink); -webkit-text-stroke: 0; padding: 2px 8px 0; border: 2px solid var(--ink); }
 :root[data-lens='heat'] .float.crit { color: #fff; text-shadow: 0 0 18px var(--white-hot), 0 0 36px var(--hot); }
 .float.crit { animation-name: floatcrit; }
 /* damage over time: smaller, burning colour */
-.float.dot b { font-size: 40px; }
-.float.dot i { font-size: 16px; }
+.float.dot b { font-size: calc(40px * var(--tsd)); }
+.float.dot i { font-size: calc(16px * var(--ts)); }
 :root[data-lens='survey'] .float.dot { color: #B8651A; }
 :root[data-lens='heat'] .float.dot { color: var(--hot); text-shadow: 0 0 10px var(--warm); }
 /* heal: calm, cool */
-.float.heal b { font-size: 42px; }
-:root[data-lens='survey'] .float.heal { color: var(--survey-blue); }
+.float.heal b { font-size: calc(42px * var(--tsd)); }
+:root[data-lens='survey'] .float.heal { color: var(--blue-ink); }
 :root[data-lens='heat'] .float.heal { color: var(--t-easy); text-shadow: 0 0 14px var(--t-easy), 0 0 26px var(--cold); }
 /* a miss is a word */
-.float.dodge b { font-size: 34px; letter-spacing: .16em; font-style: italic; }
+.float.dodge b { font-size: calc(34px * var(--tsd)); letter-spacing: .16em; font-style: italic; }
 :root[data-lens='survey'] .float.dodge { color: var(--ink); text-shadow: none; }
 :root[data-lens='heat'] .float.dodge { color: var(--flesh); text-shadow: 0 0 10px var(--vein); }
 :root[data-lens='heat'] .float.dodge b { font-weight: 600; font-style: normal; letter-spacing: .3em; }
@@ -142,8 +142,8 @@
 @keyframes flare { 0% { opacity: 0; transform: scale(.4); } 25% { opacity: .85; } 100% { opacity: 0; transform: scale(1.3); } }
 :root[data-motion='reduced'] .ab-tape { animation-name: none; }
 
-.arena-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 6px 6px; z-index: 8; }
-.round { font-size: var(--fs-16); font-weight: 700; }
+.arena-bar { display: flex; align-items: center; justify-content: space-between; gap: 6px 10px; flex-wrap: wrap; padding: 4px 6px 6px; z-index: 8; }
+.round { font-size: var(--fs-16); font-weight: 700; white-space: nowrap; }
 
 /* ---------- result ---------- */
 .result { flex: 1; min-height: 0; display: flex; flex-direction: column; }
@@ -189,7 +189,7 @@
 /* ---------- level up ---------- */
 .levelup { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: safe center; min-height: 0; overflow-y: auto; text-align: center; padding: 24px; gap: 8px; animation: fade .3s both; }
 .levelup > * { flex-shrink: 0; }
-.lv-num { font-size: 160px; line-height: .9; animation: slam .7s var(--ease) both; }
+.lv-num { font-size: calc(160px * var(--tsd)); line-height: .9; animation: slam .7s var(--ease) both; }
 :root[data-lens='survey'] .lv-num { color: var(--ink); text-shadow: 6px 6px 0 var(--hazard); }
 :root[data-lens='heat'] .lv-num { color: var(--white-hot); text-shadow: 0 0 40px var(--hot), 0 0 90px var(--warm); }
 .lv-icon { color: var(--accent); }
@@ -201,12 +201,12 @@
 :root[data-lens='survey'] .lv-list .icon { color: var(--ink); }
 .lv-btn { margin-top: 18px; max-width: 340px; }
 
-@media (max-height: 640px) { .f-gear { display: none; } .float b { font-size: 40px; } .lv-num { font-size: 110px; } }
+@media (max-height: 640px) { .f-gear { display: none; } .float b { font-size: calc(40px * var(--tsd)); } .lv-num { font-size: calc(110px * var(--tsd)); } }
 @keyframes fade { from { opacity: 0; } }
 @keyframes rise { from { transform: translateY(20px); opacity: 0; } }
 
 /* ---------- aftermath of a fight against a person ---------- */
-.pvp-result .res-word { font-size: 88px; line-height: .9; letter-spacing: .02em; }
+.pvp-result .res-word { font-size: calc(88px * var(--tsd)); line-height: .9; letter-spacing: .02em; }
 .carried { gap: 4px; }
 .carried-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .carried-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-left: 5px solid var(--r); background: var(--surface-2); font-weight: 700; min-width: 0; }

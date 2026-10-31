@@ -11,6 +11,7 @@ import './styles/tokens.css';
 import './styles/base.css';
 import './styles/layout.css';
 import { hydrateStorage } from './api/storage';
+import { followSystemTextSize } from './native/textscale';
 
 // Neutral until a side is chosen; the store flips this once /api/me says who you are.
 document.documentElement.dataset.lens = 'neutral';
@@ -30,6 +31,7 @@ async function main() {
   ]);
   if (mockRequested()) installMock();
   initNative();
+  followSystemTextSize();
   initAudio();
   render(<App />, document.getElementById('app')!);
 }

@@ -20,6 +20,7 @@ import { clock } from '../shell/Vitals';
 import { PatrolButton } from '../patrol/PatrolButton';
 import { notesFound } from '../notes/store';
 import { achievementsEarned } from '../collection/store';
+import { NearbyList, nearbyObjects } from '../map/Nearby';
 
 type Result = { kind: 'loot'; loot: Rewards } | { kind: 'note'; text: string };
 
@@ -160,6 +161,7 @@ function ObjectSheet({ o, onClose, onResult }: { o: GameObject; onClose: () => v
 
 export function MapTab() {
   const [result, setResult] = useState<Result | null>(null);
+  const [nearby, setNearby] = useState(false);
   const w = world.value;
   const f = faction.value;
   const sel = selectedId.value;
@@ -181,10 +183,15 @@ export function MapTab() {
           <span>{say('Your first one. Tap it, then Engage.', 'the first one. close. take it.')}</span>
         </p>
       )}
-      <button class="map-fab" aria-pressed={follow.value} aria-label="Center on me" onClick={() => { follow.value = true; }}>
+      <button class="map-fab" aria-pressed={follow.value} aria-label={say('Center on me', 'find me')} onClick={() => { follow.value = true; }}>
         <Icon name="gps" size={28} />
       </button>
-      {!obj && !result && <PatrolButton />}
+      <button class="map-nearby" aria-label={say(`Nearby, ${nearbyObjects().length} on the map`, `close by, ${nearbyObjects().length}`)} onClick={() => setNearby(true)}>
+        <Icon name="compass" size={24} />
+        <span>{say('Nearby', 'close by')}</span>
+      </button>
+      {nearby && !obj && !result && <NearbyList onClose={() => setNearby(false)} />}
+      {!obj && !result && !nearby && <PatrolButton />}
       {obj && !result && <ObjectSheet key={obj.id} o={obj} onClose={() => { selectedId.value = null; }} onResult={setResult} />}
       {result && <ResultSheet result={result} onClose={() => { setResult(null); selectedId.value = null; }} />}
     </>

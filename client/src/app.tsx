@@ -53,10 +53,10 @@ function Shell() {
   const t = tab.value;
   return (
     <div class="app">
-      <div class="viewport">
+      <div class={'viewport' + (t !== 'map' ? ' on-panel' : '')}>
         <GameMap />
         {t !== 'map' && (
-          <div role="tabpanel" aria-label={t}>
+          <div role="tabpanel" id={'panel-' + t} aria-labelledby={'tab-' + t}>
             {t === 'gear' && <GearTab />}
             {t === 'tasks' && <TasksTab />}
             {t === 'war' && <WarTab />}

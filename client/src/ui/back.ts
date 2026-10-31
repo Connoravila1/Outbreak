@@ -17,3 +17,8 @@ export function handleBack(): boolean {
   fn();
   return true;
 }
+
+// Escape does what the back button does: close the topmost overlay, and only that one.
+if (typeof window !== 'undefined') {
+  window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && handleBack()) e.preventDefault(); });
+}

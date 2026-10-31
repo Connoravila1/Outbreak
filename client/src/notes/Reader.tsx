@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'preact/hooks';
 import type { ArchiveNote } from '../api';
 import { pushBack } from '../ui/back';
+import { trapTab } from '../ui/a11y';
 import { Icon } from '../ui/Icon';
 import { say } from '../ui/voice';
 import { archive, closeReader, reading } from './store';
@@ -13,7 +14,7 @@ function Reading({ n }: { n: ArchiveNote }) {
   useEffect(() => {
     const prev = document.activeElement as HTMLElement | null;
     ref.current?.focus();
-    const key = (e: KeyboardEvent) => { if (e.key === 'Escape') closeReader(); };
+    const key = (e: KeyboardEvent) => trapTab(e, ref.current);
     window.addEventListener('keydown', key);
     const unback = pushBack(closeReader);
     return () => { unback(); window.removeEventListener('keydown', key); prev?.focus?.(); };
@@ -26,7 +27,7 @@ function Reading({ n }: { n: ArchiveNote }) {
           <h2 class="nr-title display">{n.title}</h2>
           <p class="nr-meta"><span>{n.author}</span><span class="nr-date num">{n.date}</span></p>
         </div>
-        <button class="nr-x" onClick={closeReader} aria-label="Close"><Icon name="cancel" size={26} /></button>
+        <button class="nr-x" onClick={closeReader} aria-label={say('Close note', 'let go')}><Icon name="cancel" size={26} /></button>
       </header>
       <div class="nr-scroll scroll">
         <Paper n={{ title: n.title ?? '', author: n.author ?? '', date: n.date ?? '', form: n.form ?? 'card', body: n.body ?? '' }} />

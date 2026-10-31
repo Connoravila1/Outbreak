@@ -35,6 +35,24 @@ function hpOf(b: Battle, i: number, side: Side): number {
   return side === 'a' ? t.hp_a : t.hp_b;
 }
 
+/** One short sentence per blow for a screen reader: who did what to whom, and for how much. */
+function turnLine(b: Battle, t: Turn, dmg: number, round: number): string {
+  const you = say('You', 'you');
+  const foe = foeLabel(b);
+  const mine = t.actor === 'a';
+  const [actor, target] = mine ? [you, foe] : [foe, you.toLowerCase()];
+  const n = Math.round(dmg);
+  const hits = mine ? 'hit' : 'hits';
+  let s: string;
+  if (t.ev === 'dodge') s = `${mine ? target : you} ${mine ? 'dodges' : 'dodge'}.`;
+  else if (t.ev === 'dot') s = `${say('Burning', 'burning')}: ${mine ? target : you} ${mine ? 'loses' : 'lose'} ${n}.`;
+  else if (t.ev === 'revive') s = `${actor} ${mine ? 'get back up' : 'gets back up'}.`;
+  else if (t.ev === 'crit') s = `${say('Critical', 'critical')}: ${actor} ${hits} ${target}, ${n}.`;
+  else s = `${actor} ${hits} ${target}, ${n}.`;
+  s = `${say('Round', 'round')} ${round}. ${s}`;
+  return lens.peek() === 'heat' ? s.toLowerCase() : s;
+}
+
 /** Compact card: who, how healthy. The fighting happens on the stage, not here. */
 function Card({ side, who, label, you, hp }: { side: Side; who: Combatant; label: string; you: boolean; hp: number }) {
   const pct = Math.max(0, Math.min(100, (hp / who.max_hp) * 100));
@@ -85,6 +103,7 @@ export function Fight({ battle, onDone }: { battle: Battle; onDone: () => void }
   const [impact, setImpact] = useState<Record<Side, Impact | null>>({ a: null, b: null });
   const [flash, setFlash] = useState<Flash | null>(null);
   const [slow, setSlow] = useState<Side | null>(null);
+  const [spoken, setSpoken] = useState('');
   const rootRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const timers = useRef<number[]>([]);
@@ -163,6 +182,7 @@ export function Fight({ battle, onDone }: { battle: Battle; onDone: () => void }
     };
     delta('a', dA);
     delta('b', dB);
+    setSpoken(turnLine(battle, t, -(actor === 'a' ? dB : dA) || 0, turns.indexOf(t) + 1));
     if (t.ev === 'dodge') push(target, say('DODGE', 'dodge'), 'dodge');
 
     const attacking = t.ev === 'hit' || t.ev === 'crit' || t.ev === 'dodge';
@@ -268,9 +288,13 @@ export function Fight({ battle, onDone }: { battle: Battle; onDone: () => void }
     </div>
   );
 
+  // Read out politely, one line a blow (the numbers on screen are decoration for a screen reader).
+  const announce = <p class="sr-only" role="status" aria-live="polite">{spoken}</p>;
+
   if (pvp) {
     return (
       <div class="fight pvp" ref={rootRef} role="region" aria-label="Fight">
+        {announce}
         <PvpArena
           battle={battle} hpA={hpA} hpB={hpB} impact={impact} over={over} ready={ready} reveal={reveal} flash={flash} slow={slow}
           floatsA={<Floats list={floats.filter((f) => f.side === 'a')} />} floatsB={<Floats list={floats.filter((f) => f.side === 'b')} />}
@@ -285,6 +309,7 @@ export function Fight({ battle, onDone }: { battle: Battle; onDone: () => void }
 
   return (
     <div class="fight" ref={rootRef} role="region" aria-label="Fight">
+      {announce}
       <Card side="b" who={battle.b} label={foeLabel(battle)} you={false} hp={hpB} />
       <div class="arena" ref={stageRef}>
         {half('b')}

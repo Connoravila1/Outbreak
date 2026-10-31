@@ -8,10 +8,12 @@ interface SegProps<T extends string> {
   options: { id: T; label: string }[];
   onChange: (v: T) => void;
   label: string;
+  /** Lay the options out two by two (for long labels or large text). */
+  grid?: boolean;
 }
-export function Seg<T extends string>({ value, options, onChange, label }: SegProps<T>) {
+export function Seg<T extends string>({ value, options, onChange, label, grid }: SegProps<T>) {
   return (
-    <div class="seg" role="group" aria-label={label}>
+    <div class={'seg' + (grid ? ' grid' : '')} role="group" aria-label={label}>
       {options.map((o) => (
         <button key={o.id} class="seg-btn" aria-pressed={value === o.id} onClick={() => onChange(o.id)}>{o.label}</button>
       ))}
@@ -66,9 +68,9 @@ export function pushToast(text: string, kind: Toast['kind'] = 'info', act?: () =
   window.setTimeout(() => { toasts.value = toasts.value.filter((t) => t.id !== id); }, 4500);
 }
 export function Toasts() {
-  if (!toasts.value.length) return null;
+  // The live region is always present: text added to a region that already exists is announced.
   return (
-    <div class="toasts" role="status" aria-live="polite">
+    <div class="toasts" role="status" aria-live="polite" aria-relevant="additions">
       {toasts.value.map((t) => (
         <button key={t.id} class={'toast ' + t.kind} onClick={() => { toasts.value = toasts.value.filter((x) => x.id !== t.id); t.act?.(); }}>{t.text}</button>
       ))}

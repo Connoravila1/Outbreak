@@ -12,7 +12,7 @@ button.inv-item { font: inherit; text-align: left; cursor: pointer; min-height: 
 .ic-stats { font-size: var(--fs-12); }
 .ic-req { font-size: var(--fs-12); font-weight: 700; color: var(--danger); }
 .item-card.selected { outline: 4px solid var(--accent); outline-offset: 1px; background: color-mix(in srgb, var(--accent) 18%, var(--surface-2)); }
-.tick { width: 24px; height: 24px; border: 2px solid var(--text); border-radius: 4px; display: grid; place-items: center; font-weight: 900; font-size: 16px; line-height: 1; }
+.tick { width: 24px; height: 24px; border: 2px solid var(--text); border-radius: 4px; display: grid; place-items: center; font-weight: 900; font-size: calc(16px * var(--ts)); line-height: 1; }
 .tick.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 :root[data-lens='heat'] .tick { border-radius: 50%; }
 
@@ -42,7 +42,7 @@ button.inv-item { font: inherit; text-align: left; cursor: pointer; min-height: 
 .delta { font-weight: 700; text-align: right; }
 .delta.up { color: var(--r-uncommon); }
 .delta.down { color: var(--danger); }
-:root[data-lens='survey'] .delta.up { color: var(--survey-blue); }
+:root[data-lens='survey'] .delta.up { color: var(--blue-ink); }
 :root[data-lens='heat'] .delta.up { color: var(--white-hot); }
 .vs { font-size: var(--fs-14); margin-bottom: 8px; }
 .perk-list { list-style: none; padding: 0; margin: 10px 0; display: grid; gap: 6px; }

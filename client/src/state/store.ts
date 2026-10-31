@@ -28,6 +28,15 @@ export const hapticsOn = signal(flag(KEYS.haptics, true));
 const systemReduced = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
 export const reducedMotion = signal(flag(KEYS.reducedMotion, systemReduced));
 effect(() => { document.documentElement.dataset.motion = reducedMotion.value ? 'reduced' : 'full'; });
+
+export type TextSize = 'default' | 'large' | 'larger' | 'largest';
+export const TEXT_SIZES: { id: TextSize; label: string }[] = [
+  { id: 'default', label: 'Default' }, { id: 'large', label: 'Large' }, { id: 'larger', label: 'Larger' }, { id: 'largest', label: 'Largest' },
+];
+const storedSize = storage.get(KEYS.textSize);
+export const textSize = signal<TextSize>(TEXT_SIZES.some((t) => t.id === storedSize) ? (storedSize as TextSize) : 'default');
+effect(() => { document.documentElement.dataset.textsize = textSize.value; });
+export function setTextSize(v: TextSize) { textSize.value = v; storage.set(KEYS.textSize, v); }
 export function setSetting(sig: typeof soundOn, key: string, v: boolean) { sig.value = v; storage.set(key, v ? '1' : '0'); }
 
 // ---- battles and events: hook for the fight-playback screen built later ----

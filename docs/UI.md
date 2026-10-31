@@ -175,3 +175,52 @@ the First Blood target, the selected marker. Landmark labels also give way to an
   off ambient motion, shake, and breathing.
 - Honest empty states: "Nothing within 400 m. Walk a block and it changes every 10 minutes."
 - Icons: game-icons.net via `@iconify-json/game-icons` (CC BY 3.0, attributed), one consistent set.
+
+## Accessibility
+
+What the client supports, and where it lives.
+
+**Text size.** You tab > Settings > Text size: Default, Large (x1.15), Larger (x1.3), Largest (x1.5), stored on
+the device and kept across sign-out. The `--fs-*` tokens are `calc(Npx * var(--ts))`; display sizes (28 px and up)
+scale at half the rate (`--tsd`) so headings keep fitting; every other text size in CSS is written the same way.
+`--top-clear` grows with the scale so panels, banners and toasts sit below the top bar and its time stamp, and the
+top bar gets a solid backing over scrolling tabs. Controls wrap instead of clipping (segmented controls go to a second
+row, Store and clan rows drop the button under the text, the split-lens details fold away once a side is chosen).
+It was checked at 360 x 780 at Largest in both lenses: map HUD, top bar, tab bar, vitals, fight and result, level-up,
+loot, Store, Gear, Tasks, War boards, clan, notes, collection log, field manual and onboarding.
+*System font scale.* Android: `MainActivity` sets the WebView text zoom to the system font scale (capped at 200%), so
+the whole page follows Settings > Display > Font size; Capacitor's WebView does not do this by itself. iOS: the page
+measures `font: -apple-system-body` (Dynamic Type) and feeds `--ts-sys`. The Text size setting stacks on top of either.
+
+**Screen readers.** Icon-only buttons have names in the viewer's lens voice (map "Center on me" / "find me", Nearby,
+close note). Sheets and the fight/level-up layers are `role="dialog"` `aria-modal`, labelled, move focus in when
+they open, keep Tab inside, return focus on close, and close with Escape or the Android back button (one overlay at
+a time, topmost first). The tab bar is a real tablist: arrow keys, Home and End, one tab stop, `aria-controls`.
+Toasts and the fight read out through polite live regions: one short sentence per blow ("Round 3. Brute hits you,
+28.") and a one-line result summary, not every number on screen. Level-up announces itself.
+
+**Nearby.** The map HUD's Nearby button opens a sheet listing everything on the map (threats, supplies, places),
+nearest first, with distance and compass direction, threat word, and an in-range mark. Choosing a row opens the same
+object sheet a marker tap does (Engage, Open, Claim), so the map is fully playable without seeing or touching it.
+
+**Choosing a side.** Hold-to-commit is kept, but "Cannot hold? Confirm another way" is always offered under it: a
+button, then "Are you sure?" with Yes and Go back. Both sides' copy is readable as one named control each.
+
+**Contrast.** Body and secondary text meet WCAG AA (4.5:1) in all three lenses; large text and UI borders 3:1.
+Fixes, measured on the lens surface (Survey paper `#DCDDD5`):
+
+| Token | Before | After |
+| --- | --- | --- |
+| Survey `--text-dim` (62% ink) | 4.00 (3.33 on paper-2) | 76% ink: 5.9 (4.98 on paper-2) |
+| Survey grease red as text | 3.90 | `#A8261F`: 5.18 |
+| Survey blue as text (`--blue-ink`) | 3.96 | `#2D5880`: 5.44 |
+| Survey "dangerous" amber | 3.12 | `#86480F`: 5.21 |
+| Heat "even" threat (`--t-even`) | 3.69 | `#E5485A`: 4.87 |
+| Heat rare label | 4.46 | `#5A98E6`: 6.36 |
+| Neutral danger / rare | 4.11 / 4.27 | `#F0554F` 5.28 / `#4C8EE0` |
+
+Heat's body (14.3:1) and secondary text (5.2:1) already passed and are unchanged.
+
+**Motion.** The Reduce motion setting (default: the system setting) removes the screen shake, lunges, breathing, flashing
+and slow-motion beats in fights, ends ambient loops, and shortens the level-up reveal pauses.
+

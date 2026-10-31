@@ -1,6 +1,6 @@
 /* ----- Patrol control on the map ----- */
 .patrol-btn {
-  position: absolute; right: calc(var(--sa-right) + 12px); bottom: 82px; z-index: 8;
+  position: absolute; right: calc(var(--sa-right) + 12px); bottom: 140px; z-index: 8;
   min-width: 96px; min-height: 44px; padding: 4px 14px; display: grid; justify-items: center; align-content: center; gap: 0;
   font-weight: 800; font-size: var(--fs-14); letter-spacing: .1em; text-transform: uppercase; cursor: pointer;
   color: var(--text); background: var(--surface); border: 2px solid var(--text); border-radius: 6px;

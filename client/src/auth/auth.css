@@ -4,7 +4,7 @@
 .brand-btn {
   display: flex; align-items: center; justify-content: center; gap: 10px;
   width: 100%; min-height: 52px; padding: 0 16px; border-radius: 8px; border: 1px solid transparent;
-  font-size: 17px; font-weight: 600; cursor: pointer; text-transform: none; letter-spacing: 0;
+  font-size: calc(17px * var(--ts)); font-weight: 600; cursor: pointer; text-transform: none; letter-spacing: 0;
 }
 .brand-btn:disabled { opacity: .6; cursor: wait; }
 .brand-btn:active:not(:disabled) { transform: translateY(1px); }
@@ -16,7 +16,7 @@
 :root[data-lens='survey'] .brand-btn.apple { background: #000; color: #fff; border-color: #000; }
 
 /* Google: the standard light button on light screens, the dark theme button on dark ones. */
-.brand-btn.google { font-family: Roboto, 'Helvetica Neue', Arial, sans-serif; font-weight: 500; font-size: 16px;
+.brand-btn.google { font-family: Roboto, 'Helvetica Neue', Arial, sans-serif; font-weight: 500; font-size: calc(16px * var(--ts));
   background: #131314; color: #e3e3e3; border-color: #8e918f; }
 :root[data-lens='survey'] .brand-btn.google { background: #fff; color: #1f1f1f; border-color: #747775; }
 

@@ -91,6 +91,8 @@ export function SplitLens({ center, onChosen }: Props) {
   const [stage, setStage] = useState<Stage>('choose');
   const [data, setData] = useState<Factions | null>(null);
   const [hold, setHold] = useState(0);
+  /** The no-hold way to commit: a button, then a second "are you sure" button (for screen readers, switches, tremor). */
+  const [confirming, setConfirming] = useState(false);
   const drag = useRef(false);
   const holdRaf = useRef(0);
   const heart = useRef<Heart | null>(null);
@@ -118,6 +120,7 @@ export function SplitLens({ center, onChosen }: Props) {
   const leanTo = (f: Faction | null) => {
     if (stage !== 'choose') return;
     setLean(f);
+    setConfirming(false);
     void moveSeam(f === 'human' ? 0.86 : f === 'zombie' ? 0.14 : 0.5);
     haptic(12);
   };
@@ -150,6 +153,7 @@ export function SplitLens({ center, onChosen }: Props) {
     else return;
     const s = seam.value;
     setLean(s > 0.62 ? 'human' : s < 0.38 ? 'zombie' : null);
+    setConfirming(false);
   };
 
   // ----- hold to commit -----
@@ -220,7 +224,7 @@ export function SplitLens({ center, onChosen }: Props) {
       <div class="half half-l" data-scope="survey" style={{ clipPath: `inset(0 ${100 - s * 100}% 0 0)` }}>
         <div class="half-map" ref={hostL} />
         <div class="half-shade" />
-        <div class="side-copy side-l" role="button" tabIndex={sharp ? 0 : -1} onClick={() => leanTo('human')} onKeyDown={(e) => keyLean(e, 'human')} aria-pressed={lean === 'human'} aria-disabled={!sharp}>
+        <div class="side-copy side-l" role="button" aria-label={`${COPY.human.name}. ${COPY.human.head} ${COPY.human.lines.join(' ')}`} tabIndex={sharp ? 0 : -1} onClick={() => leanTo('human')} onKeyDown={(e) => keyLean(e, 'human')} aria-pressed={lean === 'human'} aria-disabled={!sharp}>
           <span class="display side-head">{COPY.human.head}</span>
           <ul>{COPY.human.lines.map((l) => <li key={l}>{l}</li>)}</ul>
           <ShareLine f="human" data={data} />
@@ -230,7 +234,7 @@ export function SplitLens({ center, onChosen }: Props) {
       <div class="half half-r" data-scope="heat" style={{ clipPath: `inset(0 0 0 ${s * 100}%)` }}>
         <div class="half-map" ref={hostR} />
         <div class="half-shade" />
-        <div class="side-copy side-r" role="button" tabIndex={sharp ? 0 : -1} onClick={() => leanTo('zombie')} onKeyDown={(e) => keyLean(e, 'zombie')} aria-pressed={lean === 'zombie'} aria-disabled={!sharp}>
+        <div class="side-copy side-r" role="button" aria-label={`${COPY.zombie.name}. ${COPY.zombie.head} ${COPY.zombie.lines.join(' ')}`} tabIndex={sharp ? 0 : -1} onClick={() => leanTo('zombie')} onKeyDown={(e) => keyLean(e, 'zombie')} aria-pressed={lean === 'zombie'} aria-disabled={!sharp}>
           <span class="display side-head breathe">{COPY.zombie.head}</span>
           <ul>{COPY.zombie.lines.map((l) => <li key={l}>{l}</li>)}</ul>
           <ShareLine f="zombie" data={data} />
@@ -274,6 +278,17 @@ export function SplitLens({ center, onChosen }: Props) {
                 <span>{COPY[lean].btn}</span>
               </button>
               <p class="hold-hint">{lean === 'human' ? 'Hold for three seconds. Let go to change your mind.' : 'hold for three seconds. let go to change your mind.'}</p>
+              {!confirming ? (
+                <button class="alt-commit" onClick={() => setConfirming(true)}>{lean === 'human' ? 'Cannot hold? Confirm another way' : 'cannot hold? confirm another way'}</button>
+              ) : (
+                <div class="alt-confirm" role="group" aria-label="Confirm your choice">
+                  <p class="perm" role="alert">{lean === 'human' ? 'Are you sure? You will stay human for good.' : 'are you sure? you will be one of the infected for good.'}</p>
+                  <div class="alt-row">
+                    <button class="btn primary" autofocus ref={(el) => el?.focus()} onClick={() => { unlockAudio(); void commit(lean); }}>{lean === 'human' ? 'Yes, stay human' : 'yes. let it in'}</button>
+                    <button class="btn" onClick={() => setConfirming(false)}>{lean === 'human' ? 'Go back' : 'go back'}</button>
+                  </div>
+                </div>
+              )}
             </>
           ) : (
             <p class="perm choose-hint">Drag the seam, or tap a side. You will see your city this way forever.</p>
@@ -281,6 +296,7 @@ export function SplitLens({ center, onChosen }: Props) {
         </div>
       )}
 
+      <p class="sr-only" role="status" aria-live="polite">{stage === 'choose' ? (lean ? `${COPY[lean].name} selected.` : '') : 'Choice made.'}</p>
       <Ecg stage={stage} />
       {stage === 'burn' && <div class="ember-wash" aria-hidden="true" />}
       {(stage === 'eyes') && <div class="eyes" aria-hidden="true"><i class="lid top" /><i class="lid bot" /><i class="flash" /></div>}

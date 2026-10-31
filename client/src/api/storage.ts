@@ -85,6 +85,7 @@ export const KEYS = {
   sound: 'outbreak.sound',
   haptics: 'outbreak.haptics',
   reducedMotion: 'outbreak.reducedMotion',
+  textSize: 'outbreak.textSize',
   briefed: 'outbreak.briefed',
   /** Highest level at which the guest reminder has been shown (3, then 10). */
   guestNudge: 'outbreak.guestNudge',
@@ -97,7 +98,7 @@ export const KEYS = {
 } as const;
 
 /** Device settings that outlive a sign-out: they are about the phone, not the player. */
-const KEEP: string[] = [KEYS.server, KEYS.sound, KEYS.haptics, KEYS.reducedMotion];
+const KEEP: string[] = [KEYS.server, KEYS.sound, KEYS.haptics, KEYS.reducedMotion, KEYS.textSize];
 
 /** Forget everything this device holds about the player (token, progress flags, simulator spot). */
 export function wipeLocal() {

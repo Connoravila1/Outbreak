@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { Rewards } from '../api';
-import { catalog, faction } from '../state/store';
+import { catalog, faction, reducedMotion } from '../state/store';
 import { say } from '../ui/voice';
 import { Icon } from '../ui/Icon';
 import { abilityName } from '../gear/util';
@@ -40,12 +40,12 @@ export function LevelUp({ up, title, onContinue }: { up: Up; title: string; onCo
   useEffect(() => { fx.levelUp(); }, []);
   useEffect(() => {
     if (shown > lines.length + (newTitle ? 1 : 0)) { btn.current?.focus(); return; }
-    const t = window.setTimeout(() => setShown(shown + 1), shown === 0 ? 900 : 550);
+    const t = window.setTimeout(() => setShown(shown + 1), reducedMotion.peek() ? 150 : shown === 0 ? 900 : 550);
     return () => clearTimeout(t);
   }, [shown]);
   const done = shown > lines.length + (newTitle ? 1 : 0);
   return (
-    <div class="levelup" role="status">
+    <div class="levelup" role="status" aria-live="polite">
       <p class="eyebrow voice">{say('Level up', 'stronger')}</p>
       <p class="lv-num display" aria-label={`Level ${up.to}`}>{up.to}</p>
       <Icon name="laurels" size={40} class="lv-icon" />

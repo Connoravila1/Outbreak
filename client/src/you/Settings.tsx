@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'preact/hooks';
 import { api, errorMessage, getServerUrl, setServerUrl, KEYS } from '../api';
-import { soundOn, hapticsOn, reducedMotion, setSetting } from '../state/store';
+import { soundOn, hapticsOn, reducedMotion, setSetting, textSize, setTextSize, TEXT_SIZES } from '../state/store';
 import { simActive, setSimActive, isDesktop } from '../location';
 import { say } from '../ui/voice';
 import { Icon } from '../ui/Icon';
-import { Section } from '../ui/kit';
+import { Section, Seg } from '../ui/kit';
 import { Credits } from './Credits';
 import { Account } from './Account';
 import { unlockAudio } from '../audio/fx';
@@ -71,6 +71,11 @@ export function Settings() {
         {probe && <p class={'probe-out ' + (probe.ok ? 'ok' : 'bad')} role="status"><Icon name={probe.ok ? 'check-mark' : 'cancel'} size={18} />{probe.text}</p>}
       </div>
 
+      <div class="text-size">
+        <span class="lab-line">{say('Text size', 'text size')}</span>
+        <Seg grid label={say('Text size', 'text size')} value={textSize.value} options={TEXT_SIZES} onChange={setTextSize} />
+        <small class="dim">{say('Follows your phone\'s font size to begin with. This stacks on top.', 'starts from your phone\'s font size. this adds to it.')}</small>
+      </div>
       <Toggle label={say('Sound', 'sound')} checked={soundOn.value} onChange={(v) => { setSetting(soundOn, KEYS.sound, v); if (v) unlockAudio(); }} />
       {soundOn.value && <VolumeSliders />}
       <Toggle label={say('Haptics', 'touch')} checked={hapticsOn.value} onChange={(v) => setSetting(hapticsOn, KEYS.haptics, v)} />
