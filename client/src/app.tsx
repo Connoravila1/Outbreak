@@ -13,9 +13,11 @@ import { Onboarding } from './onboarding/Onboarding';
 import { SimPanel } from './location/SimPanel';
 import { boot, loadCatalog, phase, tab, lens } from './state/store';
 import { isDesktop, startLocation } from './location';
-import { startPolling, stopPolling, contactAlert } from './state/poll';
+import { startPolling, stopPolling } from './state/poll';
+import { BattleHost } from './battle/BattleHost';
+import { Toasts } from './ui/kit';
+import { RewardsSheet } from './ui/RewardsSheet';
 import { setUnauthorizedHandler, setToken } from './api';
-import { say } from './ui/voice';
 import { Icon } from './ui/Icon';
 import './shell/shell.css';
 
@@ -47,18 +49,12 @@ function Shell() {
         )}
         <TopBar />
         {t === 'map' && <MapTab />}
-        {contactAlert.value && (
-          <div class="overlay" role="alertdialog" aria-label="Contact">
-            <div class="card">
-              <p class="display" style={{ fontSize: 'var(--fs-40)', color: 'var(--danger)' }}>CONTACT</p>
-              <p style={{ margin: '10px 0 16px' }}>{contactAlert.value}</p>
-              <button class="btn primary block" onClick={() => { contactAlert.value = null; }}>{say('Understood', 'ok')}</button>
-            </div>
-          </div>
-        )}
       </div>
       <Vitals />
       <TabBar />
+      <Toasts />
+      <RewardsSheet />
+      <BattleHost />
     </div>
   );
 }

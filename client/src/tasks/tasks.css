@@ -1,0 +1,18 @@
+.streak { display: flex; align-items: center; gap: 12px; background: var(--surface-2); }
+.streak .icon { color: var(--accent); }
+:root[data-lens='survey'] .streak .icon { color: var(--grease); }
+.streak b { font-size: var(--fs-20); }
+.mission-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.tasks .mission { margin: 0; background: var(--surface-2); display: grid; gap: 8px; }
+.tasks .mission .bar { margin: 0; height: 16px; }
+.mission.ready { border: 2px solid var(--accent); }
+:root[data-lens='survey'] .mission.ready { border-color: var(--ink); box-shadow: 0 3px 0 var(--hazard); }
+.mission.claimed { opacity: .65; }
+.m-top { display: flex; gap: 8px; align-items: flex-start; flex-wrap: wrap; }
+.m-text { font-weight: 700; font-size: var(--fs-16); }
+.m-row { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; font-size: var(--fs-14); }
+.m-rewards { display: inline-flex; gap: 4px; align-items: center; font-weight: 600; }
+.m-claimed { display: flex; gap: 6px; align-items: center; font-weight: 700; }
+.bonus-hint { display: flex; gap: 8px; align-items: center; margin-top: 10px; font-size: var(--fs-14); color: var(--text-dim); }
+.bonus-hint.got { color: var(--text); font-weight: 700; }
+.locked-card { display: flex; gap: 12px; align-items: center; background: var(--surface-2); border-style: dashed; }

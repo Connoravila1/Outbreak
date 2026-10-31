@@ -1,5 +1,5 @@
 import { useState } from 'preact/hooks';
-import { api, errorMessage, type Battle } from '../api';
+import { api, errorMessage } from '../api';
 import { follow, selectedId } from '../map/GameMap';
 import { threatOf, THREAT_WORD, THREAT_WORD_HEAT } from '../map/threat';
 import { haversine, formatDistance, position } from '../location';
@@ -9,11 +9,13 @@ import { inSanctuary, pollError, pollNow } from '../state/poll';
 import { Sheet } from '../ui/Sheet';
 import { Icon } from '../ui/Icon';
 import { say } from '../ui/voice';
-import { BattleSummary, RewardLines } from '../shell/Battle';
+import { RewardLines } from '../ui/RewardLines';
+import { recordCache } from '../state/record';
+import { enqueueLevelUp } from '../battle/session';
 import type { Rewards } from '../api';
 import { clock } from '../shell/Vitals';
 
-type Result = { kind: 'battle'; battle: Battle } | { kind: 'loot'; loot: Rewards };
+type Result = { kind: 'loot'; loot: Rewards } | { kind: 'note'; text: string };
 
 const KIND_LINE: Record<GameObject['kind'], [string, string]> = {
   enemy: ['Hostile.', 'something warm. close.'],
@@ -54,27 +56,26 @@ function ObjectSheet({ o, onClose }: { o: GameObject; onClose: () => void }) {
   const go = async () => {
     setBusy(true); setErr(null);
     try {
+      // Fights play back full-screen (battle/); `me` is applied when the player continues.
       if (o.kind === 'enemy' || o.kind === 'echo') {
-        const b = await api.engage(o.id);
-        applyMe(b.me);
-        setResult({ kind: 'battle', battle: b });
-        onBattle(b);
+        onBattle(await api.engage(o.id));
+        onClose();
       } else if (o.kind === 'cache' || o.kind === 'airdrop') {
         const r = await api.open(o.id);
         applyMe(r.me);
+        recordCache();
         setResult({ kind: 'loot', loot: r.loot });
+        enqueueLevelUp(r.loot.level_up, r.me);
       } else if (o.kind === 'stronghold') {
         const r = await api.claimStronghold(o.id);
-        applyMe(r.me);
         r.battles.forEach(onBattle);
-        if (r.battles[0]) setResult({ kind: 'battle', battle: r.battles[r.battles.length - 1] });
+        if (r.battles.length) onClose();
+        else { applyMe(r.me); setResult({ kind: 'note', text: r.claimed ? say('Stronghold claimed.', 'yours now. hold it.') : say('Nothing happened.', 'nothing.') }); }
       } else {
-        const b = await api.raidAttack(o.id);
-        applyMe(b.me);
-        setResult({ kind: 'battle', battle: b });
-        onBattle(b);
+        onBattle(await api.raidAttack(o.id));
+        onClose();
       }
-      pollNow();
+      if (o.kind === 'cache' || o.kind === 'airdrop') pollNow();
     } catch (e) {
       setErr(errorMessage(e));
     } finally {
@@ -85,13 +86,10 @@ function ObjectSheet({ o, onClose }: { o: GameObject; onClose: () => void }) {
   if (result) {
     return (
       <Sheet title="Result" onClose={onClose}>
-        {result.kind === 'battle' ? <BattleSummary b={result.battle} /> : (
-          <div class="battle-summary">
-            <p class="display result">{say('Opened', 'opened')}</p>
-            <p>{say('Supplies recovered.', 'spoils. take them.')}</p>
-            <RewardLines r={result.loot} />
-          </div>
-        )}
+        <div class="battle-summary">
+          <p class="display result">{result.kind === 'loot' ? say('Opened', 'opened') : say('Done', 'done')}</p>
+          {result.kind === 'loot' ? (<><p>{say('Supplies recovered.', 'spoils. take them.')}</p><RewardLines r={result.loot} /></>) : <p>{result.text}</p>}
+        </div>
         <div class="sheet-actions"><button class="btn primary block" onClick={onClose}>{say('Done', 'done')}</button></div>
       </Sheet>
     );

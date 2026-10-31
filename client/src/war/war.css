@@ -1,0 +1,61 @@
+/* Human = blue ink / pale heat; Zombie = grease red / magenta. Both are labelled in text too. */
+:root[data-lens='survey'] { --f-human: var(--survey-blue); --f-zombie: var(--grease); }
+:root[data-lens='heat'] { --f-human: var(--white-hot); --f-zombie: var(--warm); }
+:root[data-lens='neutral'] { --f-human: var(--fg); --f-zombie: var(--alert); }
+
+.war-card { display: grid; gap: 10px; background: var(--surface-2); }
+.war-top > span { display: inline-flex; align-items: center; gap: 4px; }
+.rk-main .icon { display: inline-block; vertical-align: -1px; }
+.war-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.war-top .display { font-size: var(--fs-20); }
+.fbar { display: flex; height: 26px; border: 2px solid var(--text); border-radius: 3px; overflow: hidden; position: relative; }
+:root[data-lens='heat'] .fbar { border-color: var(--vein); border-radius: 999px; }
+.fb-h, .fb-z { display: grid; place-items: center; color: var(--bg); font-weight: 800; font-size: var(--fs-14); text-shadow: 0 0 3px var(--text); overflow: hidden; }
+.fb-h { background: var(--f-human); transition: width .8s var(--ease); }
+.fb-z { background: var(--f-zombie); transition: width .8s var(--ease); background-image: repeating-linear-gradient(-45deg, transparent 0 6px, color-mix(in srgb, var(--bg) 35%, transparent) 6px 9px); }
+.fb-mid { position: absolute; left: 50%; top: 0; bottom: 0; width: 2px; background: var(--bg); opacity: .6; }
+.fb-labels { display: flex; justify-content: space-between; gap: 8px; font-size: var(--fs-14); margin-top: 6px; flex-wrap: wrap; }
+.fb-lab { display: inline-flex; gap: 4px; align-items: center; }
+.bar-cap { font-size: var(--fs-14); margin-top: 4px; }
+.my-pts { display: flex; align-items: center; gap: 12px; margin-top: 10px; }
+.my-pts .pts { font-size: var(--fs-28); font-family: var(--f-display); }
+:root[data-lens='heat'] .my-pts .pts { font-family: var(--f-body); }
+
+.rank-list, .roster, .clan-list, .chat { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; }
+.rank, .member { display: flex; align-items: center; gap: 10px; padding: 8px 10px; background: var(--surface-2); }
+.rank.me, .member.me { border: 2px solid var(--accent); }
+:root[data-lens='survey'] .rank.me, :root[data-lens='survey'] .member.me { border-color: var(--ink); box-shadow: 0 2px 0 var(--hazard); }
+.rk { width: 28px; text-align: center; font-size: var(--fs-20); font-family: var(--f-display); flex: none; }
+:root[data-lens='heat'] .rk { font-family: var(--f-body); }
+.rk-main { flex: 1; min-width: 0; display: grid; font-size: var(--fs-14); }
+.rk-name { font-size: var(--fs-16); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rk-val { font-weight: 800; font-size: var(--fs-16); flex: none; text-align: right; }
+.rk-val small { font-weight: 500; color: var(--text-dim); }
+.tag { color: var(--text-dim); font-weight: 700; }
+
+.lab { display: block; margin: 12px 0 4px; font-size: var(--fs-14); }
+.clan-row { display: flex; gap: 10px; align-items: center; background: var(--surface-2); padding: 10px; }
+.cl-main { flex: 1; min-width: 0; display: grid; font-size: var(--fs-14); }
+.clan-row .action { flex: none; max-width: 44%; }
+.clan-row .reason { font-size: var(--fs-12); }
+.sub-h { font-size: var(--fs-16); margin: 20px 0 8px; }
+.row-gap { display: flex; gap: 8px; align-items: flex-start; }
+.row-gap .field { flex: 1; min-width: 0; }
+.create-form { display: flex; gap: 8px; margin-bottom: 10px; }
+.create-form .field { min-width: 0; flex: 1; }
+.create-form .tag-in { flex: 0 0 90px; text-transform: uppercase; text-align: center; }
+.clan-head { display: grid; gap: 10px; background: var(--surface-2); }
+.clan-name { font-size: var(--fs-28); }
+.code-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.code { font-size: var(--fs-20); letter-spacing: .12em; }
+.clan-head .perk-list { margin: 0; }
+.clan-head .icon { display: inline-block; vertical-align: -2px; }
+.member .role { flex: none; }
+.chat { max-height: 260px; overflow-y: auto; margin-top: 0; padding: 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-2); align-content: start; min-height: 80px; }
+.msg { display: grid; gap: 1px; padding: 6px 8px; border-radius: 6px; max-width: 88%; font-size: var(--fs-14); overflow-wrap: anywhere; border: 1px solid var(--line); background: var(--surface); }
+.msg.mine { justify-self: end; border-color: var(--accent); }
+.msg-h { font-size: var(--fs-12); }
+.chat-form { display: flex; gap: 8px; margin-top: 8px; }
+.chat-form .field { flex: 1; min-width: 0; }
+.chat-count { font-size: var(--fs-12); text-align: right; margin-top: 2px; }
+.leave { margin-top: 22px; }

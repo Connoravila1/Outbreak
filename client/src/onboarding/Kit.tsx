@@ -3,7 +3,7 @@ import { catalog, faction, me, reducedMotion } from '../state/store';
 import { clunk } from '../audio/fx';
 import { Icon, type IconName } from '../ui/Icon';
 import { say } from '../ui/voice';
-import { itemName } from '../shell/Battle';
+import { itemTitle } from '../gear/util';
 import type { Slot } from '../api';
 
 const SLOT_ICON: Record<Slot, IconName> = { weapon: 'baseball-bat', armor: 'hoodie', utility: 'flashlight' };
@@ -15,7 +15,7 @@ export function Kit({ onDone }: { onDone: () => void }) {
   const f = faction.value ?? 'human';
   const entries: { key: string; icon: IconName; name: string; tag: string; rarity: string; note: string }[] = [];
   for (const it of m?.items ?? []) {
-    entries.push({ key: it.uid, icon: SLOT_ICON[it.slot], name: itemName(it.base, it.slot), tag: SLOT_NAME[it.slot][f === 'zombie' ? 1 : 0], rarity: it.rarity, note: `ATK ${it.stats.atk} · DEF ${it.stats.def} · SPD ${it.stats.spd}` });
+    entries.push({ key: it.uid, icon: SLOT_ICON[it.slot], name: itemTitle(it), tag: SLOT_NAME[it.slot][f === 'zombie' ? 1 : 0], rarity: it.rarity, note: `ATK ${it.stats.atk} · DEF ${it.stats.def} · SPD ${it.stats.spd}` });
   }
   for (const [id, n] of Object.entries(m?.consumables ?? {})) {
     const nm = catalog.value?.consumables.find((c) => c.id === id)?.names[f] ?? id;

@@ -36,14 +36,14 @@ export function setToken(token: string | null) {
 let onUnauthorized: (() => void) | null = null;
 export function setUnauthorizedHandler(h: () => void) { onUnauthorized = h; }
 
-async function request<R>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<R> {
+async function request<R>(method: 'GET' | 'POST', path: string, body?: unknown, base?: string): Promise<R> {
   const headers: Record<string, string> = { Accept: 'application/json' };
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   let res: Response;
   try {
-    res = await fetcher(getServerUrl() + path, {
+    res = await fetcher((base ?? getServerUrl()) + path, {
       method,
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -64,12 +64,13 @@ async function request<R>(method: 'GET' | 'POST', path: string, body?: unknown):
   return data as R;
 }
 
-const get = <R>(p: string) => request<R>('GET', p);
+const get = <R>(p: string, base?: string) => request<R>('GET', p, undefined, base);
 const post = <R>(p: string, b: unknown = {}) => request<R>('POST', p, b);
 
 export const api = {
   // account
-  health: () => get<T.Health>('/api/health'),
+  /** `base` tests a server URL that is not saved yet. */
+  health: (base?: string) => get<T.Health>('/api/health', base?.trim().replace(/\/+$/, '')),
   catalog: () => get<T.Catalog>('/api/catalog'),
   factions: () => get<T.Factions>('/api/factions'),
   register: (callsign: string) => post<T.RegisterResult>('/api/register', { callsign }),

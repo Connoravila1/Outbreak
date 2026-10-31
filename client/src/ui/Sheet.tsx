@@ -1,5 +1,6 @@
 import type { ComponentChildren } from 'preact';
 import { useEffect, useRef } from 'preact/hooks';
+import { createPortal } from 'preact/compat';
 import './sheet.css';
 
 interface Props {
@@ -20,7 +21,7 @@ export function Sheet({ title, onClose, children, tall }: Props) {
     window.addEventListener('keydown', key);
     return () => { window.removeEventListener('keydown', key); prev?.focus?.(); };
   }, []);
-  return (
+  const node = (
     <div class="sheet-root">
       <div class="scrim" onClick={onClose} />
       <section class={'sheet' + (tall ? ' tall' : '')} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} ref={ref}>
@@ -29,4 +30,7 @@ export function Sheet({ title, onClose, children, tall }: Props) {
       </section>
     </div>
   );
+  // Tabs scroll and stack on their own; the sheet lives on the viewport so it always sits on top.
+  const host = document.querySelector('.viewport');
+  return host ? createPortal(node, host) : node;
 }

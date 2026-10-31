@@ -22,6 +22,10 @@ const NAMES = [
   'heart-beats', 'biceps', 'sprint', 'lightning-helix', 'flame', 'trophy', 'laurels', 'crown',
   'star-medal', 'boot-prints', 'target-dummy', 'swords-emblem', 'lantern', 'ringing-alarm',
   'plain-circle', 'bullseye', 'compass', 'thorny-vine', 'swap-bag', 'wooden-crate',
+  // game screens
+  'upgrade', 'chat-bubble', 'trash-can', 'check-mark', 'exit-door', 'magnifying-glass', 'shop',
+  'scroll-unfurled', 'three-friends', 'cancel', 'info', 'flame-claws', 'sands-of-time',
+  'broken-heart', 'id-card', 'cash', 'sword-wound', 'funnel', 'pill', 'heart-bottle',
 ];
 
 const out = {};

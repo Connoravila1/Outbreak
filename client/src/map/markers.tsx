@@ -18,13 +18,14 @@ function note(o: GameObject, lens: Lens): string {
   const n = o.name.toLowerCase();
   let s: string;
   switch (o.kind) {
-    case 'enemy': s = `${n} ${o.level}${o.elite ? '!' : ''}`; break;
-    case 'echo': s = `${n.split(' ')[0]} ${o.level}`; break;
+    case 'enemy': s = `${n} · ${o.level}${o.elite ? '!' : ''}`; break;
+    case 'echo': s = `${n.split(' ')[0]} · ${o.level}`; break;
     case 'cache': s = n.replace('supply ', ''); break;
     case 'raid': s = `${n} !!`; break;
     default: s = n;
   }
-  return lens === 'heat' ? (o.kind === 'enemy' ? 'something warm' : s) : s;
+  // legibility first: both lenses name the archetype and level (heat keeps its lowercase styling)
+  return lens === 'heat' ? s.toLowerCase() : s;
 }
 
 /** A hand-drawn, slightly open loop: the grease-pencil circle. */

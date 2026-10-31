@@ -128,3 +128,111 @@ export function clunk() {
   if (c) thumpAt(c, c.currentTime, 120, 0.3);
   haptic(18);
 }
+
+// ---- fight and reward vocabulary ----
+
+function blip(c: AudioContext, t: number, type: OscillatorType, f0: number, f1: number, dur: number, gain: number) {
+  const o = c.createOscillator();
+  const g = c.createGain();
+  o.type = type;
+  o.frequency.setValueAtTime(f0, t);
+  o.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t + dur);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(gain, t + 0.01);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g).connect(c.destination);
+  o.start(t);
+  o.stop(t + dur + 0.02);
+}
+
+function noiseBurst(c: AudioContext, t: number, dur: number, cutoff: number, gain: number) {
+  const len = Math.max(1, Math.floor(c.sampleRate * dur));
+  const buf = c.createBuffer(1, len, c.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / len);
+  const src = c.createBufferSource();
+  src.buffer = buf;
+  const f = c.createBiquadFilter();
+  f.type = 'lowpass';
+  f.frequency.value = cutoff;
+  const g = c.createGain();
+  g.gain.value = gain;
+  src.connect(f).connect(g).connect(c.destination);
+  src.start(t);
+}
+
+export function hit() {
+  const c = ac();
+  if (!c) return;
+  noiseBurst(c, c.currentTime, 0.12, 1400, 0.3);
+  thumpAt(c, c.currentTime, 90, 0.35);
+  haptic(12);
+}
+
+export function crit() {
+  const c = ac();
+  if (c) {
+    const t = c.currentTime;
+    noiseBurst(c, t, 0.22, 2600, 0.45);
+    thumpAt(c, t, 60, 0.6);
+    blip(c, t, 'sawtooth', 420, 110, 0.2, 0.12);
+  }
+  haptic([40, 30, 60]);
+}
+
+export function dodge() {
+  const c = ac();
+  if (c) blip(c, c.currentTime, 'sine', 300, 1200, 0.16, 0.08);
+}
+
+export function abilityCue() {
+  const c = ac();
+  if (!c) return;
+  const t = c.currentTime;
+  blip(c, t, 'square', 520, 780, 0.1, 0.05);
+  blip(c, t + 0.08, 'square', 780, 1040, 0.14, 0.05);
+}
+
+/** A card turning over. Rarer cards ring higher. */
+export function lootFlip(rarity: 'common' | 'uncommon' | 'rare' | 'legendary' = 'common') {
+  const c = ac();
+  if (!c) return;
+  const t = c.currentTime;
+  noiseBurst(c, t, 0.06, 3000, 0.12);
+  const base = { common: 440, uncommon: 523, rare: 660, legendary: 784 }[rarity];
+  blip(c, t + 0.03, 'triangle', base, base * 1.5, 0.22, 0.09);
+  haptic(rarity === 'common' ? 8 : 16);
+}
+
+export function legendary() {
+  const c = ac();
+  if (c) {
+    const t = c.currentTime;
+    [523, 659, 784, 1047].forEach((f, i) => blip(c, t + i * 0.11, 'triangle', f, f * 1.01, 0.55, 0.1));
+    thumpAt(c, t, 55, 0.5);
+  }
+  haptic([30, 40, 30, 40, 120]);
+}
+
+export function levelUp() {
+  const c = ac();
+  if (c) {
+    const t = c.currentTime;
+    [392, 494, 587, 784, 988].forEach((f, i) => blip(c, t + i * 0.09, 'square', f, f, 0.3, 0.05));
+    thumpAt(c, t, 48, 0.55);
+  }
+  haptic([60, 40, 60, 40, 200]);
+}
+
+/** Two-tone alarm for CONTACT, plus the strong vibration pattern. */
+export function contactAlarm() {
+  const c = ac();
+  if (c) {
+    const t = c.currentTime;
+    for (let i = 0; i < 4; i++) {
+      blip(c, t + i * 0.34, 'sawtooth', 880, 880, 0.15, 0.1);
+      blip(c, t + i * 0.34 + 0.17, 'sawtooth', 620, 620, 0.15, 0.1);
+    }
+  }
+  haptic([300, 100, 300, 100, 300, 100, 600]);
+}

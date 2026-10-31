@@ -3,19 +3,19 @@ import { api, errorMessage } from '../api';
 import { position } from '../location';
 import { gameMap } from '../map/instance';
 import { isInSanctuary } from '../map/sanctuary';
-import { eventLog, me, onBattle, world, applyMe } from './store';
-import { haptic } from '../audio/fx';
+import { eventLog, me, world, applyMe } from './store';
+import { pushToast } from '../ui/kit';
+import { battleActive, enqueueBattle } from '../battle/session';
 
 export const inSanctuary = signal(false);
 export const pollError = signal<string | null>(null);
-export const contactAlert = signal<string | null>(null);
 
 let timer: number | null = null;
 let busy = false;
 
 async function tick() {
   const fix = position.peek();
-  if (!fix || busy || document.hidden) return;
+  if (!fix || busy || document.hidden || battleActive()) return;
   busy = true;
   try {
     const m = gameMap.peek();
@@ -24,21 +24,17 @@ async function tick() {
     const w = await api.location(fix.lat, fix.lon, fix.acc, sanctuary);
     world.value = w;
     pollError.value = null;
+    // A contact interrupts everything; take it before the HP numbers move so the fight is not spoiled.
+    for (const ev of w.events) {
+      if (ev.type === 'contact' && ev.battle) enqueueBattle(ev.battle, true);
+      else pushToast(ev.text, ev.type === 'echo_report' ? 'echo' : 'info');
+    }
+    if (w.events.length) eventLog.value = [...w.events, ...eventLog.value].slice(0, 50);
     const cur = me.peek();
-    if (cur) {
+    if (cur && !battleActive()) {
       const levelChanged = w.me.level !== cur.level;
       applyMe({ ...cur, ...w.me });
       if (levelChanged) void api.me().then(applyMe).catch(() => undefined);
-    }
-    if (w.events.length) {
-      eventLog.value = [...w.events, ...eventLog.value].slice(0, 50);
-      for (const ev of w.events) {
-        if (ev.type === 'contact' && ev.battle) {
-          haptic([200, 80, 200, 80, 400]);
-          contactAlert.value = ev.text;
-          onBattle(ev.battle);
-        }
-      }
     }
   } catch (e) {
     pollError.value = errorMessage(e);
