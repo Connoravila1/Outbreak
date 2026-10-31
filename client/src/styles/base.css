@@ -110,3 +110,9 @@ h1, h2, h3, p { margin: 0; }
 :root[data-motion='reduced'] *, :root[data-motion='reduced'] *::before, :root[data-motion='reduced'] *::after {
   animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important;
 }
+
+/* ---------- battery ---------- */
+/* While the app is in the background nothing animates (the WebView would keep ticking otherwise). */
+:root[data-active='false'] *, :root[data-active='false'] *::before, :root[data-active='false'] *::after { animation-play-state: paused !important; }
+/* Reduced motion also ends the ambient loops (blink, pulse, bloom, flicker). Loading spinners stay. */
+:root[data-motion='reduced'] *:not(.spin), :root[data-motion='reduced'] *:not(.spin)::before, :root[data-motion='reduced'] *:not(.spin)::after { animation-iteration-count: 1 !important; }

@@ -1,4 +1,5 @@
-import { signal } from '@preact/signals';
+import { effect, signal } from '@preact/signals';
+import { appActive } from '../native/active';
 import { KEYS, storage } from '../api/storage';
 import { RealSource } from './real';
 import { SimSource } from './sim';
@@ -60,3 +61,11 @@ export function setSimActive(on: boolean) {
   position.value = null;
   startLocation();
 }
+
+// GPS is the biggest drain: the real watch runs only while the app is in the foreground (Patrol has its
+// own native service). The simulator is cheap and keeps going.
+effect(() => {
+  const on = appActive.value;
+  if (!active || active === sim) return;
+  if (on) active.start(); else active.stop();
+});

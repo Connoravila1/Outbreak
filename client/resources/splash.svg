@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- Splash mark on a transparent ground (the splash background is #0B0C0E): light paper left, heat right. -->
+  <defs>
+    <clipPath id="L"><polygon points="-20,-20 580,-20 470,260 560,430 440,620 540,780 450,1044 -20,1044"/></clipPath>
+    <clipPath id="R"><polygon points="580,-20 1044,-20 1044,1044 450,1044 540,780 440,620 560,430 470,260"/></clipPath>
+  </defs>
+  <g clip-path="url(#L)"><circle cx="512" cy="512" r="262" fill="none" stroke="#CFCABB" stroke-width="104"/><circle cx="512" cy="512" r="84" fill="#CFCABB"/></g>
+  <g clip-path="url(#R)"><circle cx="512" cy="512" r="262" fill="none" stroke="#FF6B2C" stroke-width="104"/><circle cx="512" cy="512" r="84" fill="#FFF0C2"/></g>
+  <polyline points="580,-20 470,260 560,430 440,620 540,780 450,1044" fill="none" stroke="#E2342D" stroke-width="26"/>
+</svg>

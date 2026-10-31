@@ -77,7 +77,9 @@ dodge bodies, the hostile ping, echo report, downed/revived, and the main menu t
 | Licence | CC BY 3.0 — https://creativecommons.org/licenses/by/3.0/ |
 | **Big Shoulders Display**, **Barlow**, **Permanent Marker** | bundled via `@fontsource/*`, served from our own origin |
 | Licence | SIL OFL 1.1 (Big Shoulders Display © Patric King / Chicago Tribune; Barlow © Jeremy Tribby; Permanent Marker © Font Diner / Stephen Hicks) |
-| **OpenFreeMap** tiles and **OpenMapTiles** schema | https://openfreemap.org — vector tiles, no key |
+| **OpenFreeMap** tiles and **OpenMapTiles** schema | https://openfreemap.org — vector tiles, no key. Self-hosted servers may serve their own OpenMapTiles-schema PMTiles archive instead (`docs/TILES.md`); the same credit applies. |
+| **PMTiles** (`pmtiles` npm package) | BSD-3-Clause, Protomaps — https://github.com/protomaps/PMTiles. The `pmtiles` CLI and Planetiler (Apache-2.0) are named in `docs/TILES.md` but not bundled. |
+| App icon and splash | Original artwork (`client/resources/*.svg`), no third-party parts |
 | **OpenStreetMap** data | © OpenStreetMap contributors, ODbL 1.0 — https://www.openstreetmap.org/copyright. The map always carries the attribution control (and the split-lens screen prints it). |
 | **MapLibre GL JS** | BSD-3-Clause, `maplibre-gl` |
 | **Preact**, **@preact/signals** | MIT |

@@ -52,8 +52,14 @@ The server is authoritative over every outcome. The client renders state and sen
 
 ## Client
 
-- Vite + Preact + TypeScript. MapLibre GL JS with OpenFreeMap vector tiles (no key; can be
-  self-hosted later with a PMTiles file) and a custom dark style.
+- Vite + Preact + TypeScript. MapLibre GL JS with OpenFreeMap vector tiles (no key) and custom lens
+  styles. A server can advertise its own PMTiles archive (`--tiles` / `--tiles-url`, `tiles` in
+  `/api/health`); the client then reads it through the `pmtiles` protocol (`src/map/tiles.ts`). See
+  `docs/TILES.md`.
+- Code split: the first map needs only the shell; the battle layer, tabs, onboarding, note reader and
+  the desktop simulator panel are lazy chunks (`src/ui/lazy.tsx`), preloaded when idle.
+- Foreground state (`src/native/active.ts`): polling, the GPS watch, ambient CSS animation and audio all
+  pause while the app is backgrounded.
 - Capacitor for Android/iOS: Geolocation, Haptics, Preferences, Local Notifications, App.
 - Server URL is a runtime setting (default from build env `VITE_SERVER_URL`; editable in Settings),
   so a self-hosted server needs no rebuild.
@@ -69,7 +75,8 @@ degrees (WGS84). `faction` is `"human"` or `"zombie"`. Slots are `"weapon" | "ar
 ### Account
 | Method | Path | Body | Returns |
 |---|---|---|---|
-| GET | `/api/health` | | `{ok, version, players_online, providers:{google, apple, dev, google_web_client_id?, apple_web_service_id?}}` — which sign-ins this server offers, and the IDs a browser needs |
+| GET | `/api/health` | | `{ok, version, players_online, providers:{google, apple, dev, google_web_client_id?, apple_web_service_id?}, tiles:{pmtiles, glyphs}|null}` — which sign-ins this server offers, and the IDs a browser needs; `tiles` points the map at a self-hosted PMTiles archive (null: OpenFreeMap) |
+| GET | `/tiles/map.pmtiles` | | the `--tiles` archive, HTTP range requests (206); only routed when the server was started with `--tiles` |
 | GET | `/api/catalog` | | static game data (below); cacheable by `version` |
 | GET | `/api/factions` | | `{human:{share, players}, zombie:{...}, underdog:"human"|"zombie"|null, underdog_bonus}` |
 | POST | `/api/register` | `{}` (optional `{callsign}`) | `{token, me}` — creates a **guest**: a player with no sign-in identity |

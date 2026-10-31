@@ -282,7 +282,9 @@ export interface ProviderStatus {
   google_web_client_id?: string | null;
   apple_web_service_id?: string | null;
 }
-export interface Health { ok: boolean; version: string; players_online: number; providers?: ProviderStatus }
+/** A self-hosted tile source the server points the map at (absent: OpenFreeMap). */
+export interface TilesAdvert { pmtiles: string; glyphs?: string | null }
+export interface Health { ok: boolean; version: string; players_online: number; providers?: ProviderStatus; tiles?: TilesAdvert | null }
 export interface FactionShare { share: number; players: number }
 export interface Factions {
   human: FactionShare;

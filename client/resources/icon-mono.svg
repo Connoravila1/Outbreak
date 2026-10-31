@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- Themed (monochrome) icon: ring and dot, cut by the crack. -->
+  <defs>
+    <mask id="m"><rect width="1024" height="1024" fill="#fff"/><polyline points="580,-20 470,260 560,430 440,620 540,780 450,1044" fill="none" stroke="#000" stroke-width="44"/></mask>
+  </defs>
+  <g mask="url(#m)" fill="none" stroke="#fff" stroke-width="104"><circle cx="512" cy="512" r="262"/><circle cx="512" cy="512" r="84" fill="#fff" stroke="none"/></g>
+</svg>

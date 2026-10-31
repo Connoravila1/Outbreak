@@ -51,6 +51,9 @@ cd client && npm install && npm run dev  # then open http://localhost:5173
 The desktop build includes a GPS simulator: walk with WASD or click the map, and teleport between
 cities.
 
+Store screenshots (`npm run shots`), app icons (`npm run icons`) and a self-hosted map tile archive
+(`--tiles`, see `docs/TILES.md`) are described in `client/MOBILE.md`.
+
 ## Credits
 
 Map data © OpenStreetMap contributors. Map tiles by OpenFreeMap. Icons from game-icons.net. Third-party

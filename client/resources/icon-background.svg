@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- Adaptive icon background layer: the two lenses and the crack. -->
+  <defs>
+    <radialGradient id="heat" cx="1000" cy="1040" r="900" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#D12A3A"/><stop offset=".45" stop-color="#6B1A22"/><stop offset="1" stop-color="#2E1215"/>
+    </radialGradient>
+    <clipPath id="L"><polygon points="-20,-20 580,-20 470,260 560,430 440,620 540,780 450,1044 -20,1044"/></clipPath>
+  </defs>
+  <rect x="-20" y="-20" width="1064" height="1064" fill="#120809"/>
+  <polygon points="-20,-20 580,-20 470,260 560,430 440,620 540,780 450,1044 -20,1044" fill="#CFCABB"/>
+  <path d="M-20 260H1044M-20 520H1044M-20 780H1044M240-20V1044M520-20V1044M800-20V1044" stroke="#A9A38F" stroke-width="6" opacity=".55" clip-path="url(#L)"/>
+  <polygon points="580,-20 1044,-20 1044,1044 450,1044 540,780 440,620 560,430 470,260" fill="url(#heat)"/>
+  <polyline points="580,-20 470,260 560,430 440,620 540,780 450,1044" fill="none" stroke="#E2342D" stroke-width="26"/>
+</svg>

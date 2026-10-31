@@ -1595,6 +1595,31 @@ test "guest flow: no callsign needed, faction before or after it, callsign once"
     try testing.expectEqualStrings("callsign_taken", try dup.errorCode());
 }
 
+test "health advertises a self-hosted tile source only when one is configured" {
+    var h: Harness = undefined;
+    try h.init(.{});
+    defer h.deinit();
+    var none = try h.get("/api/health", null);
+    defer none.deinit();
+    try testing.expect((try none.at("tiles")) == .null);
+
+    var served: Harness = undefined;
+    try served.init(.{ .tiles = .{ .file = "/data/region.pmtiles", .glyphs = "https://fonts.example/{fontstack}/{range}.pbf" } });
+    defer served.deinit();
+    var a = try served.get("/api/health", null);
+    defer a.deinit();
+    try testing.expectEqualStrings("/tiles/map.pmtiles", try a.str("tiles.pmtiles"));
+    try testing.expectEqualStrings("https://fonts.example/{fontstack}/{range}.pbf", try a.str("tiles.glyphs"));
+
+    var remote: Harness = undefined;
+    try remote.init(.{ .tiles = .{ .url = "https://tiles.example.com/region.pmtiles" } });
+    defer remote.deinit();
+    var b = try remote.get("/api/health", null);
+    defer b.deinit();
+    try testing.expectEqualStrings("https://tiles.example.com/region.pmtiles", try b.str("tiles.pmtiles"));
+    try testing.expect((try b.at("tiles.glyphs")) == .null);
+}
+
 test "health reports which providers are on; unconfigured ones answer 503" {
     var h: Harness = undefined;
     try h.init(.{});

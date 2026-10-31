@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'preact/hooks';
+import { appActive } from '../native/active';
 
 /** Re-renders every `ms` with the current time. */
 export function useNow(ms = 1000): number {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
-    const t = window.setInterval(() => setNow(Date.now()), ms);
+    const t = window.setInterval(() => { if (appActive.peek()) setNow(Date.now()); }, ms);
     return () => window.clearInterval(t);
   }, [ms]);
   return now;
@@ -14,7 +15,7 @@ export function useNow(ms = 1000): number {
 export function usePoll(fn: () => void, ms: number) {
   useEffect(() => {
     fn();
-    const t = window.setInterval(fn, ms);
+    const t = window.setInterval(() => { if (appActive.peek()) fn(); }, ms);
     return () => window.clearInterval(t);
   }, []);
 }

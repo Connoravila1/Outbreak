@@ -106,6 +106,14 @@ fn callsignValid(name: []const u8) bool {
 
 // --- Handlers ---------------------------------------------------------------------------------------
 
+/// The self-hosted tile source for the client (null: use OpenFreeMap). A served `--tiles` file is
+/// advertised as a path relative to the server address.
+fn tilesAdvert(t: ctx_mod.Tiles) ?struct { pmtiles: []const u8, glyphs: ?[]const u8 } {
+    const url = if (t.file.len > 0) "/tiles/map.pmtiles" else t.url;
+    if (url.len == 0) return null;
+    return .{ .pmtiles = url, .glyphs = if (t.glyphs.len > 0) t.glyphs else null };
+}
+
 pub fn health(req: *Req, jw: *Stringify) HandlerError!void {
     const cfg = req.ctx.auth.config;
     const auth = &req.ctx.auth;
@@ -120,6 +128,7 @@ pub fn health(req: *Req, jw: *Stringify) HandlerError!void {
             .google_web_client_id = cfg.googleWebClientId(),
             .apple_web_service_id = cfg.appleWebServiceId(),
         },
+        .tiles = tilesAdvert(req.ctx.opts.tiles),
     });
 }
 

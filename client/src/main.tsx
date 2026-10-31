@@ -19,6 +19,9 @@ document.documentElement.dataset.lens = 'neutral';
 // app and the store are imported only afterwards.
 async function main() {
   await hydrateStorage();
+  // The server may point the map at self-hosted tiles; ask before any map is created (never blocks long).
+  const { loadTiles } = await import('./map/tiles');
+  await Promise.race([loadTiles(), new Promise((r) => setTimeout(r, 1500))]);
   const [{ App }, { installMock, mockRequested }, { initNative }, { initAudio }] = await Promise.all([
     import('./app'),
     import('./dev/mock'),
