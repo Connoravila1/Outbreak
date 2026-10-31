@@ -3345,6 +3345,7 @@ test "forced update: older clients get 426 with the stores, equal and newer pass
     defer health.deinit();
     try testing.expectEqual(@as(u16, 200), health.status);
     try testing.expectEqualStrings("0.2.0", try health.str("min_client"));
+    try testing.expectEqualStrings("https://play.example/outbreak", try health.str("store.android"));
     var del = try callClient(&h, "0.0.1", "DELETE", "/api/account", null);
     defer del.deinit();
     try testing.expectEqual(@as(u16, 401), del.status);

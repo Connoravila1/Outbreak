@@ -1,6 +1,7 @@
 import { useState } from 'preact/hooks';
 import { PRESETS, getOnce, position, setSimActive, sim, simActive, simTick } from './index';
 import { formatDistance, haversine } from './geo';
+import { devMockGps } from './mock';
 import './sim.css';
 
 /** Desktop-only panel beside the phone: teleport, walk, and see what the game sees. */
@@ -46,6 +47,12 @@ export function SimPanel() {
           </div>
           {msg && <p class="note" role="status">{msg}</p>}
         </>
+      )}
+      {on && (
+        <label class="sim-toggle">
+          <input type="checkbox" checked={devMockGps.value} onChange={(e) => { devMockGps.value = (e.target as HTMLInputElement).checked; }} />
+          <span>Report as mock GPS</span>
+        </label>
       )}
       <p class="note">Server sees: {p ? `${p.lat.toFixed(4)}, ${p.lon.toFixed(4)}` : 'no fix yet'}</p>
     </aside>

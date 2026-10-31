@@ -84,6 +84,12 @@ fn tilesAdvert(t: ctx_mod.Tiles) ?struct { pmtiles: []const u8, glyphs: ?[]const
     return .{ .pmtiles = url, .glyphs = if (t.glyphs.len > 0) t.glyphs else null };
 }
 
+/// Where the update screen sends the player (null: no store page is configured).
+pub fn storeAdvert(u: ctx_mod.Update) ?struct { android: ?[]const u8, ios: ?[]const u8 } {
+    if (u.store_android.len == 0 and u.store_ios.len == 0) return null;
+    return .{ .android = if (u.store_android.len > 0) u.store_android else null, .ios = if (u.store_ios.len > 0) u.store_ios else null };
+}
+
 pub fn health(req: *Req, jw: *Stringify) HandlerError!void {
     const cfg = req.ctx.auth.config;
     const auth = &req.ctx.auth;
@@ -100,6 +106,7 @@ pub fn health(req: *Req, jw: *Stringify) HandlerError!void {
         },
         .tiles = tilesAdvert(req.ctx.opts.tiles),
         .min_client = if (req.ctx.opts.update.min_client_text.len > 0) req.ctx.opts.update.min_client_text else null,
+        .store = storeAdvert(req.ctx.opts.update),
     });
 }
 

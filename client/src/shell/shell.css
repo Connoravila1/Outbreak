@@ -56,6 +56,18 @@
 :root[data-lens='heat'][data-phase='night'] .gamemap .maplibregl-canvas { filter: contrast(1.14) saturate(1.1); }
 :root[data-lens='survey'][data-phase='night'] .gamemap .maplibregl-canvas { filter: brightness(.86) saturate(.92); }
 
+/* ----- a simulated location: a calm strip under the time stamp ----- */
+.simbanner {
+  position: absolute; z-index: 9; margin: 0; left: calc(var(--sa-left) + 12px); right: calc(var(--sa-right) + 12px); top: calc(var(--sa-top) + 100px); pointer-events: none;
+  display: flex; align-items: center; gap: 8px; padding: 7px 12px; font-size: var(--fs-14); font-weight: 600; line-height: 1.3;
+  background: color-mix(in srgb, var(--surface) 94%, transparent); color: var(--text); border: 1.5px dashed var(--text); border-radius: 3px;
+  backdrop-filter: blur(6px);
+}
+.simbanner svg { flex: none; }
+.simbanner span { text-wrap: balance; }
+:root[data-lens='survey'] .simbanner { font-family: var(--f-hand); font-weight: 400; font-size: 17px; border-color: var(--survey-blue); color: var(--survey-blue); }
+:root[data-lens='heat'] .simbanner { border: 1px dashed var(--vein); border-radius: 999px; padding: 7px 16px; text-transform: lowercase; letter-spacing: .06em; color: var(--flesh); }
+
 /* ----- vitals ----- */
 .vitals { flex: none; background: var(--surface); color: var(--text); border-top: 1.5px solid var(--text); padding: 8px calc(var(--sa-right) + 14px) 8px calc(var(--sa-left) + 14px); }
 :root[data-lens='heat'] .vitals { border-top-color: var(--vein); }

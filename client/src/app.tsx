@@ -11,8 +11,13 @@ import { startPolling, stopPolling } from './state/poll';
 import { Toasts } from './ui/kit';
 import { RewardsSheet } from './ui/RewardsSheet';
 import { GuestNudge } from './you/GuestNudge';
-import { setUnauthorizedHandler, setBannedHandler, setToken } from './api';
+import { api, setUnauthorizedHandler, setBannedHandler, setUpdateHandler, setToken } from './api';
 import { Banned } from './shell/Banned';
+import { UpdateRequired } from './shell/UpdateRequired';
+import { ErrorBoundary } from './shell/ErrorBoundary';
+import { SimulatedBanner } from './shell/SimulatedBanner';
+import { checkMinClient, updateRequired } from './state/update';
+import { setScreenProvider } from './report/errors';
 import { ReportSheet } from './ui/ReportSheet';
 import { banned } from './state/moderation';
 import { Icon } from './ui/Icon';
@@ -34,6 +39,9 @@ const SimPanel = lazy(() => import('./location/SimPanel').then((m) => m.SimPanel
 const BattleHost = lazy(() => import('./battle/BattleHost').then((m) => m.BattleHost));
 const NoteReader = lazy(() => import('./notes/Reader').then((m) => m.NoteReader));
 const idle = (fn: () => void) => { const ric = (window as { requestIdleCallback?: (f: () => void, o?: object) => number }).requestIdleCallback; if (ric) ric.call(window, fn, { timeout: 4000 }); else window.setTimeout(fn, 2000); };
+
+// Crash reports say where the player was: the tab, or the stage before the game.
+setScreenProvider(() => (phase.value === 'app' ? tab.value : phase.value));
 
 const bootError = signal<string | null>(null);
 const desktop = signal(isDesktop());
@@ -65,6 +73,7 @@ function Shell() {
         )}
         <TopBar />
         {t === 'map' && <MapTab />}
+        {t === 'map' && <SimulatedBanner />}
       </div>
       <Vitals />
       <TabBar />
@@ -96,6 +105,9 @@ function Boot() {
 }
 
 async function start() {
+  // Ask first whether this client is still welcome; a 426 on any later request says the same.
+  try { checkMinClient(await api.health()); } catch { /* offline or no server yet: boot reports it */ }
+  if (updateRequired.value) return;
   await boot();
   if (phase.value === 'boot') bootError.value = 'Cannot reach the server.';
 }
@@ -104,6 +116,7 @@ export function App() {
   useEffect(() => {
     setUnauthorizedHandler(() => { setToken(null); });
     setBannedHandler((b) => { banned.value = b; });
+    setUpdateHandler((u) => { updateRequired.value = u; });
     void start();
   }, []);
   const p = phase.value;
@@ -114,11 +127,14 @@ export function App() {
   return (
     <div class="stage">
       <main class={'phone' + (desktop.value ? ' framed' : '')}>
-        {banned.value && <Banned />}
-        {!banned.value && p === 'boot' && <Boot />}
-        {!banned.value && p === 'server' && <ServerAddress onDone={() => { phase.value = 'boot'; void start(); }} />}
-        {!banned.value && p === 'onboarding' && <Onboarding />}
-        {!banned.value && p === 'app' && <Shell />}
+        <ErrorBoundary>
+          {updateRequired.value && <UpdateRequired />}
+          {!updateRequired.value && banned.value && <Banned />}
+          {!updateRequired.value && !banned.value && p === 'boot' && <Boot />}
+          {!updateRequired.value && !banned.value && p === 'server' && <ServerAddress onDone={() => { phase.value = 'boot'; void start(); }} />}
+          {!updateRequired.value && !banned.value && p === 'onboarding' && <Onboarding />}
+          {!updateRequired.value && !banned.value && p === 'app' && <Shell />}
+        </ErrorBoundary>
       </main>
       {desktop.value && <SimPanel />}
     </div>

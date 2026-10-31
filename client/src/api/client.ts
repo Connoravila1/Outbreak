@@ -38,9 +38,15 @@ export function setUnauthorizedHandler(h: () => void) { onUnauthorized = h; }
 /** Called for the 403 `banned` answer, which any authed request can get. */
 let onBanned: ((b: T.Banned) => void) | null = null;
 export function setBannedHandler(h: (b: T.Banned) => void) { onBanned = h; }
+/** Called for the 426 `update_required` answer, which any request can get once the server raises its minimum. */
+let onUpdateRequired: ((u: T.UpdateRequired) => void) | null = null;
+export function setUpdateHandler(h: (u: T.UpdateRequired) => void) { onUpdateRequired = h; }
+
+/** This build's version (package.json), sent on every request so the server can ask old clients to update. */
+export const CLIENT_VERSION: string = __APP_VERSION__;
 
 async function request<R>(method: 'GET' | 'POST' | 'DELETE', path: string, body?: unknown, base?: string): Promise<R> {
-  const headers: Record<string, string> = { Accept: 'application/json' };
+  const headers: Record<string, string> = { Accept: 'application/json', 'X-Outbreak-Client': CLIENT_VERSION };
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
   if (body !== undefined) headers['Content-Type'] = 'application/json';
@@ -62,6 +68,10 @@ async function request<R>(method: 'GET' | 'POST' | 'DELETE', path: string, body?
   if (!res.ok) {
     const e = (data ?? {}) as Partial<T.ApiErrorBody>;
     if (res.status === 401 && onUnauthorized) onUnauthorized();
+    if (res.status === 426 && e.error === 'update_required' && onUpdateRequired) {
+      const s = (data as { store?: Partial<T.StoreLinks> | null } | null)?.store;
+      onUpdateRequired({ store: s ? { android: s.android ?? null, ios: s.ios ?? null } : null });
+    }
     if (res.status === 403 && e.error === 'banned' && onBanned) {
       const b = data as Partial<T.Banned>;
       onBanned({ reason: b.reason ?? '', until: typeof b.until === 'number' ? b.until : null });
@@ -95,8 +105,9 @@ export const api = {
   setAvatar: (avatar: Record<string, unknown>) => post<{ me: T.Me }>('/api/avatar', { avatar }),
 
   // world
-  location: (lat: number, lon: number, acc: number, sanctuary: boolean, places: T.PlaceReport[] = []) =>
-    post<T.WorldView>('/api/location', { lat, lon, acc, sanctuary, places }),
+  /** `mock`: the phone says this fix came from a mock provider (sent only when true). */
+  location: (lat: number, lon: number, acc: number, sanctuary: boolean, places: T.PlaceReport[] = [], mock = false) =>
+    post<T.WorldView>('/api/location', { lat, lon, acc, sanctuary, places, ...(mock ? { mock: true } : {}) }),
   engage: (id: string, stance?: T.Stance) => post<T.Battle>('/api/engage', { id, ...(stance ? { stance } : {}) }),
   /** The default stance Contact fights use. */
   setStance: (stance: T.Stance) => post<{ me: T.Me }>('/api/stance', { stance }),
@@ -141,6 +152,8 @@ export const api = {
   /** Tell the server's owner about a player, a clan (by id) or a clan chat message (by id). */
   report: (kind: T.ReportKind, target: string, reason: T.ReportReason, note?: string) =>
     post<{ ok: boolean }>('/api/report', { kind, target, reason, ...(note ? { note } : {}) }),
+  /** Anonymous crash and error reports (see src/report/errors.ts). */
+  clientErrors: (reports: T.ClientErrorReport[]) => post<{ ok: boolean; stored: number }>('/api/client-error', { reports }),
   raidAttack: (id: string, stance?: T.Stance) => post<T.Battle>('/api/raid/attack', { id, ...(stance ? { stance } : {}) }),
 
   // dev only (--dev)

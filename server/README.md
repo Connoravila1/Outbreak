@@ -23,6 +23,9 @@ Zig 0.16 is required. SQLite is vendored in `vendor/sqlite/`; nothing else is do
 | `--dev`   | `OUTBREAK_DEV=1` | off      |
 | `--google-client-ids` | `OUTBREAK_GOOGLE_CLIENT_IDS` | none (Google sign-in off) |
 | `--apple-audiences`   | `OUTBREAK_APPLE_AUDIENCES`   | none (Apple sign-in off)  |
+| `--min-client X.Y.Z`  | `OUTBREAK_MIN_CLIENT`        | none (every version allowed) |
+| `--store-android URL` | `OUTBREAK_STORE_ANDROID`     | none |
+| `--store-ios URL`     | `OUTBREAK_STORE_IOS`         | none |
 
 Flags override environment variables. `--dev` enables `/api/dev/*` (grants, healing, staged
 contacts) and loosens rate limits. Never run it on a public server.
@@ -33,6 +36,16 @@ Services ID. A provider with no IDs answers `503 provider_not_configured` and `/
 client to hide its button. With `--dev` there is also a `dev` provider that needs no real account.
 `--google-jwks-url` / `--apple-jwks-url` override where signing keys are fetched (testing only).
 Step by step setup: `docs/ACCOUNTS_SETUP.md`.
+
+Forced update: the app sends `X-Outbreak-Client: <version>` with every request. `--min-client 0.2.0`
+makes the server answer older versions `426 update_required` (with the `--store-android` /
+`--store-ios` links, which the app's "Update to keep playing" screen opens); `/api/health` advertises
+`min_client` and the links so the app can check at boot. A request with **no** such header (curl,
+the web dev build) is always allowed, so scripts and `npm run dev` keep working. Raise it only after
+the new build is live in the stores. A malformed `--min-client` stops the server at start.
+
+Crash reports: the app posts anonymous error reports to `/api/client-error` (no token, no position
+stored); read them with `outbreak-server admin errors`. See `docs/MODERATING.md`.
 
 The server logs one line per request (method, path, status, milliseconds). Positions and tokens are
 never logged.
@@ -46,7 +59,7 @@ database if you want the same world.
 
 ## Moderation
 
-Moderation is a command on the same binary. It works on the database file directly, so it is safe
+Moderation is a command on the same binary (`admin errors` reads crash reports; `admin player` shows fake-GPS sessions). It works on the database file directly, so it is safe
 while the server runs (SQLite WAL, with a busy timeout), and there is no admin page on the network.
 `--data` is the same folder the server uses (default `./data`, or `OUTBREAK_DATA`).
 

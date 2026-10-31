@@ -434,6 +434,30 @@ averages over the day.
 Positions implying > 45 m/s are rejected; walking XP needs ≤ 7 m/s. Engage requests are validated
 against the last accepted position. Rate limits per account.
 
+**Simulated locations.** The phone reports whether its newest fix came from a mock provider (Android
+`Location.isMock()` / `isFromMockProvider()`, iOS `sourceInformation.isSimulatedBySoftware`) and sends
+`mock: true` with `/api/location` and `/api/patrol`. The policy is deliberately light, because a
+false alarm must never punish a real player. While a player's latest fix is flagged, they:
+
+- are not matched for Contact (no real-world fight with anyone, either side);
+- earn no walking XP and no war points from anything they do (a clan's stronghold income is not theirs);
+- are not offered to other players as an Echo (their snapshot is skipped for ten minutes after the
+  last flagged fix).
+
+Everything else works as normal: PvE, caches, gear, missions, clans. A real fix lifts it at once (no
+speed check against a faked position). The server counts how many separate sessions (fixes more than
+half an hour apart) a player has sent flagged, and `admin player` shows it; no position is kept.
+The client shows a calm notice ("Your location is simulated. Real-world fights and war points are
+off.") and `Me.simulated_location` carries the flag. The flag is the phone's honest report: a
+modified client can simply not send it, so this keeps well-meaning fake-GPS apps out of the war,
+and other abuse is handled by the speed limits above and by reports. The desktop GPS simulator never
+sets it.
+
+**Old clients.** The server can refuse versions below a minimum (`--min-client`): they get a plain
+"Update to keep playing" screen. Requests with no version header (curl, the web dev build) are always
+allowed. Crashes and errors in the app are reported anonymously (no player id, no position) to help
+fix them; see `docs/ARCHITECTURE.md`.
+
 ## 8. Encounters
 
 ### PvE (always available)

@@ -2,13 +2,14 @@ import { LocalNotifications } from '@capacitor/local-notifications';
 import { effect } from '@preact/signals';
 import { me, lens } from '../state/store';
 import { isNative } from './platform';
+import { reportPluginError } from '../report/errors';
 
 const DAILY_BASE = 100; // ids 100..106: the next seven resets
 const DAILY_DAYS = 7;
 const DOWNED_ID = 200;
 const DAY = 86_400_000;
 
-const quiet = (p: Promise<unknown>) => { void p.catch(() => undefined); };
+const quiet = (p: Promise<unknown>, call: string) => { void p.catch((e) => reportPluginError(call, e)); };
 
 async function allowed(): Promise<boolean> {
   try { return (await LocalNotifications.checkPermissions()).display === 'granted'; } catch { return false; }
@@ -76,6 +77,6 @@ export function watchDowned() {
     const heat = lens.value === 'heat';
     if (until === last) return;
     last = until;
-    quiet(syncDowned(until, heat));
+    quiet(syncDowned(until, heat), 'LocalNotifications.schedule');
   });
 }

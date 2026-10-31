@@ -145,9 +145,12 @@ export interface Me {
   /** Callsign colours and avatar frames owned, and the ones worn. */
   cosmetics?: Cosmetics;
   achievements?: { earned: number; total: number };
+  /** The phone says its location is simulated (a mock provider): real-world fights, walking XP and war points are off. */
+  simulated_location: boolean;
 }
 
 export interface MeLite {
+  simulated_location: boolean;
   hp: number;
   max_hp: number;
   downed_until: number | null;
@@ -323,7 +326,14 @@ export interface ProviderStatus {
 }
 /** A self-hosted tile source the server points the map at (absent: OpenFreeMap). */
 export interface TilesAdvert { pmtiles: string; glyphs?: string | null }
-export interface Health { ok: boolean; version: string; players_online: number; providers?: ProviderStatus; tiles?: TilesAdvert | null }
+/** Where to get a newer client; either may be null. */
+export interface StoreLinks { android: string | null; ios: string | null }
+export interface Health {
+  ok: boolean; version: string; players_online: number; providers?: ProviderStatus; tiles?: TilesAdvert | null;
+  /** The oldest client the server accepts (null: any). */
+  min_client?: string | null;
+  store?: StoreLinks | null;
+}
 export interface FactionShare { share: number; players: number }
 export interface Factions {
   human: FactionShare;
@@ -364,8 +374,21 @@ export interface ClanMessage { id: string; callsign: string; callsign_color?: st
 
 export interface ApiErrorBody { error: string; message: string }
 
+/** The 426 `update_required` answer: where to get a newer client (null: the server named no store). */
+export interface UpdateRequired { store: StoreLinks | null }
+
 /** The 403 `banned` answer: why, and until when (null: for good). */
 export interface Banned { reason: string; until: number | null }
+
+/** One crash or error report: no position, URL query or request body ever goes in it. */
+export interface ClientErrorReport {
+  message: string;
+  stack: string;
+  version: string;
+  platform: string;
+  screen: string;
+  ts: number;
+}
 
 export type ReportKind = 'player' | 'clan' | 'message';
 export type ReportReason = 'name' | 'harassment' | 'cheating' | 'other';

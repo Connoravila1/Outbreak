@@ -1,6 +1,9 @@
 /// <reference types="vite/client" />
 declare module '@fontsource/*';
 
+/** The client's version (package.json), baked in by vite.config.ts. */
+declare const __APP_VERSION__: string;
+
 interface ImportMetaEnv {
   readonly VITE_SERVER_URL?: string;
   readonly VITE_MOCK?: string;

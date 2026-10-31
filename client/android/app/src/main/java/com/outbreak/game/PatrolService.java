@@ -103,6 +103,8 @@ public final class PatrolService extends Service implements LocationListener {
 
     private boolean listening = false;
     private volatile Location latest;
+    /** Whether {@link #latest} came from a mock provider (read from the original fix, not the copy). */
+    private volatile boolean latestMock = false;
     private volatile int failures = 0;
     private boolean foregrounded = false;
 
@@ -240,7 +242,10 @@ public final class PatrolService extends Service implements LocationListener {
     public void onLocationChanged(Location loc) {
         if (loc.hasAccuracy() && loc.getAccuracy() > MAX_ACCURACY_M) return;
         Location cur = latest;
-        if (cur == null || loc.getTime() >= cur.getTime()) latest = new Location(loc);
+        if (cur == null || loc.getTime() >= cur.getTime()) {
+            latest = new Location(loc);
+            latestMock = MockLocation.isMock(loc);
+        }
     }
 
     /** The newest usable fix: ours, else the system's last known one. Null when there is none. */
@@ -283,6 +288,8 @@ public final class PatrolService extends Service implements LocationListener {
             body.put("lat", fix.getLatitude());
             body.put("lon", fix.getLongitude());
             body.put("acc", fix.hasAccuracy() ? fix.getAccuracy() : 0);
+            // The server pauses real-world fights and war points while the phone's fix is a mock one.
+            body.put("mock", fix == latest ? latestMock : MockLocation.isMock(fix));
 
             String url = prefs.getString(P_URL, "") + "/api/patrol";
             String token = prefs.getString(P_TOKEN, "");

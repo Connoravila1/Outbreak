@@ -21,7 +21,8 @@ import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
 
 /**
- * Patrol mode bridge: Patrol.start / stop / status / requestBackground / openSettings.
+ * Patrol mode bridge: Patrol.start / stop / status / requestBackground / openSettings, plus
+ * Patrol.mockCheck (is the latest location fix from a mock provider?).
  * The web layer hands over the server URL and token; the foreground service does the rest.
  */
 @CapacitorPlugin(
@@ -133,6 +134,17 @@ public class PatrolPlugin extends Plugin {
     @PermissionCallback
     private void backgroundResult(PluginCall call) {
         call.resolve(statusObject());
+    }
+
+    /**
+     * Whether the newest location fix is from a mock provider (a fake-GPS app): {mock: boolean}.
+     * The web layer asks before each /api/location, because the Geolocation plugin hides the flag.
+     */
+    @PluginMethod
+    public void mockCheck(PluginCall call) {
+        JSObject o = new JSObject();
+        o.put("mock", hasFineLocation() && MockLocation.latestIsMock(getContext()));
+        call.resolve(o);
     }
 
     /** The app's system settings page, for when the permission flow cannot be completed in-app. */

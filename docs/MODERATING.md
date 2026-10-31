@@ -47,6 +47,33 @@ You can run these while the server is running. Nothing needs restarting; changes
 The four action commands also close every open report about the same person, clan or message, so the
 list stays short. Callsigns are not case sensitive.
 
+## Fake GPS
+
+`player Rowdy` has a line "Fake GPS": how many sessions the phone reported a simulated location
+(Android mock provider, iOS software-simulated fix), and when last. It never shows a position. While
+a phone reports that, the server already keeps the player out of real-world fights, war points and
+walking XP, and does not offer their build as an Echo, so nothing needs doing for a single session.
+The player sees a calm notice saying so. Treat a high count as a reason to look, not as proof: some
+phones flag a fix wrongly, and a modified app can leave the flag out. If you are sure, `ban`.
+
+## Crash reports
+
+The app sends anonymous error reports (no account, no position) so you can see what breaks on real
+phones:
+
+    ./outbreak-server admin --data /opt/outbreak/data errors
+    ./outbreak-server admin --data /opt/outbreak/data errors --since 7d
+
+One line per kind of fault, biggest first: how many times, when last, which app versions and
+platforms, the message and the top line of the stack. The table keeps the newest 5000 reports.
+`errors clear` deletes them all (for instance after you ship a fix).
+
+## Asking old apps to update
+
+Start the server with `--min-client 0.2.0` (and `--store-android` / `--store-ios` links) and any app
+older than that shows "Update to keep playing" instead of the game. Change it by restarting the
+server. Only raise it once the new build is available in the stores; players keep their characters.
+
 ## What a suspended player sees
 
 Their app shows a plain screen with your reason and the date the suspension ends (or that it has no

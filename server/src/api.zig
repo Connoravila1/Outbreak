@@ -160,11 +160,7 @@ pub fn handleClient(ctx: *Ctx, method: []const u8, path: []const u8, query: []co
 
 /// The 426 answer for a client older than `--min-client`: where to get the new version, if known.
 fn updateRequired(gpa: std.mem.Allocator, u: ctx_mod.Update) Response {
-    const Store = struct { android: ?[]const u8, ios: ?[]const u8 };
-    const store: ?Store = if (u.store_android.len == 0 and u.store_ios.len == 0) null else .{
-        .android = if (u.store_android.len > 0) u.store_android else null,
-        .ios = if (u.store_ios.len > 0) u.store_ios else null,
-    };
+    const store = account.storeAdvert(u);
     const json = Stringify.valueAlloc(gpa, .{
         .@"error" = "update_required",
         .message = "This version of Outbreak is too old. Update to keep playing.",
