@@ -414,7 +414,9 @@ optional name) with each location update; the server checks them (within 450 m o
 position, known kind, name 48 characters, sanitized), keeps them in memory per area (never stored)
 and shows them only to players who reported them. Kinds: pharmacy (Pharmacy / Sick Ward), grocery
 (Grocery / Larder), hardware (Hardware Store / Scrap Heap), fuel (Gas Station / Fume Pit), police
-(Police Station / Barracks), outfitter (Outfitter / Shed Skins), diner (Diner / Feeding Ground).
+(Police Station / Barracks), outfitter (Outfitter / Shed Skins), diner (Diner / Feeding Ground). The map
+shows at most the 8 nearest, skipping any within 45 m of one already shown, so a busy street
+reads as a few markers rather than a pile.
 Sanctuaries stay excluded. A landmark cache (`l.<key>.<window>`, 4-hour windows, once per player per
 window) gives 2 rolls biased by kind (pharmacy: consumables, hardware: gear and salvage, and so on),
 +25% salvage, and counts for cache missions. At most 6 per 30 minutes per player (409

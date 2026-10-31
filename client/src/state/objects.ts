@@ -90,17 +90,18 @@ export function objectsFrom(w: WorldView, f: Faction): GameObject[] {
 
 /** Downtown can report dozens of places at once; show only the closest few so enemies stay readable. */
 export const MAX_LANDMARKS_SHOWN = 8;
+/** A place closer than this to one already shown is left off, so a row of shops is one marker, not a pile. */
+export const LANDMARK_SPACING_M = 45;
 
 export function capLandmarks(objs: GameObject[], at: LatLon | null, keepId: string | null): GameObject[] {
   if (!at) return objs;
-  const marks = objs.filter((o) => o.kind === 'landmark');
-  if (marks.length <= MAX_LANDMARKS_SHOWN) return objs;
-  const keep = new Set(marks
-    .map((o) => ({ id: o.id, d: haversine(at, o) }))
-    .sort((a, b) => a.d - b.d)
-    .slice(0, MAX_LANDMARKS_SHOWN)
-    .map((x) => x.id));
-  if (keepId) keep.add(keepId);
+  const marks = objs.filter((o) => o.kind === 'landmark').sort((a, b) => haversine(at, a) - haversine(at, b));
+  const kept: GameObject[] = marks.filter((o) => o.id === keepId);
+  for (const o of marks) {
+    if (kept.length >= MAX_LANDMARKS_SHOWN) break;
+    if (o.id !== keepId && kept.every((k) => haversine(k, o) >= LANDMARK_SPACING_M)) kept.push(o);
+  }
+  const keep = new Set(kept.map((o) => o.id));
   return objs.filter((o) => o.kind !== 'landmark' || keep.has(o.id));
 }
 
