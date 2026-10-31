@@ -203,8 +203,9 @@ Toasts and the fight read out through polite live regions: one short sentence pe
 nearest first, with distance and compass direction, threat word, and an in-range mark. Choosing a row opens the same
 object sheet a marker tap does (Engage, Open, Claim), so the map is fully playable without seeing or touching it.
 
-**Choosing a side.** Hold-to-commit is kept, but "Cannot hold? Confirm another way" is always offered under it: a
-button, then "Are you sure?" with Yes and Go back. Both sides' copy is readable as one named control each.
+**Choosing a side.** Hold-to-commit is kept. A tap instead of a hold (which is what a screen reader sends) reveals
+"Cannot hold? Confirm another way" and moves focus to it: a button, then "Are you sure?" with Yes and Go back. It stays
+hidden until then so the ceremony is not diluted for everyone else. Both sides' copy is readable as one named control each.
 
 **Contrast.** Body and secondary text meet WCAG AA (4.5:1) in all three lenses; large text and UI borders 3:1.
 Fixes, measured on the lens surface (Survey paper `#DCDDD5`):

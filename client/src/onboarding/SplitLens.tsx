@@ -93,6 +93,10 @@ export function SplitLens({ center, onChosen }: Props) {
   const [hold, setHold] = useState(0);
   /** The no-hold way to commit: a button, then a second "are you sure" button (for screen readers, switches, tremor). */
   const [confirming, setConfirming] = useState(false);
+  // The tap-to-confirm path stays out of sight until someone taps instead of holding (screen readers send a tap).
+  const [altShown, setAltShown] = useState(false);
+  const altRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => { if (altShown) altRef.current?.focus(); }, [altShown]);
   const drag = useRef(false);
   const holdRaf = useRef(0);
   const heart = useRef<Heart | null>(null);
@@ -272,14 +276,15 @@ export function SplitLens({ center, onChosen }: Props) {
                 onKeyDown={(e) => { if ((e.key === ' ' || e.key === 'Enter') && !e.repeat) { e.preventDefault(); startHold(); } }}
                 onKeyUp={(e) => { if (e.key === ' ' || e.key === 'Enter') cancelHold(); }}
                 onContextMenu={(e) => e.preventDefault()}
+                onClick={() => setAltShown(true)}
                 aria-label={`${COPY[lean].btn}. Hold for three seconds. Release to cancel.`}
               >
                 <i class="hold-fill" style={{ width: `${hold * 100}%` }} />
                 <span>{COPY[lean].btn}</span>
               </button>
               <p class="hold-hint">{lean === 'human' ? 'Hold for three seconds. Let go to change your mind.' : 'hold for three seconds. let go to change your mind.'}</p>
-              {!confirming ? (
-                <button class="alt-commit" onClick={() => setConfirming(true)}>{lean === 'human' ? 'Cannot hold? Confirm another way' : 'cannot hold? confirm another way'}</button>
+              {!confirming ? altShown && (
+                <button class="alt-commit" ref={altRef} onClick={() => setConfirming(true)}>{lean === 'human' ? 'Cannot hold? Confirm another way' : 'cannot hold? confirm another way'}</button>
               ) : (
                 <div class="alt-confirm" role="group" aria-label="Confirm your choice">
                   <p class="perm" role="alert">{lean === 'human' ? 'Are you sure? You will stay human for good.' : 'are you sure? you will be one of the infected for good.'}</p>
