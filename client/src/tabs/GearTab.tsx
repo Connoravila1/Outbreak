@@ -9,7 +9,7 @@ import { ItemSheet } from '../gear/ItemSheet';
 import { Consumables } from '../gear/Consumables';
 import { Abilities } from '../gear/Abilities';
 import { isRarePlus, itemTitle, RARITY_ORDER, SLOTS, slotLabel } from '../gear/util';
-import { clunk } from '../audio/fx';
+import { scrap as scrapSound } from '../audio/fx';
 import '../shell/shell.css';
 import '../gear/gear.css';
 
@@ -42,7 +42,7 @@ export function GearTab() {
     try {
       const r = await api.scrap(picked);
       applyMe(r.me);
-      clunk();
+      scrapSound();
       pushToast(say(`Scrapped ${picked.length}. +${r.salvage_gained} salvage.`, `torn down. +${r.salvage_gained} salvage.`), 'good');
       endScrap();
     } catch (e) { setErr(errorMessage(e)); } finally { setBusy(false); }

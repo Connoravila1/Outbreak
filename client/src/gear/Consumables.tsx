@@ -4,7 +4,7 @@ import { applyMe, catalog, me } from '../state/store';
 import { Icon } from '../ui/Icon';
 import { say } from '../ui/voice';
 import { Action, ErrorLine, pushToast, Section } from '../ui/kit';
-import { clunk } from '../audio/fx';
+import { heal } from '../audio/fx';
 import { consumableName } from './util';
 
 function whyNot(id: string, hp: number, max: number, downed: boolean): string | null {
@@ -27,7 +27,7 @@ export function Consumables() {
     try {
       const r = await api.use(id);
       applyMe(r.me);
-      clunk();
+      heal();
       pushToast(say(`Used ${consumableName(id)}.`, `${consumableName(id)}. consumed.`), 'good');
     } catch (e) { setErr(errorMessage(e)); } finally { setBusy(null); }
   };

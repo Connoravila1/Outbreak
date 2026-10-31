@@ -7,7 +7,7 @@ const ROWS: [string, string][] = [
   ['Icons', 'game-icons.net by Lorc, Delapouite and other contributors, CC BY 3.0 (creativecommons.org/licenses/by/3.0)'],
   ['Fonts', 'Big Shoulders Display (Patric King / Chicago Tribune), Barlow (Jeremy Tribby), Permanent Marker (Font Diner), all SIL OFL 1.1'],
   ['Interface', 'Preact and @preact/signals, MIT'],
-  ['Sound', 'Synthesised in your browser. No samples.'],
+  ['Sound', 'Kenney (Interface Sounds, RPG Audio), artisticdude (RPG Sound Pack), StarNinjas (16 Monster Growls), Bashar3A, primbal and bretbernhoft (wind, breathing, static), all CC0 via opengameart.org. The rest is synthesised, and the music is original.'],
 ];
 
 export function Credits({ onClose }: { onClose: () => void }) {

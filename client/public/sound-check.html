@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Outbreak sound check</title>
+<style>
+  :root { color-scheme: dark; --bg:#0b0c0e; --fg:#eef0f0; --muted:#8a9096; --h:#f2be1a; --z:#ff6b2c; --card:#15171a; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.4 system-ui, sans-serif; padding: 16px 14px 80px; max-width: 980px; margin-inline: auto; }
+  h1 { margin: 0 0 4px; font-size: 26px; }
+  h2 { margin: 34px 0 4px; font-size: 20px; border-bottom: 1px solid #2a2d31; padding-bottom: 4px; }
+  p.lead, p.cat { color: var(--muted); margin: 4px 0 10px; }
+  .legend { display: flex; gap: 10px; flex-wrap: wrap; margin: 12px 0; }
+  .legend span, .col-h { border-radius: 6px; padding: 2px 10px; font-weight: 700; font-size: 13px; letter-spacing: .06em; text-transform: uppercase; }
+  .tag-h { background: #3a2f08; color: var(--h); } .tag-z { background: #3b1807; color: var(--z); } .tag-s { background: #22262b; color: #c8cdd2; }
+  .row { display: grid; grid-template-columns: minmax(110px, 1fr) 2fr 2fr; gap: 10px; padding: 10px 0; border-bottom: 1px solid #1d2024; align-items: start; }
+  .row.shared { grid-template-columns: minmax(110px, 1fr) 4fr; }
+  .name { font-weight: 700; }
+  .name small { display: block; color: var(--muted); font-weight: 400; font-size: 12px; }
+  .cell { background: var(--card); border-radius: 10px; padding: 8px 10px; }
+  .cell.h { border-left: 4px solid var(--h); } .cell.z { border-left: 4px solid var(--z); } .cell.s { border-left: 4px solid #666; }
+  .top { display: flex; align-items: center; gap: 10px; }
+  button.play { min-width: 64px; height: 44px; border-radius: 22px; border: 0; font-weight: 700; font-size: 15px; background: #2b2f34; color: var(--fg); cursor: pointer; }
+  button.play.on { background: #5a2a2a; }
+  .cell.h button.play { background: #4a3c0b; } .cell.z button.play { background: #4d2208; }
+  .dur { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .note { color: #b9bfc5; font-size: 13px; margin-top: 4px; }
+  label.flag { margin-left: auto; font-size: 13px; color: var(--muted); display: flex; gap: 5px; align-items: center; }
+  .bar { position: sticky; top: 0; background: #0b0c0eee; padding: 8px 0; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; z-index: 5; }
+  .bar button { height: 38px; border-radius: 8px; border: 1px solid #333; background: #1c1f23; color: var(--fg); padding: 0 12px; cursor: pointer; }
+  textarea { width: 100%; min-height: 90px; background: #111; color: var(--fg); border: 1px solid #333; border-radius: 8px; }
+  @media (max-width: 640px) { .row, .row.shared { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<h1>Outbreak sound check</h1>
+<p class="lead">Every sound in the game, Human and Zombie side by side. Tap play. Tick "off" on anything that sounds wrong, then copy the list and send it back. Turn the volume up a little first: the UI sounds are meant to be quiet and CONTACT is meant to be the loudest thing in the game.</p>
+<div class="legend"><span class="tag-h">Human: survey (field radio, brass, metal, paper)</span><span class="tag-z">Zombie: heat (heartbeat, wet, low, breath)</span><span class="tag-s">Shared</span></div>
+<div class="bar"><button id="stop">Stop all</button><label>Volume <input id="vol" type="range" min="0" max="100" value="80"></label><button id="copy">Copy flagged list</button><span id="count" class="dur"></span></div>
+<div id="app">Loading…</div>
+<h2>Flagged</h2>
+<textarea id="out" readonly placeholder="Sounds you tick 'off' appear here."></textarea>
+
+<script>
+// Groups, in listening order. Each item: [base key, friendly name]. "key.h"/"key.z" are the two variants;
+// a bare key is one shared sound.
+const GROUPS = [
+  ['Interface (quiet)', 'Small, dry, never annoying. Played hundreds of times.', [['tap', 'Button tap'], ['tab', 'Tab switch'], ['sheet_open', 'Sheet opens'], ['sheet_close', 'Sheet closes'], ['error', 'Refusal (soft)'], ['xp', 'XP tick (the code plays a rising run of these)']]],
+  ['Gear and economy', '', [['equip', 'Equip'], ['scrap', 'Scrap'], ['upgrade', 'Upgrade success'], ['heal', 'Use consumable (heal)'], ['purchase', 'Purchase'], ['claim', 'Mission claim']]],
+  ['Fight', 'Short and repeatable; the game varies the pitch a little each time.', [['engage', 'Engage (fight starts)'], ['hit', 'Hit'], ['crit', 'Critical hit'], ['dodge', 'Dodge / miss'], ['ability', 'Ability triggers'], ['dot', 'Damage-over-time tick'], ['healtick', 'Heal tick']]],
+  ['Fight outcome', '', [['fell', 'You fell'], ['held', 'You held (victory)'], ['downed', 'Downed'], ['revived', 'Revived']]],
+  ['Loot', 'Rarity escalates: common, uncommon, rare, then legendary, which should feel like an event.', [['flip', 'Card flip'], ['rar_common', 'Reveal: common'], ['rar_uncommon', 'Reveal: uncommon'], ['rar_rare', 'Reveal: rare'], ['rar_legendary', 'Reveal: LEGENDARY']]],
+  ['Big moments', 'Music and ambience duck under these.', [['levelup', 'LEVEL UP fanfare'], ['contact', 'CONTACT alarm (the signature)']]],
+  ['Signals', 'Subtle on purpose.', [['ping', 'Hostile signal nearby'], ['echo', 'Echo report']]],
+  ['Onboarding (shared)', 'Before a side is chosen there is only one voice.', [['broadcast', 'Emergency broadcast'], ['type0', 'Typing tick 1'], ['type1', 'Typing tick 2'], ['type2', 'Typing tick 3'], ['heart', 'Heartbeat (one beat; the code speeds it up)'], ['bitten', '"Bitten" sting'], ['riser', 'Hold-to-commit riser (exactly 3 s)'], ['commit', 'Commit impact'], ['burn', 'Burn / dissolve whoosh'], ['flatline', 'Flatline tone (loops)']]],
+  ['Ambience (map tab only, loops, very quiet)', 'Turn the volume up to hear these. They play behind everything on the map.', [['amb_map', 'Map ambience']]],
+  ['Music (menus and onboarding, loops)', '96 seconds, A minor, 60 bpm. Slow dark pad, sub, a heartbeat that arrives after the first third, sparse bells.', [['theme', 'Main theme']]],
+];
+
+const audio = new Audio();
+let playing = null, playingBtn = null;
+const flagged = new Set(JSON.parse(localStorage.getItem('sc.flag') || '[]'));
+const $ = (s) => document.querySelector(s);
+const el = (t, c, h) => { const e = document.createElement(t); if (c) e.className = c; if (h != null) e.innerHTML = h; return e; };
+const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
+function stopAll() {
+  audio.pause(); audio.currentTime = 0;
+  if (playingBtn) { playingBtn.textContent = 'Play'; playingBtn.classList.remove('on'); }
+  playing = null; playingBtn = null;
+}
+function toggle(key, e, btn) {
+  if (playing === key) { stopAll(); return; }
+  stopAll();
+  audio.loop = !!e.loop;
+  audio.src = e.file ? 'audio/' + e.file : '';
+  audio.volume = $('#vol').value / 100;
+  audio.play().catch(() => {});
+  playing = key; playingBtn = btn; btn.textContent = 'Stop'; btn.classList.add('on');
+  audio.onended = () => { if (!audio.loop) stopAll(); };
+}
+function cell(cls, key, e, label) {
+  const c = el('div', 'cell ' + cls);
+  const top = el('div', 'top');
+  const b = el('button', 'play', 'Play');
+  b.onclick = () => toggle(key, e, b);
+  top.append(b, el('span', 'dur', (e.loop ? 'loop ' : '') + e.dur.toFixed(1) + ' s' + (label ? ' · ' + label : '')));
+  const fl = el('label', 'flag', '<input type="checkbox"> off');
+  const cb = fl.querySelector('input');
+  cb.checked = flagged.has(key);
+  cb.onchange = () => { cb.checked ? flagged.add(key) : flagged.delete(key); save(); };
+  top.append(fl);
+  c.append(top, el('div', 'note', esc(e.note || '')));
+  return c;
+}
+function save() {
+  localStorage.setItem('sc.flag', JSON.stringify([...flagged]));
+  $('#out').value = [...flagged].sort().join('\n');
+  $('#count').textContent = flagged.size ? flagged.size + ' flagged' : '';
+}
+
+fetch('audio/manifest.json').then((r) => r.json()).then((m) => {
+  const app = $('#app'); app.textContent = '';
+  const used = new Set();
+  let n = 0;
+  for (const [title, blurb, items] of GROUPS) {
+    app.append(el('h2', '', esc(title)));
+    if (blurb) app.append(el('p', 'cat', esc(blurb)));
+    for (const [base, name] of items) {
+      const h = m[base + '.h'], z = m[base + '.z'], s = m[base];
+      if (!h && !z && !s) continue;
+      const row = el('div', 'row' + (!h && !z ? ' shared' : ''));
+      row.append(el('div', 'name', esc(name) + '<small>' + base + '</small>'));
+      if (h || z) {
+        if (h) { row.append(cell('h', base + '.h', h, 'Human')); used.add(base + '.h'); } else row.append(el('div'));
+        if (z) { row.append(cell('z', base + '.z', z, 'Zombie')); used.add(base + '.z'); } else row.append(el('div'));
+        n += 2;
+      } else { row.append(cell('s', base, s, 'Shared')); used.add(base); n++; }
+      app.append(row);
+    }
+  }
+  // the ambience pair is stored under amb_map.h / amb_map.z; anything unlisted still gets a row
+  const rest = Object.keys(m).filter((k) => !used.has(k));
+  if (rest.length) {
+    app.append(el('h2', '', 'Other'));
+    for (const k of rest) { const row = el('div', 'row shared'); row.append(el('div', 'name', esc(k)), cell('s', k, m[k], '')); app.append(row); }
+  }
+  save();
+}).catch((e) => { $('#app').textContent = 'Could not load audio/manifest.json: ' + e; });
+
+$('#stop').onclick = stopAll;
+$('#vol').oninput = () => { audio.volume = $('#vol').value / 100; };
+$('#copy').onclick = () => { const t = $('#out').value; (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).catch(() => { $('#out').select(); document.execCommand('copy'); }); };
+</script>
+</body>
+</html>

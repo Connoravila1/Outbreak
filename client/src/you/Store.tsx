@@ -6,7 +6,7 @@ import { Icon } from '../ui/Icon';
 import { Action, ErrorLine, pushToast, Section } from '../ui/kit';
 import { showRewards } from '../ui/RewardsSheet';
 import { enqueueLevelUp } from '../battle/session';
-import { clunk } from '../audio/fx';
+import { purchase } from '../audio/fx';
 
 const STORE_LEVEL = 2;
 
@@ -22,7 +22,7 @@ export function Store() {
     try {
       const r = await api.buy(sku);
       applyMe(r.me);
-      clunk();
+      purchase();
       setPick(null);
       if (r.rewards) { showRewards(name, r.rewards); enqueueLevelUp(r.rewards.level_up, r.me); }
       else pushToast(say(`Bought ${name}.`, `${name}. yours.`), 'good');

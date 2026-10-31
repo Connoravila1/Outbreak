@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
-import { heartbeatLoop, unlockAudio } from '../audio/fx';
+import { bitten, heartbeatLoop, unlockAudio } from '../audio/fx';
 import { reducedMotion } from '../state/store';
 
 function rnd(seed: number) {
@@ -38,6 +38,7 @@ export function Bitten({ onDone }: { onDone: () => void }) {
 
   useEffect(() => {
     unlockAudio();
+    bitten();
     const h = heartbeatLoop(58, 1, () => setBeat((b) => b + 1));
     const t1 = setTimeout(() => h.setBpm(78), 2500);
     const t2 = setTimeout(() => setReady(true), reducedMotion.value ? 800 : 4200);

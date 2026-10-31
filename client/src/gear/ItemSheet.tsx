@@ -5,7 +5,7 @@ import { Sheet } from '../ui/Sheet';
 import { Icon } from '../ui/Icon';
 import { say } from '../ui/voice';
 import { Action, ErrorLine, pushToast } from '../ui/kit';
-import { clunk } from '../audio/fx';
+import * as fx from '../audio/fx';
 import { isRarePlus, itemTitle, perkInfo, SLOT_ICON, slotLabel, STAT_KEYS, STAT_LABEL, uniqueLore } from './util';
 
 const UPGRADE_LEVEL = 4;
@@ -27,7 +27,7 @@ export function ItemSheet({ uid, onClose }: { uid: string; onClose: () => void }
     try {
       const r = await f();
       applyMe(r.me);
-      clunk();
+      if (what === 'up') fx.upgrade(); else if (what === 'scrap') fx.scrap(); else fx.equip();
       pushToast(done, 'good');
       if (close) onClose();
     } catch (e) {
