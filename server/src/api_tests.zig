@@ -1432,12 +1432,17 @@ test "war, factions, leaderboards, avatar" {
     var grant = try h.ok("/api/dev/grant", &b, "{{\"xp\":10}}", .{});
     grant.deinit();
 
-    var av = try h.ok("/api/avatar", &a, "{{\"avatar\":{{\"skin\":3,\"hair\":\"short\"}}}}", .{});
+    var av = try h.ok("/api/avatar", &a, "{{\"avatar\":{{\"skin\":3,\"hair\":9}}}}", .{});
     defer av.deinit();
     try testing.expectEqual(@as(i64, 3), try av.int("me.avatar.skin"));
     var bad_av = try h.post("/api/avatar", &a, "{\"avatar\":5}");
     defer bad_av.deinit();
     try testing.expectEqual(@as(u16, 400), bad_av.status);
+    for ([_][]const u8{ "{\"avatar\":{\"skin\":8}}", "{\"avatar\":{\"hair\":\"short\"}}", "{\"avatar\":{\"bio\":1}}", "{\"avatar\":{\"skin\":-1}}" }) |body| {
+        var r = try h.post("/api/avatar", &a, body);
+        defer r.deinit();
+        try testing.expectEqual(@as(u16, 400), r.status);
+    }
     var feed = try h.get("/api/feed", &a);
     defer feed.deinit();
     try testing.expect((try feed.at("events")) == .array);

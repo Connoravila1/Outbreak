@@ -103,7 +103,7 @@ const CATALOG: Catalog = {
 // ---------- database ----------
 interface Clan { id: string; name: string; tag: string; faction: Faction; code: string; strongholds: number }
 interface DB {
-  callsign: string | null; faction: Faction | null; level: number; xp: number; hp: number; salvage: number;
+  callsign: string | null; avatar?: Record<string, unknown> | null; faction: Faction | null; level: number; xp: number; hp: number; salvage: number;
   items: Item[]; eq: Record<Slot, string | null>; consumables: Record<string, number>; abil: string[]; buffs: { kind: string; until: number }[];
   defeated: string[]; n: number; mprog: number[]; mclaimed: boolean[]; wprog: number; wclaimed: boolean; streak: number;
   clan: { id: string; role: string } | null; chat: ClanMessage[]; warPoints: number; feed: GameEvent[]; contactPending: boolean;
@@ -198,7 +198,7 @@ function buildMe(): Me {
     buffs: db.buffs.filter((b) => b.until > Date.now()),
     missions: { daily: missionList(), weekly: weeklyMission(), streak: db.streak, resets_at: Date.now() + 6 * 3600e3 + 1500e3 },
     clan: db.clan && myClan ? { id: myClan.id, name: myClan.name, tag: myClan.tag, role: db.clan.role } : null,
-    avatar: null, pvp_protected: db.level < 5, underdog_bonus: 0.15, war_points_week: db.warPoints,
+    avatar: db.avatar ?? null, pvp_protected: db.level < 5, underdog_bonus: 0.15, war_points_week: db.warPoints,
     record: db.rec,
   };
 }
@@ -419,7 +419,7 @@ function route(method: string, path: string, body: any, authed: boolean): unknow
       return mine();
     }
     case 'GET /api/me': guard(); return buildMe();
-    case 'POST /api/avatar': guard(); return mine();
+    case 'POST /api/avatar': guard(); db.avatar = body.avatar as Record<string, unknown>; save(); return mine();
     case 'POST /api/location': {
       guard();
       const v = world(need(body, 'lat'), need(body, 'lon'));

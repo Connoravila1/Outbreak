@@ -52,3 +52,6 @@
 .credits { display: grid; gap: 12px; margin: 12px 0; }
 .credits dt { font-weight: 800; font-size: var(--fs-14); text-transform: uppercase; letter-spacing: .08em; }
 .credits dd { margin: 2px 0 0; font-size: var(--fs-14); color: var(--text-dim); overflow-wrap: anywhere; }
+.avatar-frame { width: 72px; height: 72px; border-radius: 50%; overflow: hidden; flex: none; border: 2px solid var(--text); line-height: 0; }
+:root[data-lens='heat'] .avatar-frame { border-color: var(--hot); box-shadow: 0 0 18px color-mix(in srgb, var(--hot) 40%, transparent); }
+.id-main .btn { margin-top: 6px; min-height: 36px; }
