@@ -5,6 +5,7 @@
 // Nothing here knows about the game. fx.ts names the sounds; director.ts decides when they play.
 import { effect } from '@preact/signals';
 import { soundOn, lens } from '../state/store';
+import { appActive } from '../native/active';
 import { effectsVol, musicVol } from './prefs';
 
 export type Bus = 'ui' | 'sfx' | 'music' | 'ambience';
@@ -72,13 +73,13 @@ function applyVolumes() {
 export function unlock(): AudioContext | null {
   if (!soundOn.peek()) return null;
   const c = ensureCtx();
-  if (c && c.state !== 'running' && !document.hidden) void c.resume().catch(() => undefined);
+  if (c && c.state !== 'running' && appActive.peek()) void c.resume().catch(() => undefined);
   void loadManifest();
   return c;
 }
 
 export function suspend() { if (ctx && ctx.state === 'running') void ctx.suspend().catch(() => undefined); }
-export function resume() { if (ctx && soundOn.peek() && !document.hidden) void ctx.resume().catch(() => undefined); }
+export function resume() { if (ctx && soundOn.peek() && appActive.peek()) void ctx.resume().catch(() => undefined); }
 
 function loadManifest(): Promise<void> {
   manifestP ??= fetch(`${BASE}audio/manifest.json`)
@@ -291,7 +292,7 @@ export function setBed(slot: 'music' | 'ambience', key: string | null) {
 
 function syncBeds() {
   for (const slot of ['music', 'ambience'] as const) {
-    const want = soundOn.peek() && !document.hidden ? wanted[slot] : null;
+    const want = soundOn.peek() && appActive.peek() ? wanted[slot] : null;
     const cur = bed[slot];
     if (cur.key === want) continue;
     cur.h.stop(want ? 1.2 : 0.6);
@@ -320,11 +321,16 @@ effect(() => {
   else { resume(); syncBeds(); }
 });
 
-document.addEventListener('visibilitychange', () => {
-  if (document.hidden) {
+// Foreground state covers both tab visibility and the native app being backgrounded.
+let seenActive = true;
+effect(() => {
+  const on = appActive.value;
+  if (on === seenActive) return;
+  seenActive = on;
+  if (!on) {
     // sounds fade, then the whole context pauses so nothing plays (or burns battery) in the background
     for (const s of ['music', 'ambience'] as const) { bed[s].h.stop(0.3); bed[s].key = null; }
-    window.setTimeout(() => { if (document.hidden) suspend(); }, 400);
+    window.setTimeout(() => { if (!appActive.peek()) suspend(); }, 400);
   } else {
     resume();
     syncBeds();

@@ -27,7 +27,8 @@ export class NativeSource extends Emitter implements LocationSource {
     if (this.watch != null || this.starting) return;
     this.starting = true;
     void Geolocation.watchPosition(
-      { enableHighAccuracy: true, maximumAge: 2000, timeout: 20000 },
+      // Android: one fix per 10 s at most (the plugin would otherwise reuse `timeout`, 20 s); iOS ignores both.
+      { enableHighAccuracy: true, maximumAge: 2000, timeout: 20000, interval: 10000, minimumUpdateInterval: 5000 },
       (pos, err) => {
         if (pos) this.emit(toFix(pos));
         else if (err) this.fail(/denied|permission/i.test(String(err.message)) ? 'Location permission was denied.' : 'Cannot get a location fix.');

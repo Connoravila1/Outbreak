@@ -16,9 +16,15 @@ const read_buffer_bytes = 16 * 1024;
 const write_buffer_bytes = 16 * 1024;
 const thread_stack_bytes = 512 * 1024;
 
+/// Where `--tiles FILE` is served (see `serveTiles`).
+pub const tiles_path = "/tiles/map.pmtiles";
+/// The most bytes one range answer carries; PMTiles clients ask for small ranges (directories,
+/// single tiles), so a longer request is simply answered short, which HTTP permits.
+const max_range_bytes: u64 = 8 * 1024 * 1024;
+
 const cors_headers = [_]http.Header{
     .{ .name = "access-control-allow-origin", .value = "*" },
-    .{ .name = "access-control-allow-headers", .value = "Authorization, Content-Type" },
+    .{ .name = "access-control-allow-headers", .value = "Authorization, Content-Type, Range" },
     .{ .name = "access-control-allow-methods", .value = "GET, POST, DELETE, OPTIONS" },
     .{ .name = "access-control-max-age", .value = "86400" },
     .{ .name = "content-type", .value = "application/json; charset=utf-8" },
@@ -135,6 +141,12 @@ fn handleRequest(ctx: *Ctx, request: *http.Server.Request) !bool {
         };
     }
 
+    if (ctx.opts.tiles.file.len > 0 and request.head.method == .GET and std.mem.eql(u8, path, tiles_path)) {
+        status = try serveTiles(ctx, request, keep);
+        logRequest(ctx, method, path, status, start);
+        return keep;
+    }
+
     const resp = api.handle(ctx, method, path, query, token, body);
     defer resp.deinit(ctx.gpa);
     status = resp.status;
@@ -145,6 +157,94 @@ fn handleRequest(ctx: *Ctx, request: *http.Server.Request) !bool {
     });
     logRequest(ctx, method, path, status, start);
     return keep;
+}
+
+pub const ByteRange = struct { start: u64, end: u64 };
+
+/// Parse a single `bytes=a-b`, `bytes=a-` or `bytes=-n` range against a file of `size` bytes and
+/// clamp it to `max_range_bytes`. Null when it is malformed or unsatisfiable.
+pub fn parseRange(value: []const u8, size: u64) ?ByteRange {
+    const prefix = "bytes=";
+    if (size == 0 or !std.mem.startsWith(u8, value, prefix)) return null;
+    const spec = value[prefix.len..];
+    if (std.mem.indexOfScalar(u8, spec, ',') != null) return null;
+    const dash = std.mem.indexOfScalar(u8, spec, '-') orelse return null;
+    const a = spec[0..dash];
+    const b = spec[dash + 1 ..];
+    var start: u64 = undefined;
+    var end: u64 = undefined;
+    if (a.len == 0) {
+        const n = std.fmt.parseInt(u64, b, 10) catch return null;
+        if (n == 0) return null;
+        start = size -| n;
+        end = size - 1;
+    } else {
+        start = std.fmt.parseInt(u64, a, 10) catch return null;
+        end = if (b.len == 0) size - 1 else std.fmt.parseInt(u64, b, 10) catch return null;
+        if (start >= size or end < start) return null;
+        end = @min(end, size - 1);
+    }
+    end = @min(end, start + max_range_bytes - 1);
+    return .{ .start = start, .end = end };
+}
+
+/// Serve the `--tiles` PMTiles archive with HTTP range requests, so MapLibre (via the pmtiles
+/// protocol) reads only the tiles it needs. A request without a Range gets the first bytes.
+fn serveTiles(ctx: *Ctx, request: *http.Server.Request, keep: bool) !u16 {
+    var range_header: ?[]const u8 = null;
+    var it = request.iterateHeaders();
+    while (it.next()) |h| {
+        if (std.ascii.eqlIgnoreCase(h.name, "range")) range_header = h.value;
+    }
+    const file = std.Io.Dir.cwd().openFile(ctx.io, ctx.opts.tiles.file, .{}) catch {
+        return respondError(request, 404, "not_found", "No tile archive.", keep);
+    };
+    defer file.close(ctx.io);
+    const size = file.length(ctx.io) catch return respondError(request, 500, "internal", "Tile archive unreadable.", keep);
+    const r = parseRange(range_header orelse "bytes=0-", size) orelse {
+        var cr_buf: [64]u8 = undefined;
+        const cr = try std.fmt.bufPrint(&cr_buf, "bytes */{d}", .{size});
+        const hdrs = [_]http.Header{ .{ .name = "content-range", .value = cr }, .{ .name = "access-control-allow-origin", .value = "*" } };
+        try request.respond("", .{ .status = .range_not_satisfiable, .keep_alive = keep, .extra_headers = &hdrs });
+        return 416;
+    };
+    const len: usize = @intCast(r.end - r.start + 1);
+    const buf = try ctx.gpa.alloc(u8, len);
+    defer ctx.gpa.free(buf);
+    const got = file.readPositionalAll(ctx.io, buf, r.start) catch return respondError(request, 500, "internal", "Tile archive unreadable.", keep);
+    if (got == 0) return respondError(request, 500, "internal", "Tile archive unreadable.", keep);
+    var cr_buf: [96]u8 = undefined;
+    const cr = try std.fmt.bufPrint(&cr_buf, "bytes {d}-{d}/{d}", .{ r.start, r.start + got - 1, size });
+    const hdrs = [_]http.Header{
+        .{ .name = "content-type", .value = "application/octet-stream" },
+        .{ .name = "content-range", .value = cr },
+        .{ .name = "accept-ranges", .value = "bytes" },
+        .{ .name = "cache-control", .value = "public, max-age=3600" },
+        .{ .name = "access-control-allow-origin", .value = "*" },
+        .{ .name = "access-control-expose-headers", .value = "Content-Range, Content-Length" },
+    };
+    try request.respond(buf[0..got], .{ .status = .partial_content, .keep_alive = keep, .extra_headers = &hdrs });
+    return 206;
+}
+
+test "parseRange handles the forms a PMTiles client sends" {
+    const t = std.testing;
+    const a = parseRange("bytes=0-16383", 1000000).?;
+    try t.expectEqual(@as(u64, 0), a.start);
+    try t.expectEqual(@as(u64, 16383), a.end);
+    const open = parseRange("bytes=500-", 1000).?;
+    try t.expectEqual(@as(u64, 999), open.end);
+    const tail = parseRange("bytes=-100", 1000).?;
+    try t.expectEqual(@as(u64, 900), tail.start);
+    const clamped = parseRange("bytes=990-5000", 1000).?;
+    try t.expectEqual(@as(u64, 999), clamped.end);
+    const big = parseRange("bytes=0-", 100 * 1024 * 1024).?;
+    try t.expectEqual(max_range_bytes - 1, big.end);
+    try t.expect(parseRange("bytes=1000-", 1000) == null);
+    try t.expect(parseRange("bytes=5-2", 1000) == null);
+    try t.expect(parseRange("bytes=0-1,5-6", 1000) == null);
+    try t.expect(parseRange("items=0-1", 1000) == null);
+    try t.expect(parseRange("bytes=0-1", 0) == null);
 }
 
 fn respondError(request: *http.Server.Request, status: u16, code: []const u8, message: []const u8, keep: bool) !u16 {

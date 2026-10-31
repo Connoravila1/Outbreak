@@ -1,7 +1,6 @@
 import type { ExpressionSpecification, LayerSpecification, StyleSpecification } from 'maplibre-gl';
+import { tileSource } from '../tiles';
 
-export const TILEJSON = 'https://tiles.openfreemap.org/planet';
-export const GLYPHS = 'https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf';
 export const SRC = 'openmaptiles';
 export const FONT_REGULAR = ['Noto Sans Regular'];
 export const FONT_BOLD = ['Noto Sans Bold'];
@@ -31,8 +30,8 @@ export function groundRadius(metres: number, lat: number): ExpressionSpecificati
 export function baseStyle(background: string, layers: LayerSpecification[]): StyleSpecification {
   return {
     version: 8,
-    glyphs: GLYPHS,
-    sources: { [SRC]: { type: 'vector', url: TILEJSON } },
+    glyphs: tileSource().glyphs,
+    sources: { [SRC]: { type: 'vector', url: tileSource().url } },
     layers: [{ id: 'background', type: 'background', paint: { 'background-color': background } }, ...layers],
   };
 }

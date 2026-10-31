@@ -15,14 +15,22 @@ const Config = struct {
     apple_audiences: []const u8 = "",
     google_jwks_url: ?[]const u8 = null,
     apple_jwks_url: ?[]const u8 = null,
+    tiles_file: []const u8 = "",
+    tiles_url: []const u8 = "",
+    tiles_glyphs: []const u8 = "",
 };
 
 const usage =
     \\usage: outbreak-server [--port 8080] [--bind 0.0.0.0] [--data ./data] [--dev]
+    \\                       [--tiles FILE.pmtiles | --tiles-url URL] [--tiles-glyphs URL]
     \\                       [--google-client-ids ID,ID,...] [--apple-audiences ID,ID,...]
     \\       outbreak-server admin [--data ./data] <command>    (moderation; "admin help" lists the commands)
     \\environment: OUTBREAK_PORT, OUTBREAK_BIND, OUTBREAK_DATA, OUTBREAK_DEV (1 or true),
-    \\             OUTBREAK_GOOGLE_CLIENT_IDS, OUTBREAK_APPLE_AUDIENCES
+    \\             OUTBREAK_GOOGLE_CLIENT_IDS, OUTBREAK_APPLE_AUDIENCES, OUTBREAK_TILES,
+    \\             OUTBREAK_TILES_URL, OUTBREAK_TILES_GLYPHS
+    \\Map tiles: the client uses OpenFreeMap by default. --tiles serves a PMTiles extract from this
+    \\binary (GET /tiles/map.pmtiles, range requests); --tiles-url advertises one hosted elsewhere;
+    \\--tiles-glyphs overrides the font URL template. See docs/TILES.md.
     \\Sign-in: the Google client IDs are the web, Android and iOS OAuth clients (web first); the Apple
     \\audiences are the iOS bundle id (com.outbreak.game) and the web Services ID. A provider with no
     \\IDs answers 503 provider_not_configured. --google-jwks-url / --apple-jwks-url exist for testing.
@@ -54,6 +62,10 @@ fn parseConfig(init: std.process.Init) !Config {
     if (env.get("OUTBREAK_GOOGLE_CLIENT_IDS")) |v| cfg.google_client_ids = v;
     if (env.get("OUTBREAK_APPLE_AUDIENCES")) |v| cfg.apple_audiences = v;
 
+    if (env.get("OUTBREAK_TILES")) |v| cfg.tiles_file = v;
+    if (env.get("OUTBREAK_TILES_URL")) |v| cfg.tiles_url = v;
+    if (env.get("OUTBREAK_TILES_GLYPHS")) |v| cfg.tiles_glyphs = v;
+
     var args = init.minimal.args.iterate();
     _ = args.next();
     while (args.next()) |arg| {
@@ -65,6 +77,12 @@ fn parseConfig(init: std.process.Init) !Config {
             cfg.data = args.next() orelse return error.MissingValue;
         } else if (std.mem.eql(u8, arg, "--dev")) {
             cfg.dev = true;
+        } else if (std.mem.eql(u8, arg, "--tiles")) {
+            cfg.tiles_file = args.next() orelse return error.MissingValue;
+        } else if (std.mem.eql(u8, arg, "--tiles-url")) {
+            cfg.tiles_url = args.next() orelse return error.MissingValue;
+        } else if (std.mem.eql(u8, arg, "--tiles-glyphs")) {
+            cfg.tiles_glyphs = args.next() orelse return error.MissingValue;
         } else if (std.mem.eql(u8, arg, "--google-client-ids")) {
             cfg.google_client_ids = args.next() orelse return error.MissingValue;
         } else if (std.mem.eql(u8, arg, "--apple-audiences")) {
@@ -158,7 +176,8 @@ pub fn main(init: std.process.Init) !void {
     if (cfg.google_jwks_url) |u| auth.google_jwks_url = u;
     if (cfg.apple_jwks_url) |u| auth.apple_jwks_url = u;
 
-    var ctx = try server.ctx.Ctx.init(gpa, io, db_path, .{ .dev = cfg.dev, .limits = !cfg.dev, .auth = auth });
+    var ctx = try server.ctx.Ctx.init(gpa, io, db_path, .{ .dev = cfg.dev, .limits = !cfg.dev, .auth = auth, .tiles = .{ .file = cfg.tiles_file, .url = cfg.tiles_url, .glyphs = cfg.tiles_glyphs } });
+    if (cfg.tiles_file.len > 0) log.info("serving map tiles from {s}", .{cfg.tiles_file});
     defer ctx.deinit();
     log.info("data in {s}{s}", .{ cfg.data, if (cfg.dev) " (dev endpoints enabled)" else "" });
     log.info("sign-in: google {s}, apple {s}{s}", .{

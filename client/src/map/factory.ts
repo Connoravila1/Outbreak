@@ -37,6 +37,8 @@ export function createMap(container: HTMLElement, o: MapOpts): MlMap {
     dragRotate: false,
     touchPitch: false,
     fadeDuration: 150,
+    // 3x phone screens gain little from a 3x vector map and pay for it in fill rate and battery.
+    pixelRatio: Math.min(window.devicePixelRatio || 1, 2),
   });
   map.touchZoomRotate.disableRotation();
   if (o.attribution !== false) {

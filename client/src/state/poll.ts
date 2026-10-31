@@ -1,4 +1,4 @@
-import { signal } from '@preact/signals';
+import { effect, signal } from '@preact/signals';
 import { api, errorMessage } from '../api';
 import { position } from '../location';
 import { gameMap } from '../map/instance';
@@ -13,6 +13,7 @@ import { recordBattle } from './record';
 import { addToReport, AWAY_MS } from '../patrol/PatrolReport';
 import { notesFound } from '../notes/store';
 import { achievementsEarned } from '../collection/store';
+import { appActive } from '../native/active';
 
 export const inSanctuary = signal(false);
 export const pollError = signal<string | null>(null);
@@ -22,7 +23,7 @@ let busy = false;
 
 async function tick() {
   const fix = position.peek();
-  if (!fix || busy || document.hidden || battleActive()) return;
+  if (!fix || busy || !appActive.peek() || battleActive()) return;
   busy = true;
   try {
     const m = gameMap.peek();
@@ -79,6 +80,8 @@ export function startPolling() {
   });
 }
 export function pollNow() { void tick(); }
+// Back in the app: catch up at once instead of waiting out the interval.
+effect(() => { if (appActive.value && timer != null) queueMicrotask(() => void tick()); });
 export function stopPolling() {
   if (timer != null) window.clearInterval(timer);
   timer = null;

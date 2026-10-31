@@ -17,6 +17,19 @@ pub const Options = struct {
     limits: bool = true,
     /// Sign-in providers (client IDs, audiences).
     auth: auth_mod.Config = .{},
+    /// Optional self-hosted map tiles (a PMTiles archive); see `Tiles`.
+    tiles: Tiles = .{},
+};
+
+/// Map tile source advertised in /api/health. All fields are optional; with none set the client
+/// uses OpenFreeMap.
+pub const Tiles = struct {
+    /// A PMTiles file this server serves itself at `http.tiles_path`, with range requests.
+    file: []const u8 = "",
+    /// Absolute URL of a PMTiles archive hosted elsewhere (used when `file` is empty).
+    url: []const u8 = "",
+    /// Glyph (font) URL template with {fontstack} and {range}; empty keeps OpenFreeMap's.
+    glyphs: []const u8 = "",
 };
 
 /// Everything the server shares. One mutex guards the database, `live`, `rng` and `shares`.

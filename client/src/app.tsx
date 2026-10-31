@@ -5,20 +5,12 @@ import { TopBar } from './shell/TopBar';
 import { Vitals } from './shell/Vitals';
 import { TabBar } from './shell/TabBar';
 import { MapTab } from './tabs/MapTab';
-import { GearTab } from './tabs/GearTab';
-import { TasksTab } from './tabs/TasksTab';
-import { WarTab } from './tabs/WarTab';
-import { YouTab } from './tabs/YouTab';
-import { Onboarding } from './onboarding/Onboarding';
-import { SimPanel } from './location/SimPanel';
 import { boot, loadCatalog, phase, tab, lens, me } from './state/store';
 import { isDesktop, startLocation } from './location';
 import { startPolling, stopPolling } from './state/poll';
-import { BattleHost } from './battle/BattleHost';
 import { Toasts } from './ui/kit';
 import { RewardsSheet } from './ui/RewardsSheet';
 import { GuestNudge } from './you/GuestNudge';
-import { NoteReader } from './notes/Reader';
 import { setUnauthorizedHandler, setBannedHandler, setToken } from './api';
 import { Banned } from './shell/Banned';
 import { ReportSheet } from './ui/ReportSheet';
@@ -29,7 +21,19 @@ import { isNative } from './native/platform';
 import { PatrolSheet } from './patrol/PatrolSheet';
 import { PatrolReport } from './patrol/PatrolReport';
 import { GuideHost } from './guide/Guide';
+import { lazy } from './ui/lazy';
 import './shell/shell.css';
+
+// Code that is not needed to draw the first map is split out and fetched on demand (or when idle).
+const GearTab = lazy(() => import('./tabs/GearTab').then((m) => m.GearTab));
+const TasksTab = lazy(() => import('./tabs/TasksTab').then((m) => m.TasksTab));
+const WarTab = lazy(() => import('./tabs/WarTab').then((m) => m.WarTab));
+const YouTab = lazy(() => import('./tabs/YouTab').then((m) => m.YouTab));
+const Onboarding = lazy(() => import('./onboarding/Onboarding').then((m) => m.Onboarding));
+const SimPanel = lazy(() => import('./location/SimPanel').then((m) => m.SimPanel));
+const BattleHost = lazy(() => import('./battle/BattleHost').then((m) => m.BattleHost));
+const NoteReader = lazy(() => import('./notes/Reader').then((m) => m.NoteReader));
+const idle = (fn: () => void) => { const ric = (window as { requestIdleCallback?: (f: () => void, o?: object) => number }).requestIdleCallback; if (ric) ric.call(window, fn, { timeout: 4000 }); else window.setTimeout(fn, 2000); };
 
 const bootError = signal<string | null>(null);
 const desktop = signal(isDesktop());
@@ -42,6 +46,8 @@ function Shell() {
     void loadCatalog();
     startLocation();
     startPolling();
+    // Warm the split chunks once the map is up so the first fight or tab switch never waits on the network.
+    idle(() => { for (const c of [BattleHost, GearTab, TasksTab, WarTab, YouTab, NoteReader]) void c.preload().catch(() => undefined); });
     return stopPolling;
   }, []);
   const t = tab.value;

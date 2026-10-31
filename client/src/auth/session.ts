@@ -3,6 +3,7 @@ import { signal } from '@preact/signals';
 import { api, ApiError, errorMessage, setToken, type AuthProvider, type Credentials, type Me, type ProviderStatus } from '../api';
 import { applyMe } from '../state/store';
 import { say } from '../ui/voice';
+import { applyTiles } from '../map/tiles';
 import { Cancelled, pickApple, pickGoogle } from './social';
 
 const NONE: ProviderStatus = { google: false, apple: false, dev: false };
@@ -13,6 +14,7 @@ export async function loadProviders(): Promise<ProviderStatus> {
   try {
     const h = await api.health();
     providers.value = { ...NONE, ...(h.providers ?? {}) };
+    applyTiles(h.tiles);
   } catch {
     providers.value = providers.value ?? NONE;
   }

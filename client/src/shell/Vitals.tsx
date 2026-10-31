@@ -3,9 +3,10 @@ import { catalog, faction, me } from '../state/store';
 import { say } from '../ui/voice';
 import { Icon } from '../ui/Icon';
 import './shell.css';
+import { appActive } from '../native/active';
 
 const now = signal(Date.now());
-setInterval(() => { now.value = Date.now(); }, 1000);
+setInterval(() => { if (appActive.peek()) now.value = Date.now(); }, 1000);
 
 export function clock(ms: number): string {
   const s = Math.max(0, Math.ceil(ms / 1000));
