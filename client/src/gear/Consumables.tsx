@@ -9,7 +9,8 @@ import { consumableName } from './util';
 
 function whyNot(id: string, hp: number, max: number, downed: boolean): string | null {
   if (id === 'flag') return say('Used at a Stronghold on the map.', 'used on held ground.');
-  if (/^heal_/.test(id) && !downed && hp >= max) return say('Full health.', 'nothing to mend.');
+  if (/^heal_/.test(id) && downed) return say('You are down. Only a revive gets you up.', 'down. only a revive lifts you.');
+  if (/^heal_/.test(id) && hp >= max) return say('Full health.', 'nothing to mend.');
   if (id === 'revive' && !downed && hp >= max) return say('Full health.', 'nothing to mend.');
   return null;
 }

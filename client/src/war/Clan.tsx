@@ -11,16 +11,12 @@ const CREATE_COST = 500;
 const MAX_MEMBERS = 50;
 const CHAT_MAX = 200;
 
-function perkLines(p: unknown): string[] {
-  if (!p) return [];
-  if (Array.isArray(p)) return p.map((x) => (typeof x === 'string' ? x : JSON.stringify(x)));
-  if (typeof p === 'object') {
-    return Object.entries(p as Record<string, unknown>).map(([k, v]) => {
-      const label = k.replace(/_/g, ' ');
-      return typeof v === 'number' && v > 0 && v < 1 ? `${label}: +${Math.round(v * 100)}%` : `${label}: ${String(v)}`;
-    });
+function perkLines(p: ClanDetail['perks']): string[] {
+  const out: string[] = [];
+  if (p && typeof p === 'object' && typeof p.xp_bonus === 'number' && p.xp_bonus > 0) {
+    out.push(say(`+${Math.round(p.xp_bonus * 100)}% XP for every member`, `+${Math.round(p.xp_bonus * 100)}% xp for the whole pack`));
   }
-  return [String(p)];
+  return out;
 }
 
 // ---------- no clan yet ----------
@@ -148,7 +144,7 @@ function Page() {
   const [leaving, setLeaving] = useState(false);
   const [busy, setBusy] = useState(false);
   const mine = me.value?.callsign;
-  useEffect(() => { api.clan().then((r) => setClan(r.clan), (e) => setErr(errorMessage(e))); }, []);
+  usePoll(() => { api.clan().then((r) => setClan(r.clan), (e) => setErr(errorMessage(e))); }, 30000);
   const copy = () => { void navigator.clipboard?.writeText(clan!.code).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1800); }, () => undefined); };
   const leave = async () => {
     setBusy(true);

@@ -28,6 +28,8 @@ export interface Rewards {
   consumables: Record<string, number>;
   war_points: number;
   level_up: { from: number; to: number; unlocks: string[] } | null;
+  /** Salvage from items that did not fit in the pack (already counted in `salvage`). */
+  auto_scrapped?: number;
 }
 
 export interface Mission {
@@ -61,6 +63,8 @@ export interface Me {
   base_stats: Stats;
   salvage: number;
   inventory_cap: number;
+  /** Price of the next inventory expansion; it rises with each one bought. */
+  expansion_price?: number;
   equipped: Record<Slot, string | null>;
   items: Item[];
   consumables: Record<string, number>;
@@ -175,7 +179,7 @@ export interface CatalogConsumable {
   id: string; names: Record<Faction, string>; text: string; price: number;
 }
 export interface CatalogAbility {
-  id: string; level: number; names: Record<Faction, string>; text: string;
+  id: string; level: number; faction?: Faction; names: Record<Faction, string>; text: string;
 }
 export interface CatalogEnemy { id: string; names: Record<Faction, string>; text: string; text_zombie?: string; note?: string }
 export interface CatalogStoreEntry { sku: string; name: string; price: number; text: string }
@@ -229,7 +233,7 @@ export interface ClanMember {
 }
 export interface ClanDetail {
   id: string; name: string; tag: string; code: string;
-  members: ClanMember[]; strongholds: number; perks: unknown;
+  members: ClanMember[]; strongholds: number; perks: { xp_bonus: number; strongholds: number };
 }
 export interface ClanMessage { id: string; callsign: string; text: string; at: number }
 

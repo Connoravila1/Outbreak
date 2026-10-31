@@ -266,7 +266,7 @@ pub fn catalog(req: *Req, jw: *Stringify) HandlerError!void {
             .{ .human = a.name, .zombie = mirror.name }
         else
             .{ .human = mirror.name, .zombie = a.name };
-        try jw.write(.{ .id = a.id, .level = a.level, .names = names, .text = a.text });
+        try jw.write(.{ .id = a.id, .level = a.level, .faction = a.faction, .names = names, .text = a.text });
     }
     try jw.endArray();
 

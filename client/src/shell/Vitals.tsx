@@ -15,7 +15,7 @@ export function clock(ms: number): string {
 
 function buffName(kind: string): string {
   const f = faction.value ?? 'human';
-  return catalog.value?.consumables.find((c) => c.id === kind)?.names[f] ?? kind.replace(/^buff_/, '').replace(/_/g, ' ');
+  return catalog.value?.consumables.find((c) => c.id === kind)?.names[f] ?? catalog.value?.store.find((s) => s.sku === kind)?.name ?? kind.replace(/^buff_/, '').replace(/_/g, ' ');
 }
 
 export function Vitals() {

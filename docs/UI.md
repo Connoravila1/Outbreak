@@ -8,7 +8,7 @@ Picking a faction decides how you see your own city, every time you open the gam
   grey map paper, roads in survey brown, water in survey blue, grease-pencil circles around
   threats, and hazard-tape and embossed label-tape (Dymo-style) chrome. It reads as practical,
   human, something written by hand by someone who means to live.
-- **Zombies see the Heat**: your streets as thermal sense. A cold indigo-violet void with roads as
+- **Zombies see the Heat**: your streets as thermal sense. A dark, blood-warm void with roads as
   faint warm veins. Living things show as heat blooms in magenta, orange and white-hot. Text is
   lowercase and sensory. It reads as predatory, hungry, alive in the wrong way.
 
@@ -46,13 +46,13 @@ use tokens, never raw colours.
 ### Heat (Zombie)
 | Token | Hex | Use |
 |---|---|---|
-| `--void` | `#110A1A` | Background and map base |
-| `--cold` | `#2A2560` | Buildings, recessed surfaces, cold areas |
-| `--vein` | `#5B2A6E` | Roads |
-| `--warm` | `#C02A7C` | Heat level 1, accents |
+| `--void` | `#120809` | Background and map base |
+| `--cold` | `#2E1215` | Buildings, recessed surfaces, cold areas |
+| `--vein` | `#6B1A22` | Roads |
+| `--warm` | `#D12A3A` | Heat level 1, accents |
 | `--hot` | `#FF6B2C` | Heat level 2: prey, primary buttons, XP |
 | `--white-hot` | `#FFF0C2` | Heat level 3: elite, text highlights |
-| `--flesh` | `#E9D9DE` | Body text |
+| `--flesh` | `#EDDDD6` | Body text |
 
 ### Shared
 Rarity: Common `#A3A8AE` · Uncommon `#3FA34D` · Rare `#2F7BD9` · Legendary `#E8A317`. Rarity is

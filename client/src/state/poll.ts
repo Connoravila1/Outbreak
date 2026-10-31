@@ -5,7 +5,9 @@ import { gameMap } from '../map/instance';
 import { isInSanctuary } from '../map/sanctuary';
 import { eventLog, me, world, applyMe } from './store';
 import { pushToast } from '../ui/kit';
-import { battleActive, enqueueBattle } from '../battle/session';
+import { battleActive, enqueueBattle, enqueueLevelUp } from '../battle/session';
+import { showRewards } from '../ui/RewardsSheet';
+import { say } from '../ui/voice';
 
 export const inSanctuary = signal(false);
 export const pollError = signal<string | null>(null);
@@ -27,7 +29,14 @@ async function tick() {
     // A contact interrupts everything; take it before the HP numbers move so the fight is not spoiled.
     for (const ev of w.events) {
       if (ev.type === 'contact' && ev.battle) enqueueBattle(ev.battle, true);
-      else pushToast(ev.text, ev.type === 'echo_report' ? 'echo' : 'info');
+      else if (ev.type === 'level_up' && ev.rewards?.level_up) {
+        // Gained while walking (or from an item): same takeover as a fight, with the fresh Me.
+        const up = ev.rewards.level_up;
+        void api.me().then((m) => { applyMe(m); enqueueLevelUp(up, m); }, () => pushToast(ev.text, 'info'));
+      } else if (ev.type === 'raid' && ev.rewards) {
+        showRewards(say('Raid won', 'the horde falls'), ev.rewards);
+        pushToast(ev.text, 'good');
+      } else pushToast(ev.text, ev.type === 'echo_report' ? 'echo' : 'info');
     }
     if (w.events.length) eventLog.value = [...w.events, ...eventLog.value].slice(0, 50);
     const cur = me.peek();

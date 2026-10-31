@@ -10,8 +10,8 @@ export function heatStyle(lat = 40): StyleSpecification {
   const layers: LayerSpecification[] = [
     { id: 'landcover', type: 'fill', source: SRC, 'source-layer': 'landcover', paint: { 'fill-color': C.cold, 'fill-opacity': 0.14 } },
     { id: 'park', type: 'fill', source: SRC, 'source-layer': 'park', paint: { 'fill-color': C.cold, 'fill-opacity': 0.22 } },
-    { id: 'water', type: 'fill', source: SRC, 'source-layer': 'water', paint: { 'fill-color': C.voidDeep } },
-    { id: 'waterway', type: 'line', source: SRC, 'source-layer': 'waterway', paint: { 'line-color': C.voidDeep, 'line-width': ['interpolate', ['linear'], ['zoom'], 12, 0.8, 18, 4] } },
+    { id: 'water', type: 'fill', source: SRC, 'source-layer': 'water', paint: { 'fill-color': C.water } },
+    { id: 'waterway', type: 'line', source: SRC, 'source-layer': 'waterway', paint: { 'line-color': C.water, 'line-width': ['interpolate', ['linear'], ['zoom'], 12, 0.8, 18, 4] } },
     { id: 'building', type: 'fill', source: SRC, 'source-layer': 'building', minzoom: 14, paint: { 'fill-color': C.cold, 'fill-opacity': ['interpolate', ['linear'], ['zoom'], 14, 0.3, 17, 0.62] } },
     // sanctuaries: a cool dead zone where nothing glows
     { id: 'sanctuary-fill', type: 'fill', source: SRC, 'source-layer': 'landuse', filter: sanctuaryLanduseFilter, paint: { 'fill-color': C.dead, 'fill-opacity': 0.92 } },

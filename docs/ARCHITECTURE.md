@@ -37,9 +37,9 @@ The server is authoritative over every outcome. The client renders state and sen
 - **Config**: `--port` (8080), `--bind` (0.0.0.0), `--data` (./data), `--dev` (enables `/api/dev/*`
   and relaxed rate limits). Same as env vars `OUTBREAK_PORT`, etc.
 - **Additive wire details** (nothing above changed shape): `Rewards` may carry `auto_scrapped`
-  (items scrapped on pickup because the pack was full); `/api/catalog` items and abilities also
+  (the salvage value of items scrapped on pickup because the pack was full; already counted in `salvage`); `/api/catalog` abilities carry `faction` (each ability id belongs to one side; `names` still gives the pair) and items and abilities also
   carry `lore_zombie`, `text_zombie`, `note`, `flavour`; `raids[].boss` is the boss's display name
-  for the viewer's faction; `/api/feed` events omit `battle` and `rewards` when there are none;
+  for the viewer's faction; `Me.expansion_price` is the salvage price of the next inventory expansion (the catalog price is the first); `/api/feed` events omit `battle` and `rewards` when there are none;
   `/api/clan` with no clan answers 409 `no_clan`. Combat adds a per-fight "form" factor
   (U(0.5,1.5) per side) on top of the per-hit spread; see DESIGN.md section 4.
 - **TLS**: terminated by Caddy in front (automatic HTTPS). Zig std has no TLS server.
@@ -109,7 +109,7 @@ degrees (WGS84). `faction` is `"human"` or `"zombie"`. Slots are `"weapon" | "ar
 ### Dev only (`--dev`)
 `POST /api/dev/grant {xp?, salvage?, item?:{base, rarity}, consumable?:{id, n}}`,
 `POST /api/dev/heal`, `POST /api/dev/reset_cooldowns`, `POST /api/dev/bot_contact` (stages an
-immediate Contact against a generated opponent so PvP can be tested alone).
+immediate Contact against a generated opponent so PvP can be tested alone; `POST /api/dev/down` puts the caller in Downed; `POST /api/dev/spawn_raid {hp?}` puts a raid boss at the stronghold of the cell the caller stands in, so raids can be tried on any day).
 
 ### Shapes
 

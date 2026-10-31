@@ -13,16 +13,17 @@ export const SURVEY = {
   hazard: '#F2BE1A',
 };
 export const HEAT = {
-  void: '#110A1A',
-  voidDeep: '#07040C',
-  cold: '#2A2560',
-  vein: '#5B2A6E',
-  veinBright: '#8A3FA3',
-  warm: '#C02A7C',
+  void: '#120809',
+  voidDeep: '#080304',
+  cold: '#2E1215',
+  vein: '#6B1A22',
+  veinBright: '#A6262F',
+  warm: '#D12A3A',
   hot: '#FF6B2C',
   whiteHot: '#FFF0C2',
-  flesh: '#E9D9DE',
-  dead: '#0A0716', // sanctuary dead zone
+  flesh: '#EDDDD6',
+  water: '#060A14', // the one cold thing left in a warm world
+  dead: '#070A12', // sanctuary dead zone
   deadEdge: '#2C3F86',
 };
 export const NEUTRAL = {

@@ -301,6 +301,60 @@ test "dev endpoints exist only with --dev" {
     try testing.expectEqual(@as(u16, 404), r.status);
 }
 
+test "dev down and spawn_raid: Downed on demand, a boss at the caller's stronghold" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var tok: [64]u8 = undefined;
+    try h.player("Tester", "human", &tok);
+
+    var nowhere = try h.post("/api/dev/spawn_raid", &tok, "{}");
+    defer nowhere.deinit();
+    try testing.expectEqualStrings("no_position", try nowhere.errorCode());
+
+    var w0 = try h.location(&tok, base_lat, base_lon);
+    w0.deinit();
+    var r = try h.ok("/api/dev/spawn_raid", &tok, "{{\"hp\":5000}}", .{});
+    r.deinit();
+    var w = try h.location(&tok, base_lat, base_lon);
+    defer w.deinit();
+    try testing.expectEqual(@as(usize, 1), try w.len("raids"));
+    try testing.expectEqual(@as(i64, 5000), try w.int("raids.0.hp"));
+
+    var d = try h.ok("/api/dev/down", &tok, "{{}}", .{});
+    defer d.deinit();
+    try testing.expectEqual(@as(i64, 0), try d.int("me.hp"));
+    try testing.expect((try d.at("me.downed_until")) == .integer);
+}
+
+test "catalog abilities name their faction; Me carries the next expansion price" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var tok: [64]u8 = undefined;
+    try h.player("Catalog", "zombie", &tok);
+
+    var c = try h.get("/api/catalog", null);
+    defer c.deinit();
+    const list = (try c.at("abilities")).array.items;
+    var human: usize = 0;
+    var zombie: usize = 0;
+    for (list) |a| {
+        const f = a.object.get("faction").?.string;
+        if (std.mem.eql(u8, f, "human")) human += 1 else zombie += 1;
+    }
+    try testing.expectEqual(@as(usize, 7), human);
+    try testing.expectEqual(@as(usize, 7), zombie);
+
+    try h.reachLevel(&tok, 3);
+    var g = try h.ok("/api/dev/grant", &tok, "{{\"salvage\":2000}}", .{});
+    try testing.expectEqual(@as(i64, 400), try g.int("me.expansion_price"));
+    g.deinit();
+    var buy = try h.ok("/api/store/buy", &tok, "{{\"sku\":\"inventory\"}}", .{});
+    defer buy.deinit();
+    try testing.expectEqual(@as(i64, 600), try buy.int("me.expansion_price"));
+}
+
 test "rate limit: a burst is allowed, then 429" {
     var h: Harness = undefined;
     try h.init(.{ .dev = false, .limits = true });

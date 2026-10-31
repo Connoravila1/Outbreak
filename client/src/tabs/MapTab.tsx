@@ -10,6 +10,7 @@ import { Sheet } from '../ui/Sheet';
 import { Icon } from '../ui/Icon';
 import { say } from '../ui/voice';
 import { RewardLines } from '../ui/RewardLines';
+import { pushToast } from '../ui/kit';
 import { coachDone, recordCache } from '../state/record';
 import { enqueueLevelUp } from '../battle/session';
 import type { Rewards } from '../api';
@@ -26,10 +27,22 @@ const KIND_LINE: Record<GameObject['kind'], [string, string]> = {
   raid: ['Boss. Needs a crowd.', 'a huge heat. many will come.'],
 };
 
-function ObjectSheet({ o, onClose }: { o: GameObject; onClose: () => void }) {
+/** What an opened cache or claimed stronghold gave. Lives above the object sheet: the next poll removes the opened object from the map. */
+function ResultSheet({ result, onClose }: { result: Result; onClose: () => void }) {
+  return (
+    <Sheet title="Result" onClose={onClose}>
+      <div class="battle-summary">
+        <p class="display result">{result.kind === 'loot' ? say('Opened', 'opened') : say('Done', 'done')}</p>
+        {result.kind === 'loot' ? (<><p>{say('Supplies recovered.', 'spoils. take them.')}</p><RewardLines r={result.loot} /></>) : <p>{result.text}</p>}
+      </div>
+      <div class="sheet-actions"><button class="btn primary block" onClick={onClose}>{say('Done', 'done')}</button></div>
+    </Sheet>
+  );
+}
+
+function ObjectSheet({ o, onClose, onResult }: { o: GameObject; onClose: () => void; onResult: (r: Result) => void }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [result, setResult] = useState<Result | null>(null);
   const m = me.value;
   const p = position.value;
   const dist = p ? haversine(p, o) : Infinity;
@@ -49,9 +62,14 @@ function ObjectSheet({ o, onClose }: { o: GameObject; onClose: () => void }) {
 
   let reason: string | null = null;
   if (!inRange) reason = say(`Move closer. ${formatDistance(Math.max(0, dist - INTERACT_RANGE_M))} to go.`, `too far. ${formatDistance(Math.max(0, dist - INTERACT_RANGE_M))} closer.`);
-  else if (downed && o.kind !== 'cache' && o.kind !== 'airdrop') reason = say('You are downed. Recover first.', 'you are down. wait.');
+  else if (downed) reason = say('You are downed. Recover first.', 'you are down. wait.');
   else if (o.kind === 'stronghold' && (m?.level ?? 0) < 15) reason = say('Strongholds unlock at level 15.', 'not yet. level 15.');
+  else if (o.kind === 'stronghold' && !m?.clan) reason = say('Join a clan to claim territory.', 'no pack. no ground.');
+  else if (o.kind === 'stronghold' && !m?.consumables.flag) reason = say('You need a flag. The Store sells them.', 'you need a marker. trade for one.');
   else if (o.kind === 'raid' && (m?.level ?? 0) < 20) reason = say('Raids unlock at level 20.', 'not yet. level 20.');
+  else if (o.kind === 'raid' && ((o.raw as { can_attack_at?: number }).can_attack_at ?? 0) > Date.now()) {
+    reason = say(`You can attack again in ${clock(((o.raw as { can_attack_at: number }).can_attack_at) - Date.now())}.`, `rest. again in ${clock(((o.raw as { can_attack_at: number }).can_attack_at) - Date.now())}.`);
+  }
 
   const go = async () => {
     setBusy(true); setErr(null);
@@ -64,13 +82,16 @@ function ObjectSheet({ o, onClose }: { o: GameObject; onClose: () => void }) {
         const r = await api.open(o.id);
         applyMe(r.me);
         recordCache();
-        setResult({ kind: 'loot', loot: r.loot });
+        onResult({ kind: 'loot', loot: r.loot });
         enqueueLevelUp(r.loot.level_up, r.me);
       } else if (o.kind === 'stronghold') {
         const r = await api.claimStronghold(o.id);
         r.battles.forEach(onBattle);
-        if (r.battles.length) onClose();
-        else { applyMe(r.me); setResult({ kind: 'note', text: r.claimed ? say('Stronghold claimed.', 'yours now. hold it.') : say('Nothing happened.', 'nothing.') }); }
+        if (r.battles.length) {
+          onClose();
+          pushToast(r.claimed ? say('Stronghold claimed.', 'yours now. hold it.') : say('The garrison held.', 'they held. for now.'), r.claimed ? 'good' : 'info');
+        }
+        else { applyMe(r.me); onResult({ kind: 'note', text: r.claimed ? say('Stronghold claimed.', 'yours now. hold it.') : say('Nothing happened.', 'nothing.') }); }
       } else {
         onBattle(await api.raidAttack(o.id));
         onClose();
@@ -82,18 +103,6 @@ function ObjectSheet({ o, onClose }: { o: GameObject; onClose: () => void }) {
       setBusy(false);
     }
   };
-
-  if (result) {
-    return (
-      <Sheet title="Result" onClose={onClose}>
-        <div class="battle-summary">
-          <p class="display result">{result.kind === 'loot' ? say('Opened', 'opened') : say('Done', 'done')}</p>
-          {result.kind === 'loot' ? (<><p>{say('Supplies recovered.', 'spoils. take them.')}</p><RewardLines r={result.loot} /></>) : <p>{result.text}</p>}
-        </div>
-        <div class="sheet-actions"><button class="btn primary block" onClick={onClose}>{say('Done', 'done')}</button></div>
-      </Sheet>
-    );
-  }
 
   const eta = o.expiresAt ? o.expiresAt - Date.now() : null;
   return (
@@ -125,6 +134,7 @@ function ObjectSheet({ o, onClose }: { o: GameObject; onClose: () => void }) {
 }
 
 export function MapTab() {
+  const [result, setResult] = useState<Result | null>(null);
   const w = world.value;
   const f = faction.value;
   const sel = selectedId.value;
@@ -149,7 +159,8 @@ export function MapTab() {
       <button class="map-fab" aria-pressed={follow.value} aria-label="Center on me" onClick={() => { follow.value = true; }}>
         <Icon name="gps" size={28} />
       </button>
-      {obj && <ObjectSheet key={obj.id} o={obj} onClose={() => { selectedId.value = null; }} />}
+      {obj && !result && <ObjectSheet key={obj.id} o={obj} onClose={() => { selectedId.value = null; }} onResult={setResult} />}
+      {result && <ResultSheet result={result} onClose={() => { setResult(null); selectedId.value = null; }} />}
     </>
   );
 }

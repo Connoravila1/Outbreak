@@ -116,8 +116,8 @@ export function Result({ battle, onContinue }: { battle: Battle; onContinue: () 
     <div class={'result ' + (won ? 'won' : 'lost')} data-faction={f}>
       <div class="res-scroll scroll" onClick={() => { if (step < final) skip(); }}>
         <p class="eyebrow dim voice">{foeLabel(battle)} · {say('level', 'level')} {battle.b.level}</p>
-        <h1 class="res-word display">{outcomeWord(won)}</h1>
-        <p class="res-line-1">{outcomeLine(won, dmg)}</p>
+        <h1 class="res-word display">{outcomeWord(won, battle)}</h1>
+        <p class="res-line-1">{outcomeLine(won, dmg, battle)}</p>
 
         {step >= 1 && <XpBar b={battle} fast={fast} />}
         {step >= 2 && (
@@ -136,7 +136,8 @@ export function Result({ battle, onContinue }: { battle: Battle; onContinue: () 
             {cons.map(([id, c]) => <li key={id}><Icon name="medical-pack" size={18} /> {consumableName(id)} ×{c}</li>)}
           </ul>
         )}
-        {step >= final && n === 0 && cons.length === 0 && <p class="dim">{say('No drops this time.', 'nothing left to take.')}</p>}
+        {step >= final && !!r.auto_scrapped && <p class="dim res-full">{say(`Pack full: extra gear scrapped for ${r.auto_scrapped} salvage.`, `no room. the extra was torn down for ${r.auto_scrapped} salvage.`)}</p>}
+        {step >= final && n === 0 && cons.length === 0 && !r.auto_scrapped && <p class="dim">{say('No drops this time.', 'nothing left to take.')}</p>}
       </div>
       <div class="res-foot">
         <button ref={btn} class="btn primary block" onClick={step >= final ? onContinue : skip}>

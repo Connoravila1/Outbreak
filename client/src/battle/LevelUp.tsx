@@ -19,8 +19,15 @@ export function unlockLines(up: Up): string[] {
   const f = faction.value ?? 'human';
   if (!c) return up.unlocks;
   const lines: string[] = [];
-  for (const u of c.levels.unlocks) if (u.level > up.from && u.level <= up.to) lines.push(u.text);
-  for (const a of c.abilities) if (a.level > up.from && a.level <= up.to) lines.push(`${abilityName(a.id, f)}: ${a.text}`);
+  const mine = c.abilities.filter((a) => !a.faction || a.faction === f);
+  // The ability gets its own line below, so the neutral "X / Y" wording is trimmed from the level text.
+  for (const u of c.levels.unlocks) {
+    if (u.level <= up.from || u.level > up.to) continue;
+    const has = mine.some((a) => a.level === u.level);
+    const text = has ? u.text.replace(/^New ability: .*$/, '').replace(/^(Ability slot \d+), and .*$/, '$1') : u.text;
+    if (text) lines.push(text);
+  }
+  for (const a of mine) if (a.level > up.from && a.level <= up.to) lines.push(`${abilityName(a.id, f)}: ${a.text}`);
   if (lines.length) return lines;
   return up.unlocks.map((s) => c.abilities.find((a) => a.id === s) ? abilityName(s, f) : s.replace(/_/g, ' '));
 }

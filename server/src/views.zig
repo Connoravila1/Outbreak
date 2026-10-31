@@ -136,6 +136,8 @@ pub const MeView = struct {
     base_stats: data.Stats,
     salvage: u32,
     inventory_cap: u32,
+    /// Salvage price of the next inventory expansion (it rises with each one bought).
+    expansion_price: u32,
     equipped: EquippedView,
     items: []const ItemView,
     consumables: ConsumableMap,
@@ -261,6 +263,7 @@ pub fn meView(req: *Req, p: *Player) HandlerError!MeView {
         .base_stats = stats.baseStats(p.level),
         .salvage = p.salvage,
         .inventory_cap = p.inventoryCap(),
+        .expansion_price = data.inventoryExpansionPrice(p.expansions),
         .equipped = eq,
         .items = items,
         .consumables = consumables,

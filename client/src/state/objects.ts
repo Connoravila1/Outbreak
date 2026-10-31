@@ -56,7 +56,7 @@ export function objectsFrom(w: WorldView, f: Faction): GameObject[] {
     out.push({ ...base, id: s.id, kind: 'stronghold', lat: s.lat, lon: s.lon, name: s.clan ? `Stronghold [${s.clan.tag}]` : 'Stronghold', icon: 'castle', detail: s.clan ? s.clan.name : null, raw: s });
   }
   for (const r of w.raids) {
-    out.push({ ...base, id: r.id, kind: 'raid', lat: r.lat, lon: r.lon, name: r.boss, icon: 'skull-crack', elite: true, expiresAt: r.ends_at, detail: `${r.hp} / ${r.max_hp} HP, ${r.fighters} fighting`, raw: r });
+    out.push({ ...base, id: r.id, kind: 'raid', lat: r.lat, lon: r.lon, name: r.boss, icon: 'skull-crack', elite: true, expiresAt: r.ends_at, detail: `${r.hp.toLocaleString()} / ${r.max_hp.toLocaleString()} HP, ${r.fighters} fighting`, raw: r });
   }
   return out;
 }

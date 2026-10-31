@@ -185,7 +185,8 @@
 .res-cons { margin: 0; }
 
 /* ---------- level up ---------- */
-.levelup { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 24px; gap: 8px; animation: fade .3s both; }
+.levelup { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: safe center; min-height: 0; overflow-y: auto; text-align: center; padding: 24px; gap: 8px; animation: fade .3s both; }
+.levelup > * { flex-shrink: 0; }
 .lv-num { font-size: 160px; line-height: .9; animation: slam .7s var(--ease) both; }
 :root[data-lens='survey'] .lv-num { color: var(--ink); text-shadow: 6px 6px 0 var(--hazard); }
 :root[data-lens='heat'] .lv-num { color: var(--white-hot); text-shadow: 0 0 40px var(--hot), 0 0 90px var(--warm); }

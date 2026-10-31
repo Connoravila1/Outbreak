@@ -1,3 +1,4 @@
+/// <reference types="node" />
 import { defineConfig } from 'vite';
 import preact from '@preact/preset-vite';
 
@@ -6,7 +7,7 @@ export default defineConfig({
   server: {
     host: true,
     proxy: {
-      '/api': { target: 'http://localhost:8080', changeOrigin: true },
+      '/api': { target: process.env.OUTBREAK_API ?? 'http://localhost:8080', changeOrigin: true },
     },
   },
   build: {

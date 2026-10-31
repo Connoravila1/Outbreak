@@ -49,6 +49,32 @@ pub fn heal(req: *Req, jw: *Stringify) HandlerError!void {
     try jw.write(.{ .me = try views.meFresh(req, p.id) });
 }
 
+/// Put the caller in the Downed state (to try the Downed UI, revive items and the timer).
+pub fn down(req: *Req, jw: *Stringify) HandlerError!void {
+    var p = (try model.load(req, req.pid)).?;
+    p.down(req.now);
+    try model.save(req, &p);
+    try jw.write(.{ .me = try views.meFresh(req, p.id) });
+}
+
+/// Spawn (or refill) a raid boss at the stronghold of the cell the caller stands in.
+pub fn spawnRaid(req: *Req, jw: *Stringify) HandlerError!void {
+    const body = try req.json(struct { hp: ?i64 = null });
+    const pos = req.ctx.live.position(req.pid, req.now) orelse return req.fail(409, "no_position", "Post a location first.");
+    const cell = game.geo.encode(pos.lat, pos.lon, game.spawns.stronghold_precision);
+    const district = game.war.districtId(pos.lat, pos.lon);
+    const week = game.war.weekIndex(req.now);
+    const id = try std.fmt.allocPrint(req.arena, "r.{d}.{s}", .{ week, district.str() });
+    const hp = body.hp orelse 30_000;
+    const db = &req.ctx.db;
+    try db.run("DELETE FROM raids WHERE id = ?", .{id});
+    try db.run(
+        "INSERT INTO raids(id, district, week, site, hp, max_hp, created_at, ends_at) VALUES(?,?,?,?,?,?,?,?)",
+        .{ id, district.str(), week, cell.str(), hp, hp, req.now, req.now + 48 * 60 * 60 * 1000 },
+    );
+    try jw.write(.{ .id = id });
+}
+
 pub fn resetCooldowns(req: *Req, jw: *Stringify) HandlerError!void {
     const db = &req.ctx.db;
     try db.run("DELETE FROM contact_log", .{});

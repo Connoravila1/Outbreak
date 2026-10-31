@@ -163,7 +163,8 @@ export function Fight({ battle, onDone }: { battle: Battle; onDone: () => void }
       fx.abilityCue();
       later(1100, () => setBanner((b) => (b && b.text === text ? null : b)));
     } else if (t.ev === 'revive') {
-      setBanner({ side: actor, text: say('Last stand', 'undying'), n: ids.current++ });
+      const af = (actor === 'a' ? battle.a : battle.b).faction;
+      setBanner({ side: actor, text: abilityName(af === 'human' ? 'last_stand' : 'undying', af), n: ids.current++ });
       fx.abilityCue();
       later(1100, () => setBanner(null));
     }

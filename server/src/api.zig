@@ -79,6 +79,8 @@ const routes = [_]Route{
 
     .{ .method = .post, .path = "/api/dev/grant", .access = .faction, .handler = dev.grant, .dev_only = true },
     .{ .method = .post, .path = "/api/dev/heal", .access = .faction, .handler = dev.heal, .dev_only = true },
+    .{ .method = .post, .path = "/api/dev/down", .access = .faction, .handler = dev.down, .dev_only = true },
+    .{ .method = .post, .path = "/api/dev/spawn_raid", .access = .faction, .handler = dev.spawnRaid, .dev_only = true },
     .{ .method = .post, .path = "/api/dev/reset_cooldowns", .access = .faction, .handler = dev.resetCooldowns, .dev_only = true },
     .{ .method = .post, .path = "/api/dev/bot_contact", .access = .faction, .handler = dev.botContact, .dev_only = true },
 };

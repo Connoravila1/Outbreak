@@ -37,7 +37,7 @@
 .mk-survey.selected .grease { stroke-width: 4; }
 
 /* ----- Heat: blooms. Intensity follows threat. ----- */
-.mk-heat { color: var(--void, #110A1A); --bloom: var(--warm); --size: 56px; }
+.mk-heat { color: var(--void, #120809); --bloom: var(--warm); --size: 56px; }
 .mk-heat.threat-easy { --bloom: var(--warm); --size: 48px; }
 .mk-heat.threat-even { --bloom: var(--hot); --size: 62px; }
 .mk-heat.threat-dangerous { --bloom: var(--hot); --size: 78px; }

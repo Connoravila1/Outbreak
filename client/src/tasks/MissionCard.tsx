@@ -8,11 +8,12 @@ import { enqueueLevelUp } from '../battle/session';
 import { showRewards } from '../ui/RewardsSheet';
 import { clunk } from '../audio/fx';
 
-function rewardBits(m: Mission): string {
+function rewardBits(m: Mission, weekly?: boolean): string {
   const r = m.rewards;
   const bits = [`${r.xp} XP`];
   if (r.salvage) bits.push(`${r.salvage} salvage`);
   if (r.items.length) bits.push(`${r.items.length} item${r.items.length > 1 ? 's' : ''}`);
+  if (weekly && !r.items.length) bits.push(say('Rare+ item', 'a rare+ spoil'));
   const c = Object.values(r.consumables).reduce((a, b) => a + b, 0);
   if (c) bits.push(`${c} supply`);
   return bits.join(' · ');
@@ -42,7 +43,7 @@ export function MissionCard({ m, weekly }: { m: Mission; weekly?: boolean }) {
       <Meter value={Math.min(m.progress, m.target)} max={m.target} label={`${m.text} progress`} />
       <div class="m-row">
         <span class="num dim">{Math.min(m.progress, m.target)} / {m.target}</span>
-        <span class="m-rewards"><Icon name="star-medal" size={16} />{rewardBits(m)}</span>
+        <span class="m-rewards"><Icon name="star-medal" size={16} />{rewardBits(m, weekly)}</span>
       </div>
       {m.claimed
         ? <p class="m-claimed"><Icon name="check-mark" size={18} />{say('Claimed.', 'taken.')}</p>

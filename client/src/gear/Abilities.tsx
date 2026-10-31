@@ -15,7 +15,7 @@ export function Abilities() {
   if (!m || !c) return null;
   const f = faction.value ?? 'human';
   const { unlocked, equipped, slots } = m.abilities;
-  const list = [...c.abilities].sort((a, b) => a.level - b.level);
+  const list = c.abilities.filter((a) => !a.faction || a.faction === f).sort((a, b) => a.level - b.level);
   const set = async (next: string[]) => {
     setBusy(true); setErr(null);
     try { applyMe((await api.setAbilities(next)).me); } catch (e) { setErr(errorMessage(e)); } finally { setBusy(false); }

@@ -16,11 +16,22 @@ export function foeLabel(b: Battle): string {
 
 export function myLabel(b: Battle): string { return b.a.name; }
 
-export function outcomeWord(won: boolean): string {
+export function outcomeWord(won: boolean, b?: Battle): string {
+  if (b?.kind === 'raid') return won ? say('SLAIN', 'slain') : say('DRIVEN BACK', 'driven back');
   return won ? say('HELD', 'fed') : say('FELL', 'starved');
 }
 
-export function outcomeLine(won: boolean, dmg: number): string {
+/** Damage dealt to the foe over the whole fight. */
+export function damageDealt(b: Battle): number {
+  const last = b.turns[b.turns.length - 1];
+  return Math.max(0, Math.round(b.b.hp_start - (last ? last.hp_b : b.b.hp_start)));
+}
+
+export function outcomeLine(won: boolean, dmg: number, b?: Battle): string {
+  if (b?.kind === 'raid') {
+    const dealt = damageDealt(b).toLocaleString();
+    return say(`You hit it for ${dealt}. Took ${dmg} damage. It counts against the boss.`, `${dealt} torn from it. ${dmg} wounds. the horde remembers.`);
+  }
   return won
     ? say(`You held. Took ${dmg} damage.`, `fed. ${dmg} wounds.`)
     : say(`You went down. Took ${dmg} damage.`, `torn open. ${dmg} wounds.`);
