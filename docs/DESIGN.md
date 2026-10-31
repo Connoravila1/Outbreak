@@ -40,7 +40,7 @@ colour differs, and each has a trait.
 | Fantasy | Scavenge, fortify, hold the line | Mutate, hunt, spread |
 | Colour | Flare orange on night blue | Blight green on bruise purple |
 | Gear slots | Weapon / Armor / Gear | Claws / Hide / Strain |
-| Trait | **Resolve**: +10% Defense; healing items 25% stronger | **Hunger**: +10% Attack; heal 10% of damage dealt |
+| Trait | **Resolve**: +10% Defense, +5% max HP; healing items 25% stronger | **Hunger**: +5% Attack; heal 5% of damage dealt; regenerate 25% faster |
 | PvE enemies | The infected (Shamblers, Runners, Brutes…) | Survivors (Scavengers, Soldiers, Raiders…) |
 | Caches | Supply Crates | Fresh Remains |
 
@@ -63,6 +63,20 @@ Base stats by level L (before gear and trait):
 
 Gear adds flat stats. At endgame, gear is roughly half of total power, so loot matters.
 
+Total stats are computed as: base + the flat stats of the three equipped items, then multiplied once
+by `1 + (faction trait + active buff + perk bonuses)` — percentages add, they do not compound.
+Perks on equipped items apply to the wearer's totals (Brutal +8% ATK is +8% of your total ATK, two
+Brutal items give +16%). An item's own displayed stats are `base × rarity × (1 + 0.04·upgrade)`.
+
+**Combat details.** The faster side acts first each round, re-evaluated every round (Adrenaline can
+change it); equal speed is decided by the seed. A dodge costs the attacker the attack, but an
+armed Aimed Shot / Pounce stays armed until an attack lands. Crits multiply the damage before
+rounding. Hunger/Leech heal is a share of the HP the target actually lost. Thorns reflect a share
+of each hit taken, never after a killing blow. Burn/rot ticks at the end of each round, starting the
+round it is applied. Second Wind/Devour trigger after any damage, including burn and thorns. Last
+Stand/Undying cannot be used twice. Extra attacks (Overwatch/Swarm) are full attacks and cannot
+chain.
+
 ### Resolution (identical for PvE, PvP, Echo, raids)
 
 Combat is automatic and server-resolved, deterministic from a seed. A fight is a sequence of
@@ -72,11 +86,11 @@ For each attack, attacker A vs defender D:
 
     dodge = clamp(0.05 + 0.5*(D.SPD - A.SPD)/(D.SPD + A.SPD), 0.02, 0.30)
     crit  = clamp(0.05 + 0.5*(A.SPD - D.SPD)/(A.SPD + D.SPD), 0.02, 0.35)  (+ perks)
-    dmg   = max(1, round(1.4 * A.ATK^2 / (A.ATK + D.DEF) * U(0.85, 1.15)))
+    dmg   = max(1, round(2.2 * A.ATK^2 / (A.ATK + D.DEF) * U(0.85, 1.15)))
     crit hit: dmg *= 1.6
 
-A combatant at 0 HP loses. After 30 turns, higher HP fraction wins. Expected: an even fight ends in
-5–8 turns. The client plays the turn log back as an animation (≈4–8 s), skippable.
+A combatant at 0 HP loses. After 30 turns, higher HP fraction wins (a tie goes to the defender,
+side B). Expected: an even fight ends in 5–8 turns (the simulator measures 6–8 for equal kits). The client plays the turn log back as an animation (≈4–8 s), skippable.
 
 ### Health, downed, recovery
 
@@ -104,10 +118,16 @@ automatically in combat. Pairs are mirrored in power, different in flavour.
 
 Levels 1–50. XP to go from level L to L+1:
 
-    xpToNext(L) = round_to_10(40 * L^1.55 + 30)
+    xpToNext(L) = round_to_10(5 * L^2.65 + 60)
 
 Pacing targets (active play time, verified by the balance simulator): **L5 ≈ 1 h, L10 ≈ 5 h,
 L20 ≈ 25 h, L30 ≈ 70 h, L50 ≈ 300 h.** Tune `xpToNext` and the XP sources against these.
+
+The simulator (`zig build sim`) assumes a player who is active ~2 h a day (HP is full at the start
+of each day), walks constantly, fights whenever HP ≥ 60% (healing from stock under 50%, otherwise
+waiting for regeneration), and does the dailies and weekly. Median results (100 players): see
+`server/src/sim.zig`; the curve above lands within about ±10% of every target. Total XP from
+L1 to L50 is about 2.1 million.
 
 ### XP sources
 
@@ -120,7 +140,7 @@ L20 ≈ 25 h, L30 ≈ 70 h, L50 ≈ 300 h.** Tune `xpToNext` and the XP sources 
 | PvP win | `60 + 10*opp_level` |
 | PvP loss | 30% of win value |
 | Echo win | `40 + 7*echo_level` |
-| Daily mission | 15–25% of xpToNext(L) each |
+| Daily mission | 2–3% of xpToNext(L) each (weekly: 7–8%) |
 | Raid contribution | scaled by damage share |
 
 ### Every level matters
@@ -138,11 +158,14 @@ the level ring fills. Unlocks:
 | 7 | Ability: Aimed Shot / Pounce |
 | 8 | Airdrops visible |
 | 10 | Clans |
-| 12 | Ability slot 2 |
+| 12 | Ability slot 2 + Barricade / Calcify |
 | 15 | Territory: plant flags at Strongholds |
+| 18 | Ability: Adrenaline / Bloodlust |
 | 20 | Raids |
-| 25 | Ability slot 3 |
+| 25 | Ability slot 3 + Molotov / Infectious Bite |
 | 30+ | Legendary drop rate +50% |
+| 33 | Ability: Overwatch / Swarm |
+| 42 | Ability: Last Stand / Undying |
 
 Titles every 5 levels (shown under your callsign):
 
@@ -170,7 +193,7 @@ Scrap salvage is multiplied by `(1 + req_level/10)`. Legendary weight ×1.5 at L
 ### Upgrades
 
 Each item can be upgraded **+1 to +10** with salvage; each step adds +4% to the item's stats.
-Cost of step n: `round(8 * n^1.6 * (1 + req_level/10) * rarity_cost)` with rarity_cost
+Cost of step n: `round(12 * n^1.8 * (1 + req_level/10) * rarity_cost)` with rarity_cost
 1/1.3/1.7/2.2. This lets a favourite item stay relevant for a while and is the main salvage sink.
 
 ### Perks (Rare: 1, Legendary: 2, rolled from this pool)
@@ -291,8 +314,13 @@ Interaction range is **50 m** (generous for GPS error). Content is shown within 
 
 ### Enemy archetypes (mirrored per faction)
 
-Stats are a multiple of a same-level player's base stats (no gear). Players with level-appropriate
-gear should win standard fights ~85% of the time and lose ~30–45% HP.
+Stats are a multiple of a same-level player's base stats plus **reference gear** (the best Common
+base in each slot at that level, no upgrades or perks), then HP, ATK and DEF are scaled by
+`0.95 + 0.85 * L/50` (players out-grow Common gear with rarity and upgrades; this keeps enemies
+even). Speed is not scaled. Players with level-appropriate gear should win standard fights ~85%
+of the time and lose ~30–45% HP. The simulator measures the spawn-weighted mix at full HP, with
+the gear real players end up with: 94–98% wins and 33–43% HP lost at L10–30, 84–85% and 48% at
+L45+ (Brutes and Hordes are meant to be dangerous at parity).
 
 | Human sees | Zombie sees | HP | ATK | DEF | SPD | Notes |
 |---|---|---|---|---|---|---|
@@ -306,9 +334,14 @@ gear should win standard fights ~85% of the time and lose ~30–45% HP.
 
 ### Loot
 
-Each PvE win rolls: 35% item, 50% consumable, salvage always (`3 + E/2`). Caches give 1–3 rolls with
-55% item. The item roll picks a base from those with `req ≤ L`, weighted toward the top
-(`weight = 1 + 3*max(0, 1 - (L - req)/8)`), then a rarity from the table above.
+Each PvE win rolls: 35% item, 50% consumable, salvage always (`3 + E/2`); Horde multiplies the
+chances and salvage by 1.5 and a Screamer always drops a consumable. Caches give 1–3 rolls, each
+55% item and otherwise a consumable, plus `3 + L/2` salvage per roll. Airdrops give 3–4 rolls,
+each 75% item (Uncommon or better, Legendary ×3), with double salvage. Contact and Echo wins give
+`10 + opp_level` salvage and a 25% item roll. The item roll picks a base from those with
+`req ≤ L`, weighted toward the top (`weight = 1 + 3*max(0, 1 - (L - req)/8)`), then a rarity from
+the table above. Consumable drops (relative weights): heal_s 38, heal_m 20, revive 4, each buff 6;
+never flags. Lucky perks and the loot buff multiply the item and consumable chances.
 
 ### Sanctuaries (Safe Zones, from the original)
 
@@ -358,9 +391,11 @@ If no real snapshot of a fitting level exists (very early servers), the server u
 ## 9. Missions
 
 Three **daily missions** (reset 00:00 UTC) from a pool, plus one **weekly** (from L5). Rewards: XP
-(15–25% of xpToNext for dailies), salvage, and for the weekly a guaranteed Rare-or-better item.
+(2–3% of xpToNext for dailies, 7–8% for the weekly), salvage (`10 + L` daily, `80 + 5L` weekly), and
+for the weekly a guaranteed Rare-or-better item. The three dailies are distinct kinds, chosen
+deterministically per player and day, and gated by level (Contacts from L5, upgrades from L4).
 Completing all three dailies adds a bonus consumable. A **streak** counter adds +10% mission XP per
-consecutive day, capped at +50%.
+consecutive day on which a daily is claimed, capped at +50%; it lapses after a missed day.
 
 Pool: defeat N enemies · defeat an elite · open N caches · walk N metres · win a Contact or an
 Echo · use a consumable · upgrade an item · scrap N items · defeat N of a specific archetype.
