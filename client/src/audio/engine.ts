@@ -223,6 +223,18 @@ export function play(key: string, o: PlayOpts = {}): Handle {
   return { stop: (fade = 0.05) => fadeOutVoice(v, fade) };
 }
 
+/**
+ * Play a sound made in code, for the few cues that have no recording (the PvP stings). `build`
+ * gets the context, the node to connect to (the bus, already level-trimmed) and the start time.
+ * Silent when sound is off or the context is not running.
+ */
+export function synth(bus: Bus, build: (c: AudioContext, out: AudioNode, t0: number) => void) {
+  if (!soundOn.peek()) return;
+  const c = ensureCtx();
+  if (!c || c.state !== 'running') return;
+  build(c, buses[bus], c.currentTime + 0.01);
+}
+
 /** Start a looping sound (flatline tone, beds). Returns a handle that fades it out. */
 export function loop(key: string, o: { gain?: number; fadeIn?: number } = {}): Handle {
   if (!soundOn.peek()) return NOOP;

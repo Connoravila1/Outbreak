@@ -5,7 +5,9 @@ import { say } from '../ui/voice';
 import { Icon } from '../ui/Icon';
 import { consumableName, itemTitle, perkInfo, SLOT_ICON, statLine, uniqueLore } from '../gear/util';
 import * as fx from '../audio/fx';
-import { damageTaken, foeLabel, outcomeLine, outcomeWord } from './names';
+import { damageTaken, foeLabel, isPvp, outcomeLine, outcomeWord } from './names';
+import { stanceName } from '../state/stance';
+import type { ContactRank } from '../api';
 
 /** XP position before the fight, as a fraction of that level's bar, and after. */
 function xpSpan(b: Battle): { from: number; to: number; gain: number } {
@@ -56,6 +58,66 @@ function XpBar({ b, fast }: { b: Battle; fast: boolean }) {
         <i class="fill" style={{ width: `${w * 100}%`, transition: 'width 1.3s var(--ease)' }} />
       </div>
       {b.rewards.level_up && <p class="res-lvl voice">{say(`Level ${b.rewards.level_up.to} reached.`, `level ${b.rewards.level_up.to}. stronger.`)}</p>}
+    </div>
+  );
+}
+
+const RANK_AT = [0, 1, 5, 15, 40, 100];
+
+/** Contact rank progress: the bar fills from where the fight found you, and says what is left. */
+function RankBar({ b, fast }: { b: Battle; fast: boolean }) {
+  const r: ContactRank = b.me.contact_rank;
+  const gained = b.kind === 'pvp' && b.winner === 'a' ? 1 : 0;
+  const before = r.wins - gained;
+  const lo = RANK_AT[r.tier] ?? 0;
+  const span = r.next_at != null ? r.next_at - lo : 1;
+  const to = r.next_at != null ? Math.min(1, (r.wins - lo) / span) : 1;
+  const rankedUp = gained > 0 && before < lo;
+  const from = rankedUp ? 0 : r.next_at != null ? Math.max(0, (before - lo) / span) : 1;
+  const [w, setW] = useState(fast ? to : from);
+  useEffect(() => { const t = window.setTimeout(() => setW(to), 120); return () => clearTimeout(t); }, []);
+  const name = say(r.name, r.name.toLowerCase());
+  const left = r.next_at != null ? r.next_at - r.wins : 0;
+  return (
+    <div class="res-row res-rank">
+      <div class="res-line"><span><Icon name="crossed-swords" size={18} /> {say('Contact rank', 'hunt rank')}</span><b class="rank-name">{name}</b></div>
+      <div class="bar xp res-xp" role="progressbar" aria-label="Contact rank" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(w * 100)}>
+        <i class="fill" style={{ width: `${w * 100}%`, transition: 'width 1.1s var(--ease)' }} />
+      </div>
+      <p class="dim rank-line">
+        {rankedUp && <b class="rank-up">{say('Rank up. ', 'risen. ')}</b>}
+        {r.next_at != null
+          ? say(`${r.name} — ${left} more win${left === 1 ? '' : 's'} to ${r.next_name}`, `${name} — ${left} more kill${left === 1 ? '' : 's'} to ${(r.next_name ?? '').toLowerCase()}`)
+          : say(`${r.name} — the top rank`, `${name} — the top`)}
+      </p>
+    </div>
+  );
+}
+
+/** What they carried, in their own words, tinted by rarity. */
+function Carried({ b }: { b: Battle }) {
+  const foe = b.b;
+  const list = foe.gear_detail ?? [];
+  const note = b.b.kind === 'echo'
+    ? say("This was an echo of a real player's build. They'll hear how it went.", "an echo of someone real. they will hear how it went.")
+    : b.b.kind === 'rogue' ? say('A Rogue: a stand-in build, nobody real.', 'a rogue. nothing real behind it.') : null;
+  return (
+    <div class="res-row carried">
+      <p class="eyebrow dim voice">{say('They carried:', 'it carried:')}</p>
+      <ul class="carried-list">
+        {list.length === 0 && <li class="dim">{say('Nothing worth naming.', 'nothing.')}</li>}
+        {list.map((g) => (
+          <li key={g.slot} class={`carried-item rarity-${g.rarity}`}>
+            <Icon name={SLOT_ICON[g.slot]} size={18} />
+            <b class="c-name">{g.name}</b>
+            {g.upgrade > 0 && <span class="num c-up">+{g.upgrade}</span>}
+            {g.unique && <span class="c-unique" title="Unique">★</span>}
+            <span class="rarity-label c-rar">{g.rarity}</span>
+          </li>
+        ))}
+      </ul>
+      {foe.stance && <p class="dim c-stance">{say('Their stance:', 'how it hunted:')} <b>{stanceName(foe.stance, foe.faction)}</b></p>}
+      {note && <p class="c-note">{note}</p>}
     </div>
   );
 }
@@ -112,13 +174,15 @@ export function Result({ battle, onContinue }: { battle: Battle; onContinue: () 
   const flippedCount = Math.max(0, step - 3);
   const dmg = damageTaken(battle);
   const f = faction.value;
+  const pvp = isPvp(battle);
   return (
-    <div class={'result ' + (won ? 'won' : 'lost')} data-faction={f}>
+    <div class={'result ' + (pvp ? 'pvp-result ' : '') + (won ? 'won' : 'lost')} data-faction={f}>
       <div class="res-scroll scroll" onClick={() => { if (step < final) skip(); }}>
         <p class="eyebrow dim voice">{foeLabel(battle)} · {say('level', 'level')} {battle.b.level}</p>
         <h1 class="res-word display">{outcomeWord(won, battle)}</h1>
         <p class="res-line-1">{outcomeLine(won, dmg, battle)}</p>
 
+        {pvp && <Carried b={battle} />}
         {step >= 1 && <XpBar b={battle} fast={fast} />}
         {step >= 2 && (
           <div class="res-row res-two">
@@ -126,6 +190,7 @@ export function Result({ battle, onContinue }: { battle: Battle; onContinue: () 
             <div class="res-line"><span><Icon name="crossed-swords" size={18} /> {say('War points', 'war points')}</span><Counter to={r.war_points} fast={fast} /></div>
           </div>
         )}
+        {pvp && step >= 2 && <RankBar b={battle} fast={fast} />}
         {step >= 3 && n > 0 && (
           <div class="loot-grid">
             {r.items.map((it, k) => <LootCard key={it.uid} it={it} flipped={k < flippedCount} held={k === flippedCount && it.rarity === 'legendary'} />)}

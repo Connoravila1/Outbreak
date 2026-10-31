@@ -7,6 +7,7 @@ import { Avatar } from '../avatar/Avatar';
 import { Creator } from '../avatar/Creator';
 import { hasAvatar } from '../avatar/spec';
 import { Meter, Section } from '../ui/kit';
+import { Icon } from '../ui/Icon';
 import { LevelRing } from '../shell/TopBar';
 import { STAT_KEYS, STAT_LABEL } from '../gear/util';
 
@@ -60,6 +61,20 @@ export function Profile() {
           })}
         </div>
       </Section>
+
+      {m.contact_rank && (
+        <div class={`card rank-badge tier-${m.contact_rank.tier}`}>
+          <Icon name="crossed-swords" size={26} />
+          <div>
+            <p class="display rb-name">{say(m.contact_rank.name, m.contact_rank.name.toLowerCase())}</p>
+            <p class="dim rb-sub">
+              {say('Contact rank', 'hunt rank')} · {m.contact_rank.wins} {say('wins', 'kills')}
+              {m.contact_rank.next_at != null && ` · ${m.contact_rank.next_at - m.contact_rank.wins} ${say('to', 'to')} ${say(m.contact_rank.next_name ?? '', (m.contact_rank.next_name ?? '').toLowerCase())}`}
+            </p>
+          </div>
+          <p class="rb-wl num" title="Contact wins / losses"><b>{server?.contacts_won ?? 0}</b>W <b>{server?.contacts_lost ?? 0}</b>L</p>
+        </div>
+      )}
 
       <Section title={say('Record', 'record')} aside={server ? undefined : say('this device', 'this device')}>
         <dl class="record">

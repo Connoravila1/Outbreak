@@ -5,7 +5,7 @@ import { say } from '../ui/voice';
 import { Icon } from '../ui/Icon';
 import { ErrorLine, Section, Seg } from '../ui/kit';
 
-type Board = 'weekly' | 'level';
+type Board = 'weekly' | 'contacts' | 'level';
 
 export function Leaderboard() {
   const [board, setBoard] = useState<Board>('weekly');
@@ -20,7 +20,7 @@ export function Leaderboard() {
   const mine = me.value?.callsign;
   return (
     <Section title={say('Leaderboard', 'the ranked')}>
-      <Seg label="Leaderboard" value={board} onChange={setBoard} options={[{ id: 'weekly', label: say('This week', 'this week') }, { id: 'level', label: say('By level', 'by level') }]} />
+      <Seg label="Leaderboard" value={board} onChange={setBoard} options={[{ id: 'weekly', label: say('This week', 'this week') }, { id: 'contacts', label: say('Contacts', 'hunts') }, { id: 'level', label: say('By level', 'by level') }]} />
       <ErrorLine text={err} />
       {!rows && !err && <p class="empty dim">{say('Loading…', '…')}</p>}
       {rows && rows.length === 0 && <p class="empty">{say('Nobody ranked yet.', 'nobody yet.')}</p>}
@@ -33,7 +33,7 @@ export function Leaderboard() {
                 <b class="rk-name">{e.clan_tag && <span class="tag">[{e.clan_tag}]</span>} {e.callsign}{e.callsign === mine ? ` (${say('you', 'you')})` : ''}</b>
                 <span class="dim">{say('Level', 'level')} {e.level} · {e.title} · <Icon name={e.faction === 'human' ? 'shield' : 'biohazard'} size={12} /> {e.faction === 'human' ? 'Human' : 'Zombie'}</span>
               </span>
-              <span class="rk-val num">{e.value.toLocaleString()}<small>{board === 'weekly' ? ' pts' : ''}</small></span>
+              <span class="rk-val num">{e.value.toLocaleString()}<small>{board === 'weekly' ? ' pts' : board === 'contacts' ? say(' wins', ' kills') : ''}</small></span>
             </li>
           ))}
         </ol>

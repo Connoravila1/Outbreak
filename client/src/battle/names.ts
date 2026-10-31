@@ -14,6 +14,16 @@ export function foeLabel(b: Battle): string {
   }
 }
 
+/** A fight against a person (or a copy of one): Contact, Echo, Rogue, a garrison. These get their own stage. */
+export function isPvp(b: Battle): boolean {
+  return b.kind === 'pvp' || b.kind === 'echo' || b.kind === 'garrison';
+}
+
+/** The stamp a ghosted opponent wears, if any. */
+export function stampOf(b: Battle): 'ECHO' | 'ROGUE' | null {
+  return b.b.kind === 'echo' ? 'ECHO' : b.b.kind === 'rogue' ? 'ROGUE' : null;
+}
+
 export function myLabel(b: Battle): string { return b.a.name; }
 
 export function outcomeWord(won: boolean, b?: Battle): string {

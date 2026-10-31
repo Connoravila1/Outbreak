@@ -134,7 +134,17 @@ pub const Raw = struct {
     }
 };
 
-pub const RecordView = struct { wins: u32, losses: u32, contacts: u32, echoes: u32, caches: u32, distance_m: u64 };
+pub const RecordView = struct {
+    wins: u32,
+    losses: u32,
+    contacts: u32,
+    contacts_won: u32,
+    contacts_lost: u32,
+    echoes: u32,
+    echoes_won: u32,
+    caches: u32,
+    distance_m: u64,
+};
 
 pub const AccountView = struct { guest: bool, providers: []const []const u8, email: ?[]const u8 };
 
@@ -168,6 +178,7 @@ pub const MeView = struct {
     underdog_bonus: f32,
     war_points_week: u32,
     record: RecordView,
+    contact_rank: progression.ContactRank,
     account: AccountView,
     /// The saved default stance (used in Contact); PvE asks per fight.
     stance: data.Stance,
@@ -310,7 +321,8 @@ pub fn meView(req: *Req, p: *Player) HandlerError!MeView {
         .pvp_protected = progression.pvpProtected(p.level),
         .underdog_bonus = if (p.faction) |f| sh.bonusFor(f) else 0,
         .war_points_week = try warstate.weekPoints(req, p.id),
-        .record = .{ .wins = p.wins, .losses = p.losses, .contacts = p.contacts, .echoes = p.echoes, .caches = p.caches, .distance_m = p.distance_m },
+        .record = .{ .wins = p.wins, .losses = p.losses, .contacts = p.contacts, .contacts_won = p.contacts_won, .contacts_lost = p.contacts_lost, .echoes = p.echoes, .echoes_won = p.echoes_won, .caches = p.caches, .distance_m = p.distance_m },
+        .contact_rank = progression.contactRank(p.fac(), p.contacts_won),
         .account = .{ .guest = providers.items.len == 0, .providers = providers.items, .email = email },
         .stance = p.stance,
         .bestiary = .{ .counts = p.bestiary },

@@ -53,6 +53,42 @@ pub fn title(faction: Faction, level: u32) []const u8 {
     };
 }
 
+// --- Contact rank (lifetime Contact wins) ------------------------------------------------------
+
+/// Wins needed for each rank.
+pub const contact_rank_at = [_]u32{ 0, 1, 5, 15, 40, 100 };
+const contact_rank_human = [_][]const u8{ "Unbloodied", "Blooded", "Tracker", "Veteran", "Warden", "Legend" };
+const contact_rank_zombie = [_][]const u8{ "Unfed", "Blooded", "Stalker", "Ravener", "Apex", "Legend" };
+
+pub const ContactRank = struct {
+    name: []const u8,
+    tier: u8,
+    wins: u32,
+    /// Wins at which the next rank starts (null at the top).
+    next_at: ?u32,
+    /// Name of the next rank.
+    next_name: ?[]const u8,
+};
+
+pub fn contactRank(faction: Faction, wins: u32) ContactRank {
+    var tier: usize = 0;
+    for (contact_rank_at, 0..) |at, i| {
+        if (wins >= at) tier = i;
+    }
+    const names = switch (faction) {
+        .human => &contact_rank_human,
+        .zombie => &contact_rank_zombie,
+    };
+    const last = tier + 1 >= contact_rank_at.len;
+    return .{
+        .name = names[tier],
+        .tier = @intCast(tier),
+        .wins = wins,
+        .next_at = if (last) null else contact_rank_at[tier + 1],
+        .next_name = if (last) null else names[tier + 1],
+    };
+}
+
 /// Unlock texts for levels `from + 1 ..= to`, written to `out`; returns how many.
 pub fn unlockTexts(from: u32, to: u32, out: [][]const u8) usize {
     var n: usize = 0;
@@ -312,4 +348,21 @@ test "mission xp, streak, underdog, multipliers" {
     try std.testing.expectApproxEqAbs(0.25, underdogBonus(0.1, 0.9), 1e-6);
     try std.testing.expectEqual(@as(f32, 0), underdogBonus(0.6, 0.4));
     try std.testing.expectApproxEqAbs(1.95, xpMultiplier(.{ .underdog = 0.1, .buff_xp = true, .boost = true, .district = true }), 1e-6);
+}
+
+test "contact ranks climb at 1, 5, 15, 40 and 100 wins" {
+    try std.testing.expectEqualStrings("Unbloodied", contactRank(.human, 0).name);
+    try std.testing.expectEqualStrings("Unfed", contactRank(.zombie, 0).name);
+    try std.testing.expectEqual(@as(?u32, 1), contactRank(.human, 0).next_at);
+    try std.testing.expectEqualStrings("Blooded", contactRank(.human, 1).name);
+    const t = contactRank(.human, 4);
+    try std.testing.expectEqualStrings("Blooded", t.name);
+    try std.testing.expectEqual(@as(?u32, 5), t.next_at);
+    try std.testing.expectEqualStrings("Tracker", t.next_name.?);
+    try std.testing.expectEqualStrings("Veteran", contactRank(.human, 15).name);
+    try std.testing.expectEqualStrings("Ravener", contactRank(.zombie, 15).name);
+    try std.testing.expectEqualStrings("Apex", contactRank(.zombie, 99).name);
+    const top = contactRank(.zombie, 250);
+    try std.testing.expectEqualStrings("Legend", top.name);
+    try std.testing.expect(top.next_at == null);
 }

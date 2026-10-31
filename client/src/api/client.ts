@@ -107,7 +107,7 @@ export const api = {
 
   // social and war
   war: () => get<T.WarState>('/api/war'),
-  leaderboard: (board: 'weekly' | 'level') =>
+  leaderboard: (board: 'weekly' | 'contacts' | 'level') =>
     get<{ entries: T.LeaderboardEntry[] }>('/api/leaderboard?board=' + board),
   feed: () => get<{ events: T.GameEvent[] }>('/api/feed'),
   clans: (q = '') => get<{ clans: T.ClanSummary[] }>('/api/clans?q=' + encodeURIComponent(q)),

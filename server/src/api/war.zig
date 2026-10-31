@@ -69,8 +69,15 @@ const BoardEntry = struct { rank: u32, callsign: []const u8, level: u8, title: [
 pub fn leaderboard(req: *Req, jw: *Stringify) HandlerError!void {
     const board = (try req.param("board")) orelse "weekly";
     const weekly = std.mem.eql(u8, board, "weekly");
-    if (!weekly and !std.mem.eql(u8, board, "level")) return req.fail(400, "bad_request", "Board must be \"weekly\" or \"level\".");
-    var st = if (weekly)
+    const contacts = std.mem.eql(u8, board, "contacts");
+    if (!weekly and !contacts and !std.mem.eql(u8, board, "level")) return req.fail(400, "bad_request", "Board must be \"weekly\", \"contacts\" or \"level\".");
+    var st = if (contacts)
+        try req.ctx.db.query(
+            \\SELECT p.callsign, p.level, p.faction, w.wins AS v, c.tag FROM contact_week w
+            \\JOIN players p ON p.id = w.player_id LEFT JOIN clans c ON c.id = p.clan_id
+            \\WHERE w.week = ? AND w.wins > 0 AND p.faction IS NOT NULL ORDER BY v DESC, p.id LIMIT 50
+        , .{warstate.week(req.now)})
+    else if (weekly)
         try req.ctx.db.query(
             \\SELECT p.callsign, p.level, p.faction, SUM(w.points) AS v, c.tag FROM war_player w
             \\JOIN players p ON p.id = w.player_id LEFT JOIN clans c ON c.id = p.clan_id

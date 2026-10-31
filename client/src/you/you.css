@@ -55,3 +55,11 @@
 .avatar-frame { width: 72px; height: 72px; border-radius: 50%; overflow: hidden; flex: none; border: 2px solid var(--text); line-height: 0; }
 :root[data-lens='heat'] .avatar-frame { border-color: var(--hot); box-shadow: 0 0 18px color-mix(in srgb, var(--hot) 40%, transparent); }
 .id-main .btn { margin-top: 6px; min-height: 36px; }
+.rank-badge { display: flex; align-items: center; gap: 12px; margin: 14px 0 4px; padding: 10px 12px; }
+.rank-badge .icon { color: var(--accent); flex: none; }
+:root[data-lens='survey'] .rank-badge .icon { color: var(--ink); }
+.rb-name { margin: 0; font-size: var(--fs-28); line-height: 1; }
+.rb-sub { margin: 2px 0 0; font-size: var(--fs-12); }
+.rb-wl { margin: 0 0 0 auto; font-weight: 700; white-space: nowrap; }
+.rb-wl b { font-size: var(--fs-20); margin-left: 4px; }
+.rank-badge.tier-5 { box-shadow: 0 0 16px color-mix(in srgb, var(--r-legendary) 50%, transparent); }

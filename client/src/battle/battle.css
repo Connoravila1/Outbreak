@@ -202,3 +202,21 @@
 @media (max-height: 640px) { .f-gear { display: none; } .float b { font-size: 40px; } .lv-num { font-size: 110px; } }
 @keyframes fade { from { opacity: 0; } }
 @keyframes rise { from { transform: translateY(20px); opacity: 0; } }
+
+/* ---------- aftermath of a fight against a person ---------- */
+.pvp-result .res-word { font-size: 88px; line-height: .9; letter-spacing: .02em; }
+.carried { gap: 4px; }
+.carried-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.carried-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-left: 5px solid var(--r); background: var(--surface-2); font-weight: 700; min-width: 0; }
+.carried-item .c-name { color: inherit; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.carried-item .c-rar { margin-left: auto; font-size: var(--fs-12); text-transform: uppercase; letter-spacing: .1em; color: var(--r); flex: none; }
+.carried-item .c-up { color: var(--accent); }
+:root[data-lens='survey'] .carried-item .c-up { color: var(--ink); }
+.carried-item .c-unique { color: var(--r-legendary); text-shadow: 0 0 6px var(--r-legendary); }
+.carried-item.rarity-legendary { box-shadow: 0 0 14px color-mix(in srgb, var(--r) 45%, transparent); }
+.carried-item.rarity-rare { box-shadow: 0 0 8px color-mix(in srgb, var(--r) 30%, transparent); }
+.c-stance, .c-note, .rank-line { margin: 0; font-size: var(--fs-14); }
+.c-note { font-weight: 600; font-style: italic; }
+.rank-name { font-size: var(--fs-20); }
+.rank-up { color: var(--accent); }
+:root[data-lens='survey'] .rank-up { color: var(--grease); }
