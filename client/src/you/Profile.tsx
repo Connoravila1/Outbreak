@@ -41,6 +41,7 @@ export function Profile() {
         <div>
           <p class="display big-level">{m.level}</p>
           <p class="title">{m.title}</p>
+          {!!m.titles_extra?.length && <p class="titles-extra dim">{m.titles_extra.join(' · ')}</p>}
         </div>
       </div>
       <Meter value={m.xp} max={m.xp_next} label="Experience to next level" />

@@ -13,6 +13,7 @@ pub const war = @import("war.zig");
 pub const daynight = @import("daynight.zig");
 pub const stance = @import("stance.zig");
 pub const landmarks = @import("landmarks.zig");
+pub const notes = @import("notes.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());

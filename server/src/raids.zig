@@ -100,6 +100,8 @@ pub fn settle(req: *Req, raid_id: []const u8, killed: bool) HandlerError!void {
         } else if (rng.chance(0.5)) {
             try acc.items.append(req.arena, game.loot.rollItem(&rng, .{ .level = pl.level, .min_rarity = .uncommon }));
         }
+        // Everyone who helped takes a note from the wreckage.
+        try acc.rollNote(req, &pl, .raid, null, game.rng.hash(req.ctx.seed, .{ "raidnote", raid_id, c.pid }));
         const rw = try rewards.apply(req, &pl, &acc, null);
         const boss = data.archetype(.abomination).name.get(pl.fac());
         const text = try std.fmt.allocPrint(req.arena, "The {s} has fallen. You dealt {d}% of the damage with {d} fighters.", .{

@@ -105,6 +105,10 @@ export const api = {
   claimMission: (id: string) => post<{ rewards: T.Rewards; me: T.Me }>('/api/missions/claim', { id }),
   buy: (sku: string) => post<{ rewards?: T.Rewards; me: T.Me }>('/api/store/buy', { sku }),
 
+  // notes
+  notes: () => get<T.NoteArchive>('/api/notes'),
+  claimNotes: (set: T.NoteSetId) => post<{ rewards: T.Rewards; title: string; me: T.Me }>('/api/notes/claim', { set }),
+
   // social and war
   war: () => get<T.WarState>('/api/war'),
   leaderboard: (board: 'weekly' | 'contacts' | 'level') =>
@@ -125,7 +129,7 @@ export const api = {
 
   // dev only (--dev)
   dev: {
-    grant: (b: { xp?: number; salvage?: number; item?: { base: string; rarity: T.Rarity }; consumable?: { id: string; n: number } }) =>
+    grant: (b: { xp?: number; salvage?: number; item?: { base: string; rarity: T.Rarity }; consumable?: { id: string; n: number }; note?: string }) =>
       post<{ me: T.Me }>('/api/dev/grant', b),
     heal: () => post<{ me: T.Me }>('/api/dev/heal'),
     resetCooldowns: () => post<unknown>('/api/dev/reset_cooldowns'),

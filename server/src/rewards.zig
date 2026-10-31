@@ -8,6 +8,7 @@ const ctx_mod = @import("ctx.zig");
 const model = @import("model.zig");
 const views = @import("views.zig");
 const warstate = @import("warstate.zig");
+const notes_db = @import("notes.zig");
 
 const data = game.data;
 const stats = game.stats;
@@ -26,6 +27,8 @@ pub const Acc = struct {
     items: std.ArrayList(stats.Item) = .empty,
     consumables: [model.consumable_count]u32 = [_]u32{0} ** model.consumable_count,
     war_points: u32 = 0,
+    /// Indexes into `game.notes.notes` found with this payout.
+    notes: std.ArrayList(u16) = .empty,
     /// Queue the level-up as an undelivered event (for gains the player is not looking at, like
     /// walking); otherwise the response already shows it and the event only goes to the feed.
     deliver_level_up: bool = false,
@@ -34,6 +37,20 @@ pub const Acc = struct {
         self.salvage += d.salvage;
         for (d.itemSlice()) |it| try self.items.append(req.arena, it);
         for (d.consumableSlice()) |c| self.consumables[@intFromEnum(c)] += 1;
+    }
+
+    pub fn addNote(self: *Acc, req: *Req, idx: u16) error{OutOfMemory}!void {
+        for (self.notes.items) |n| if (n == idx) return;
+        try self.notes.append(req.arena, idx);
+    }
+
+    /// Roll for a note from `src`. It uses its own random stream (from `seed`), so item drops are
+    /// the same with or without notes.
+    pub fn rollNote(self: *Acc, req: *Req, p: *const Player, src: game.notes.Source, place: ?data.PlaceKind, seed: u64) HandlerError!void {
+        var found = try notes_db.foundSet(req, p.id);
+        for (self.notes.items) |i| found.set(i);
+        var rng = game.rng.Rng.init(game.rng.hash(seed, .{"note"}));
+        if (game.notes.roll(&rng, p.fac(), found, src, place)) |i| try self.notes.append(req.arena, i);
     }
 
     pub fn addConsumable(self: *Acc, c: data.Consumable, n: u32) void {
@@ -111,6 +128,17 @@ pub fn apply(req: *Req, p: *Player, acc: *Acc, district: ?[]const u8) HandlerErr
     for (acc.consumables, 0..) |n, i| {
         try model.addConsumable(req, p.id, @enumFromInt(i), n);
         out.consumables.counts[i] = n;
+    }
+
+    if (acc.notes.items.len > 0) {
+        const refs = try a.alloc(views.NoteRef, acc.notes.items.len);
+        var n: usize = 0;
+        for (acc.notes.items) |idx| {
+            if (!try notes_db.grant(req, p.id, idx)) continue;
+            refs[n] = views.noteRef(idx);
+            n += 1;
+        }
+        out.notes = refs[0..n];
     }
 
     if (acc.war_points > 0) {

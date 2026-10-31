@@ -26,7 +26,8 @@ The server is authoritative over every outcome. The client renders state and sen
   - `src/db.zig` — thin SQLite wrapper (prepare/bind/step), schema + migrations by `user_version`.
   - `src/game/` — **pure** game logic, no I/O, fully unit-tested: `data.zig` (catalogue from
     DESIGN.md), `stats.zig`, `combat.zig`, `loot.zig`, `progression.zig`, `geo.zig` (geohash,
-    haversine), `spawns.zig` (deterministic world content), `missions.zig`, `war.zig`, `rng.zig`, `stance.zig` (stance, counters), `daynight.zig` (solar phase), `landmarks.zig` (place validation, windows, rate limit).
+    haversine), `spawns.zig` (deterministic world content), `missions.zig`, `war.zig`, `rng.zig`, `stance.zig` (stance, counters), `daynight.zig` (solar phase), `landmarks.zig` (place validation, windows, rate limit), `notes.zig` + `notes_data.zig` (found notes: the 60 texts, drop rules, set rewards; see LORE.md).
+  - `src/notes.zig` — what a player holds (`player_notes`), set claims (`note_claims`), titles. `src/api/notes.zig` — the archive endpoints.
   - `src/live.zig` — in-memory state: latest position per player (never persisted, expires in
     2 min, or 4 min when it came from a Patrol check-in), active echoes, rate limits, and reported landmarks per geohash-6 area (12 h TTL, capped, never persisted).
   - `src/tick.zig` — every 5 s: PvP contact matching, raid/war housekeeping.
@@ -140,6 +141,21 @@ fight it missed and never notifies about one it already showed. The latest schem
 | POST | `/api/missions/claim` | `{id}` | `{rewards, me}` |
 | POST | `/api/store/buy` | `{sku}` | `{rewards?, me}` |
 
+### Notes (docs/LORE.md)
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| GET | `/api/notes` | | `{sets:[{id, name, title, blurb, total, found, reward, claimed}], notes:[Note]}` — only the sets this faction can read (Patient Zero shows as `???` until its first piece); only found notes carry text, the rest are `{id, set, rarity, locked:true}` with the other fields null |
+| POST | `/api/notes/claim` | `{set}` | `{rewards, title, me}` — a complete set pays salvage (sum of its notes: common 10, uncommon 20, rare 40, legendary 100) and its cosmetic title; 404 `not_found` (unknown set or not for your faction), 409 `set_incomplete`, 409 `already_claimed` |
+
+**Drops.** One roll per payout, on its own random stream (item drops are unchanged by it), never a
+note the player holds, never one their faction cannot read. Chances: supply cache 12%, landmark cache
+25%, PvE win 3%, elite win 10%, airdrop 35%, every raid-kill contributor 100%. First Blood always
+leaves `starlite.04`. Landmark kinds bias the set (pharmacy: Project Lantern, diner: Starlite, police:
+Containment) and each "Along the Road" note comes only from its own kind of place. Patient Zero
+pieces come only from airdrops, elites and raids, and only once the player holds at least half of
+the other notes they can read. Found notes appear in `Rewards.notes`; deleting an account removes
+them.
+
 ### Social and war (L10+ for clans)
 | Method | Path | Body | Returns |
 |---|---|---|---|
@@ -156,7 +172,7 @@ fight it missed and never notifies about one it already showed. The latest schem
 | POST | `/api/raid/attack` | `{id, stance?}` | `Battle` |
 
 ### Dev only (`--dev`)
-`POST /api/dev/grant {xp?, salvage?, item?:{base, rarity}, consumable?:{id, n}}`,
+`POST /api/dev/grant {xp?, salvage?, item?:{base, rarity}, consumable?:{id, n}, note?: id | "all"}`,
 `POST /api/dev/heal`, `POST /api/dev/reset_cooldowns`, `POST /api/dev/bot_contact` (stages an
 immediate Contact against a generated opponent so PvP can be tested alone; `POST /api/dev/down` puts the caller in Downed; `POST /api/dev/spawn_raid {hp?}` puts a raid boss at the stronghold of the cell the caller stands in, so raids can be tried on any day).
 
@@ -182,7 +198,9 @@ Me = { id, callsign: string|null, faction: Faction|null, level, xp, xp_next, tit
        stance: Stance, bestiary: Record<string, number> /* fights per archetype */,
        record: { wins, losses, contacts, contacts_won, contacts_lost, echoes, echoes_won, caches, distance_m },
        contact_rank: { name, tier: 0..5, wins, next_at: number|null, next_name: string|null }, // lifetime Contact wins
-       account: { guest: boolean, providers: ("google"|"apple"|"dev")[], email: string|null } }
+       account: { guest: boolean, providers: ("google"|"apple"|"dev")[], email: string|null },
+       notes: { found: number, total: number /* notes this faction can find */ },
+       titles_extra: string[] /* cosmetic titles from claimed note sets */ }
 
 Mission = { id, kind, text, target, progress, rewards: Rewards, claimed: boolean }
 
@@ -213,7 +231,11 @@ Battle = { id, stance: Stance, kind: "pve"|"pvp"|"echo"|"raid"|"garrison", a: Co
            b: Combatant, turns: Turn[], winner: "a"|"b", rewards: Rewards, me: Me }
 
 Rewards = { xp, salvage, items: Item[], consumables: Record<string,number>, war_points,
-            level_up: {from, to, unlocks: string[]}|null }
+            level_up: {from, to, unlocks: string[]}|null,
+            notes: {id, title, set, rarity, form}[] /* found with this payout */ }
+
+Note = { id, set, rarity, locked: boolean, title, author, date, form, body, found_at }
+       /* form: notebook|memo|email|chat|receipt|sticky|radio|poster|letter|review|card */
 
 Event = { id, at, type: "contact"|"echo_report"|"level_up"|"raid"|"war_result"|"clan",
           text: string, battle?: Battle, rewards?: Rewards }

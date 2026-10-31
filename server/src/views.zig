@@ -7,6 +7,7 @@ const ctx_mod = @import("ctx.zig");
 const model = @import("model.zig");
 const missions = @import("missions.zig");
 const warstate = @import("warstate.zig");
+const notes_db = @import("notes.zig");
 
 const data = game.data;
 const stats = game.stats;
@@ -83,6 +84,14 @@ pub const BestiaryMap = struct {
 
 pub const LevelUp = struct { from: u8, to: u8, unlocks: []const []const u8 };
 
+/// A found note as a payout line: enough to draw the card; the text is read through /api/notes.
+pub const NoteRef = struct { id: []const u8, title: []const u8, set: []const u8, rarity: data.Rarity, form: game.notes.Form };
+
+pub fn noteRef(idx: u16) NoteRef {
+    const n = game.notes.notes[idx];
+    return .{ .id = n.id, .title = n.title, .set = @tagName(n.set), .rarity = n.rarity, .form = n.form };
+}
+
 pub const RewardsView = struct {
     xp: u32 = 0,
     salvage: u32 = 0,
@@ -92,6 +101,8 @@ pub const RewardsView = struct {
     level_up: ?LevelUp = null,
     /// Salvage from items that did not fit in the inventory (already included in `salvage`).
     auto_scrapped: u32 = 0,
+    /// Notes found with this payout.
+    notes: []const NoteRef = &.{},
 };
 
 pub const EquippedView = struct { weapon: ?[]const u8, armor: ?[]const u8, utility: ?[]const u8 };
@@ -146,6 +157,9 @@ pub const RecordView = struct {
     distance_m: u64,
 };
 
+/// Notes found, and how many this faction can find in all.
+pub const NotesTally = struct { found: u32, total: u32 };
+
 pub const AccountView = struct { guest: bool, providers: []const []const u8, email: ?[]const u8 };
 
 pub const MeView = struct {
@@ -183,6 +197,9 @@ pub const MeView = struct {
     /// The saved default stance (used in Contact); PvE asks per fight.
     stance: data.Stance,
     bestiary: BestiaryMap,
+    notes: NotesTally,
+    /// Cosmetic titles from completed note sets (the level title stays in `title`).
+    titles_extra: []const []const u8,
 };
 
 pub const MeLite = struct {
@@ -326,6 +343,8 @@ pub fn meView(req: *Req, p: *Player) HandlerError!MeView {
         .account = .{ .guest = providers.items.len == 0, .providers = providers.items, .email = email },
         .stance = p.stance,
         .bestiary = .{ .counts = p.bestiary },
+        .notes = .{ .found = @intCast((try notes_db.foundSet(req, p.id)).count()), .total = game.notes.visibleTotal(p.fac()) },
+        .titles_extra = try notes_db.titles(req, p.id),
     };
 }
 
