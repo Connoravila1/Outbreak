@@ -1126,6 +1126,27 @@ test "dev bot contact stages a Contact against a generated opponent" {
     try testing.expectEqualStrings("A Zombie", ev.object.get("battle").?.object.get("b").?.object.get("name").?.string);
 }
 
+test "dev bot contact can stage a rogue with a chosen, mixed-rarity kit" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var a: [64]u8 = undefined;
+    try h.player("Lonely", "human", &a);
+    var r = try h.ok("/api/dev/bot_contact", &a, "{{\"rarity\":\"rare\",\"as\":\"rogue\"}}", .{});
+    r.deinit();
+    var w = try h.location(&a, base_lat, base_lon);
+    defer w.deinit();
+    const ev = (try eventOfType(&w, "contact")) orelse return error.NoContactEvent;
+    const battle = ev.object.get("battle").?.object;
+    try testing.expectEqualStrings("echo", battle.get("kind").?.string);
+    const foe = battle.get("b").?.object;
+    try testing.expectEqualStrings("rogue", foe.get("kind").?.string);
+    const gear = foe.get("gear_detail").?.array.items;
+    try testing.expect(gear.len >= 1);
+    try testing.expectEqualStrings("rare", gear[0].object.get("rarity").?.string);
+    if (gear.len > 1) try testing.expectEqualStrings("uncommon", gear[1].object.get("rarity").?.string);
+}
+
 test "echoes: a real opposing snapshot (reported to its owner), or a labelled rogue" {
     var h: Harness = undefined;
     try h.init(.{ .dev = true, .limits = false });

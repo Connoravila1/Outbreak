@@ -84,8 +84,8 @@ const CATALOG: Catalog = {
   levels: {
     xp_to_next: Array.from({ length: 50 }, (_, i) => Math.round((40 * Math.pow(i + 1, 1.55) + 30) / 10) * 10),
     titles: {
-      human: ['Survivor', 'Scavenger', 'Defender', 'Ranger', 'Sentinel', 'Warden', 'Vanguard', 'Commander', 'Hero', 'Legend', 'Last Hope'],
-      zombie: ['Turned', 'Shambler', 'Lurker', 'Stalker', 'Ravager', 'Brute', 'Alpha', 'Dread', 'Blight', 'Plaguebringer', 'Patient Zero'],
+      human: ['Survivor', 'Forager', 'Defender', 'Ranger', 'Sentinel', 'Warden', 'Vanguard', 'Commander', 'Hero', 'Legend', 'Last Hope'],
+      zombie: ['Turned', 'Lurcher', 'Lurker', 'Stalker', 'Ravager', 'Mauler', 'Alpha', 'Dread', 'Blight', 'Plaguebringer', 'Patient Zero'],
     },
     unlocks: [
       { level: 2, text: 'The Store' }, { level: 3, text: 'Ability slot 1 and your first ability' }, { level: 4, text: 'Item upgrading' },

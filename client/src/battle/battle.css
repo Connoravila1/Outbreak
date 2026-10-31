@@ -17,6 +17,8 @@
 .ct-word { font-size: 56px; color: var(--danger); position: relative; }
 :root[data-lens='survey'] .ct-word { background: var(--hazard); color: var(--ink); padding: 6px 18px 2px; border: 3px solid var(--ink); }
 .ct-line { font-size: var(--fs-20); font-weight: 600; max-width: 20em; position: relative; }
+.ct-rank { margin: 0; font-size: var(--fs-20); font-weight: 700; letter-spacing: .06em; position: relative; white-space: nowrap; }
+:root[data-lens='heat'] .ct-rank { color: var(--white-hot); letter-spacing: .2em; }
 .ct-gear { font-family: var(--f-body); font-size: var(--fs-16); font-weight: 600; min-height: 4.8em; margin: 6px 0 0; text-align: center; white-space: pre-wrap; position: relative; }
 :root[data-lens='heat'] .ct-gear { text-transform: lowercase; letter-spacing: .08em; color: var(--white-hot); }
 .caret { animation: blink .8s steps(2) infinite; }
@@ -220,3 +222,5 @@
 .rank-name { font-size: var(--fs-20); }
 .rank-up { color: var(--accent); }
 :root[data-lens='survey'] .rank-up { color: var(--grease); }
+/* heat words are tracked wide: keep the longest ("starved") inside a narrow phone */
+:root[data-lens='heat'] .pvp-result .res-word { font-size: min(88px, 17vw); }

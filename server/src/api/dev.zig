@@ -8,6 +8,7 @@ const views = @import("../views.zig");
 const rewards = @import("../rewards.zig");
 const contact = @import("../contact.zig");
 const snapshot = @import("../snapshot.zig");
+const fight = @import("../fight.zig");
 
 const data = game.data;
 const Req = ctx_mod.Req;
@@ -87,14 +88,24 @@ pub fn resetCooldowns(req: *Req, jw: *Stringify) HandlerError!void {
 }
 
 pub fn botContact(req: *Req, jw: *Stringify) HandlerError!void {
+    const body = try req.json(struct { rarity: ?[]const u8 = null, level: ?u8 = null, as: ?[]const u8 = null });
     var p = (try model.load(req, req.pid)).?;
     if (p.downed(req.now)) return req.fail(409, "downed", "You are down. Heal first.");
     var rng = game.rng.Rng.init(game.rng.hash(req.ctx.seed, .{ "bot", p.id, req.now, req.ctx.rng.next() }));
-    const lvl: i32 = std.math.clamp(@as(i32, p.level) + rng.intRange(-3, 3), 1, data.max_level);
+    const lvl: i32 = if (body.level) |l| std.math.clamp(@as(i32, l), 1, data.max_level) else std.math.clamp(@as(i32, p.level) + rng.intRange(-3, 3), 1, data.max_level);
     const roll = rng.float();
-    const rarity: data.Rarity = if (roll < 0.6) .common else if (roll < 0.9) .uncommon else .rare;
-    const foe = snapshot.kitBuild(p.fac().opposite(), @intCast(lvl), rarity);
+    var rarity: data.Rarity = if (roll < 0.6) .common else if (roll < 0.9) .uncommon else .rare;
+    if (body.rarity) |r| rarity = std.meta.stringToEnum(data.Rarity, r) orelse return req.fail(400, "bad_request", "Unknown rarity.");
+    var foe = snapshot.kitBuild(p.fac().opposite(), @intCast(lvl), rarity);
+    // A chosen rarity is the weapon's; the armor and utility step down so the kit is mixed.
+    if (body.rarity != null) for ([_]data.Rarity{ .uncommon, .common }, 1..) |r, i| {
+        if (foe.items[i]) |*it| {
+            it.rarity = r;
+            it.perk_count = data.rarity(r).perks;
+        }
+    };
     const district: []const u8 = if (req.ctx.live.position(p.id, req.now)) |pos| try req.arena.dupe(u8, game.war.districtId(pos.lat, pos.lon).str()) else "dev0";
-    try contact.stageBot(req, &p, &foe, district);
+    const as: fight.CombatantKind = if (body.as) |n| (std.meta.stringToEnum(fight.CombatantKind, n) orelse return req.fail(400, "bad_request", "Unknown kind.")) else .player;
+    try contact.stageBot(req, &p, &foe, district, as);
     try jw.write(.{ .ok = true });
 }

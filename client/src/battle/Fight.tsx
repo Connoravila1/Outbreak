@@ -168,13 +168,14 @@ export function Fight({ battle, onDone }: { battle: Battle; onDone: () => void }
     const attacking = t.ev === 'hit' || t.ev === 'crit' || t.ev === 'dodge';
     const hurt = !!add.find((f) => f.kind === 'hit' || f.kind === 'crit' || f.kind === 'dot');
     // Against a person every blow is heavier: a longer, deeper lunge and a harder shake.
-    const weight = pvp ? 1.7 : 1;
+    const weight = pvp ? 1.2 : 1;
 
     // The blow: lunge now, land a beat later.
     if (!rm && attacking) {
-      const dy = (actor === 'a' ? -54 : 54) * weight;
+      // On the person stage the lunge is a short step toward the other figure: it stays inside its own half.
+      const dy = pvp ? (actor === 'a' ? -12 : 12) : (actor === 'a' ? -54 : 54);
       body(actor)?.animate(
-        [{ transform: 'translateY(0) scale(1)' }, { transform: `translateY(${dy}px) scale(${pvp ? 1.2 : 1.14}) rotate(${actor === 'a' ? 4 : -4}deg)`, offset: 0.4 }, { transform: 'translateY(0) scale(1)' }],
+        [{ transform: 'translateY(0) scale(1)' }, { transform: `translateY(${dy}px) scale(${pvp ? 1.04 : 1.14}) rotate(${actor === 'a' ? 4 : -4}deg)`, offset: 0.4 }, { transform: 'translateY(0) scale(1)' }],
         { duration: pvp && crit ? 520 : 340, easing: 'cubic-bezier(.3,.7,.3,1)' },
       );
     }

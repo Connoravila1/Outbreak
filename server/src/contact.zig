@@ -64,7 +64,7 @@ pub fn settleSide(req: *Req, p: *Player, a: fight.Side, foe: fight.Side, o: figh
     if (won) try missions.event(req, p, .{ .kind = .contact_win });
 
     const me = try views.meFresh(req, p.id);
-    const battle = try fight.battleView(req, .pvp, a, foe, o, rw, me);
+    const battle = try fight.battleView(req, if (foe.view.kind == .echo or foe.view.kind == .rogue) .echo else .pvp, a, foe, o, rw, me);
     const text = try std.fmt.allocPrint(req.arena, "CONTACT. {s}, level {d}. {s}", .{
         foe.view.name, foe.view.level, if (won) "You won." else "You lost.",
     });
@@ -72,9 +72,9 @@ pub fn settleSide(req: *Req, p: *Player, a: fight.Side, foe: fight.Side, o: figh
 }
 
 /// Stage a Contact for one player against a generated opponent (dev only).
-pub fn stageBot(req: *Req, p: *Player, foe_build: *const @import("snapshot.zig").Build, district: []const u8) HandlerError!void {
+pub fn stageBot(req: *Req, p: *Player, foe_build: *const @import("snapshot.zig").Build, district: []const u8, as: fight.CombatantKind) HandlerError!void {
     const a = try fight.selfSide(req, p);
-    const b = try fight.buildSide(req.arena, foe_build, .player, null);
+    const b = try fight.buildSide(req.arena, foe_build, as, null);
     const o = try fight.run(req, a, b, fight.seedFor(req, p.id, 0xb07));
     try settleSide(req, p, a, b, o, district);
 }

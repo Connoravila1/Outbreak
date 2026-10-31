@@ -277,7 +277,7 @@ test "multi-level xp and the cap" {
 test "titles every five levels" {
     try std.testing.expectEqualStrings("Survivor", title(.human, 1));
     try std.testing.expectEqualStrings("Survivor", title(.human, 4));
-    try std.testing.expectEqualStrings("Scavenger", title(.human, 5));
+    try std.testing.expectEqualStrings("Forager", title(.human, 5));
     try std.testing.expectEqualStrings("Last Hope", title(.human, 50));
     try std.testing.expectEqualStrings("Turned", title(.zombie, 1));
     try std.testing.expectEqualStrings("Alpha", title(.zombie, 34));

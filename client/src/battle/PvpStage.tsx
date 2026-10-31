@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useMemo, useState } from 'preact/hooks';
 import type { ComponentChildren } from 'preact';
 import type { Battle, Combatant } from '../api';
 import { say } from '../ui/voice';
@@ -69,6 +69,23 @@ function Hud({ side, who, label, hp, tag }: { side: 'a' | 'b'; who: Combatant; l
 
 export interface Flash { n: number; crit: boolean; side: 'a' | 'b' }
 
+/** Where the seam between the two halves sits in the stage, so tape and numbers stay on their own side of it. */
+function useSeam(ref: { current: HTMLDivElement | null }) {
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const measure = () => {
+      const half = el.querySelector<HTMLElement>('.h-b');
+      if (!half) return;
+      el.style.setProperty('--seam', `${Math.round(half.getBoundingClientRect().bottom - el.getBoundingClientRect().top)}px`);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+}
+
 /**
  * The stage for a fight against a person. The opponent's lens comes in from the top and covers
  * their half, yours holds the rest; each side is a full-height silhouette wearing its gear.
@@ -91,8 +108,8 @@ export function PvpArena({ battle, hpA, hpB, impact, floatsA, floatsB, over, rea
 }) {
   const mineScope = battle.a.faction === 'human' ? 'survey' : 'heat';
   const foeScope = battle.b.faction === 'human' ? 'survey' : 'heat';
-  const heat = mineScope === 'heat';
   const stamp = stampOf(battle);
+  useSeam(stageRef);
   const [entered, setEntered] = useState(false);
   useEffect(() => { const id = requestAnimationFrame(() => requestAnimationFrame(() => setEntered(true))); return () => cancelAnimationFrame(id); }, []);
   const edge = useMemo(() => ({ paper: tornEdge(battle.id + 'p', 0), under: tornEdge(battle.id + 'u', 2.2) }), [battle.id]);
@@ -116,12 +133,12 @@ export function PvpArena({ battle, hpA, hpB, impact, floatsA, floatsB, over, rea
       </div>
       <Hud side="b" who={battle.b} label={`${foeName}`} hp={hpB} tag={foeTag} />
       <div class="arena-half h-b">
-        <Silhouette side="b" who={battle.b} hp={hpB} impact={impact.b} dying={over && hpB <= 0} heat={heat} shown={reveal} />
+        <Silhouette side="b" who={battle.b} hp={hpB} impact={impact.b} dying={over && hpB <= 0} shown={reveal} />
         {floatsB}
         {stamp && <div class="pv-stamp" aria-label={stamp}>{stamp}</div>}
       </div>
       <div class="arena-half h-a">
-        <Silhouette side="a" who={battle.a} hp={hpA} impact={impact.a} dying={over && hpA <= 0} heat={heat} shown={9} />
+        <Silhouette side="a" who={battle.a} hp={hpA} impact={impact.a} dying={over && hpA <= 0} shown={9} />
         {floatsA}
       </div>
       <Hud side="a" who={battle.a} label={say('you', 'you')} hp={hpA} tag={myTag} />
@@ -132,7 +149,7 @@ export function PvpArena({ battle, hpA, hpB, impact, floatsA, floatsB, over, rea
         </div>
       )}
       <div class="pv-vignette" aria-hidden="true" />
-      {flash && <i key={flash.n} class={`pv-flash${flash.crit ? ' crit' : ''} to-${flash.side}`} aria-hidden="true" />}
+      {flash && <i key={flash.n} class={`pv-flash s-${flash.side === 'a' ? mineScope : foeScope}${flash.crit ? ' crit' : ''} to-${flash.side}`} aria-hidden="true" />}
       {children}
     </div>
   );

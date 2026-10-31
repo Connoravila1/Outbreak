@@ -8,7 +8,9 @@ import * as fx from '../audio/fx';
 export function Contact({ battle, onStart }: { battle: Battle; onStart: () => void }) {
   const foe = battle.b;
   const word = foe.faction === 'zombie' ? 'Zombie' : 'Human';
-  const line = say(`A ${word} is close. Level ${foe.level}.`, `${foe.faction === 'zombie' ? 'the dead' : 'the living'}. close. level ${foe.level}.`);
+  const line = say(`A ${word} is close.`, `${foe.faction === 'zombie' ? 'the dead' : 'the living'}. close.`);
+  // Their rank, not a kind of enemy: level first, title after.
+  const rank = say(`Level ${foe.level}`, `level ${foe.level}`) + (foe.title ? ` · ${say(foe.title, foe.title.toLowerCase())}` : '');
 
   useEffect(() => { fx.contactAlarm(); }, []);
   useEffect(() => {
@@ -22,7 +24,7 @@ export function Contact({ battle, onStart }: { battle: Battle; onStart: () => vo
       <Icon name="radar-sweep" size={48} class="ct-icon" />
       <h1 class="ct-word display breathe">{say('CONTACT', 'contact')}</h1>
       <p class="ct-line">{line}</p>
-      {foe.title && <p class="dim ct-title voice">{foe.title}</p>}
+      <p class="ct-rank num voice">{rank}</p>
       <p class="dim ct-hint">{say('Fighting. Tap to skip ahead.', 'it is already on you.')}</p>
     </div>
   );

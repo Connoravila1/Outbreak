@@ -71,9 +71,12 @@ function RankBar({ b, fast }: { b: Battle; fast: boolean }) {
   const before = r.wins - gained;
   const lo = RANK_AT[r.tier] ?? 0;
   const span = r.next_at != null ? r.next_at - lo : 1;
-  const to = r.next_at != null ? Math.min(1, (r.wins - lo) / span) : 1;
+  // Right after a rank-up the new rank's bar is empty, so show the old one filling to the top instead.
   const rankedUp = gained > 0 && before < lo;
-  const from = rankedUp ? 0 : r.next_at != null ? Math.max(0, (before - lo) / span) : 1;
+  const prevLo = RANK_AT[Math.max(0, r.tier - 1)] ?? 0;
+  const prevSpan = Math.max(1, lo - prevLo);
+  const to = rankedUp ? 1 : r.next_at != null ? Math.min(1, (r.wins - lo) / span) : 1;
+  const from = rankedUp ? Math.max(0, Math.min(1, (before - prevLo) / prevSpan)) : r.next_at != null ? Math.max(0, (before - lo) / span) : 1;
   const [w, setW] = useState(fast ? to : from);
   useEffect(() => { const t = window.setTimeout(() => setW(to), 120); return () => clearTimeout(t); }, []);
   const name = say(r.name, r.name.toLowerCase());
@@ -85,7 +88,7 @@ function RankBar({ b, fast }: { b: Battle; fast: boolean }) {
         <i class="fill" style={{ width: `${w * 100}%`, transition: 'width 1.1s var(--ease)' }} />
       </div>
       <p class="dim rank-line">
-        {rankedUp && <b class="rank-up">{say('Rank up. ', 'risen. ')}</b>}
+        {rankedUp && <b class="rank-up">{say('Rank up! ', 'risen! ')}</b>}
         {r.next_at != null
           ? say(`${r.name} — ${left} more win${left === 1 ? '' : 's'} to ${r.next_name}`, `${name} — ${left} more kill${left === 1 ? '' : 's'} to ${(r.next_name ?? '').toLowerCase()}`)
           : say(`${r.name} — the top rank`, `${name} — the top`)}

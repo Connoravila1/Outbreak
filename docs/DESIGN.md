@@ -218,9 +218,9 @@ the level ring fills. Unlocks:
 
 Titles every 5 levels (shown under your callsign):
 
-- Human: Survivor (1), Scavenger (5), Defender (10), Ranger (15), Sentinel (20), Warden (25),
+- Human: Survivor (1), Forager (5), Defender (10), Ranger (15), Sentinel (20), Warden (25),
   Vanguard (30), Commander (35), Hero (40), Legend (45), Last Hope (50).
-- Zombie: Turned (1), Shambler (5), Lurker (10), Stalker (15), Ravager (20), Brute (25), Alpha (30),
+- Zombie: Turned (1), Lurcher (5), Lurker (10), Stalker (15), Ravager (20), Mauler (25), Alpha (30),
   Dread (35), Blight (40), Plaguebringer (45), Patient Zero (50).
 
 ## 6. Items

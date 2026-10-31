@@ -453,8 +453,8 @@ pub const archetype_weights = blk: {
 
 /// One title per five levels: index = level / 5.
 pub const titles = struct {
-    pub const human = [_][]const u8{ "Survivor", "Scavenger", "Defender", "Ranger", "Sentinel", "Warden", "Vanguard", "Commander", "Hero", "Legend", "Last Hope" };
-    pub const zombie = [_][]const u8{ "Turned", "Shambler", "Lurker", "Stalker", "Ravager", "Brute", "Alpha", "Dread", "Blight", "Plaguebringer", "Patient Zero" };
+    pub const human = [_][]const u8{ "Survivor", "Forager", "Defender", "Ranger", "Sentinel", "Warden", "Vanguard", "Commander", "Hero", "Legend", "Last Hope" };
+    pub const zombie = [_][]const u8{ "Turned", "Lurcher", "Lurker", "Stalker", "Ravager", "Mauler", "Alpha", "Dread", "Blight", "Plaguebringer", "Patient Zero" };
 };
 
 pub const Unlock = struct { level: u8, text: []const u8 };

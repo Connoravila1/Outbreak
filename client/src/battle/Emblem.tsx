@@ -43,19 +43,20 @@ function pencilCircle(seed: string, r0: number, turns = 1.12): string {
 }
 
 /** Red pencil slashes across the target: Survey's impact flash. */
-export function Scratches({ crit, n }: { crit: boolean; n: number }) {
+export function Scratches({ crit, n, style }: { crit: boolean; n: number; style?: Record<string, string> }) {
   const r = rng('scratch' + n);
-  const count = crit ? 6 : 3;
+  const small = !!style; // on a figure: modest scratches at the point of impact
+  const count = small ? (crit ? 4 : 2) : crit ? 6 : 3;
   const lines = Array.from({ length: count }, (_, i) => {
     const flip = i % 2 ? -1 : 1;
     const cx = 60 + (r() - 0.5) * 30;
     const cy = 60 + (r() - 0.5) * 30;
-    const len = 30 + r() * 18;
+    const len = small ? 16 + r() * 10 : 30 + r() * 18;
     const tilt = flip * (0.5 + r() * 0.5);
     return `M${(cx - len * tilt).toFixed(1)} ${(cy - len).toFixed(1)}L${(cx + len * tilt).toFixed(1)} ${(cy + len).toFixed(1)}`;
   });
   return (
-    <svg class={'impact scratches' + (crit ? ' crit' : '')} viewBox="0 0 120 120" aria-hidden="true">
+    <svg class={'impact scratches' + (crit ? ' crit' : '')} viewBox="0 0 120 120" aria-hidden="true" style={style}>
       {lines.map((d, i) => <path key={i} d={d} pathLength={1} style={{ animationDelay: `${i * 35}ms` }} />)}
     </svg>
   );
