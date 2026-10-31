@@ -184,7 +184,7 @@ report per reporter per target), 429 `report_limit` (five an hour). Reports are 
 and read with `outbreak-server admin reports`; there is no endpoint that lists them. Clan creation
 with a blocked name or tag answers 400 `name_not_allowed` with the same plain message.
 
-**Suspended accounts.** Every authenticated endpoint answers **403** to a suspended player:
+**Suspended accounts.** Every authenticated endpoint except `DELETE /api/account` answers **403** to a suspended player (they can always erase their account):
 
 ```json
 {"error":"banned","message":"This account is suspended.","reason":"Cheating with a GPS spoofer","until":1793793600000}

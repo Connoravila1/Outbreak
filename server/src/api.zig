@@ -209,7 +209,9 @@ fn run(req: *Req, rt: Route, token: ?[]const u8) HandlerError![]const u8 {
         const tok = token orelse return req.fail(401, "unauthorized", "Missing token.");
         const who = (try authenticate(req, tok)) orelse return req.fail(401, "unauthorized", "Unknown token.");
         req.pid = who.id;
-        if (who.banned_until > req.now) return req.failBanned(who.banned_until, who.ban_reason);
+        // A suspended player can still erase their account; nothing else.
+        const erasing = rt.method == .delete and std.mem.eql(u8, rt.path, "/api/account");
+        if (who.banned_until > req.now and !erasing) return req.failBanned(who.banned_until, who.ban_reason);
         if (rt.access == .faction and !who.has_callsign) return req.fail(409, "no_callsign", "Choose a callsign first.");
         if (rt.access == .faction and !who.has_faction) return req.fail(409, "no_faction", "Choose a faction first.");
         if (ctx.opts.limits and !ctx.opts.dev) {

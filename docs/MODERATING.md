@@ -70,9 +70,8 @@ progress; nothing is deleted.
 - **Someone you ban can still start a new guest account.** The game has no way to recognise a person,
   by design: it does not store positions or devices. If a person keeps coming back, banning each
   account as it is reported is the tool you have.
-- **Nobody can delete a suspended account from the app**, since every request is refused. If a
-  suspended player asks for their data to be removed, lift the suspension, let them delete the
-  account from Settings, and tell them so.
+- **A suspended player can still delete their account** from the suspension screen. Everything else
+  is refused.
 - **Back up first** if you are unsure: see "Backup" in `server/README.md`. Every command here changes
   only the player, clan, message or report you name.
 

@@ -1,4 +1,5 @@
 import { useState } from 'preact/hooks';
+import { api } from '../api';
 import { banned } from '../state/moderation';
 import { boot, signOut } from '../state/store';
 
@@ -11,7 +12,18 @@ export function endDate(until: number): string {
 export function Banned() {
   const b = banned.value;
   const [busy, setBusy] = useState(false);
+  const [erase, setErase] = useState(false);
+  const [typed, setTyped] = useState('');
+  const [err, setErr] = useState<string | null>(null);
   if (!b) return null;
+  const remove = async () => {
+    setBusy(true); setErr(null);
+    try {
+      await api.deleteAccount();
+      banned.value = null;
+      signOut();
+    } catch { setErr('Could not delete the account. Try again.'); setBusy(false); }
+  };
   const again = async () => {
     setBusy(true);
     banned.value = null;
@@ -31,6 +43,15 @@ export function Banned() {
           <button class="btn primary block" disabled={busy} onClick={again}>{busy ? '…' : 'Check again'}</button>
           <button class="btn block" onClick={signOut}>Sign out of this phone</button>
         </div>
+        {!erase && <button class="btn danger block" onClick={() => setErase(true)}>Delete my account</button>}
+        {erase && (
+          <div class="ob-actions">
+            <p class="ob-hint">This erases your character and everything tied to it. Type DELETE to confirm.</p>
+            <input class="field" value={typed} autocomplete="off" spellcheck={false} onInput={(e) => setTyped((e.target as HTMLInputElement).value)} placeholder="DELETE" autocapitalize="characters" />
+            {err && <p class="ob-hint">{err}</p>}
+            <button class="btn danger block" disabled={busy || typed.trim() !== 'DELETE'} onClick={remove}>Delete account</button>
+          </div>
+        )}
       </div>
     </div>
   );

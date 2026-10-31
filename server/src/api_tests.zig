@@ -2833,7 +2833,6 @@ test "ban: 403 with reason and end date everywhere, no Echo, no board, unban res
         .{ "POST", "/api/report" },
         .{ "POST", "/api/callsign" },
         .{ "POST", "/api/clan/chat" },
-        .{ "DELETE", "/api/account" },
     };
     for (paths) |p| {
         var r = try h.call(p[0], p[1], &z, "{}");
@@ -2908,4 +2907,20 @@ test "rename: the player is flagged and may choose again once" {
     var twice = try h.post("/api/callsign", &a, "{\"callsign\":\"Another\"}");
     defer twice.deinit();
     try testing.expectEqual(@as(u16, 409), twice.status);
+}
+
+test "ban: a suspended player can still delete their account" {
+    var h: Harness = undefined;
+    try h.init(.{ .dev = true, .limits = false });
+    defer h.deinit();
+    var z: [64]u8 = undefined;
+    try h.player("Ghoul", "zombie", &z);
+    try adminCmd(&h, &.{ "ban", "ghoul", "--reason", "Spam" });
+    var me = try h.get("/api/me", &z);
+    defer me.deinit();
+    try testing.expectEqual(@as(u16, 403), me.status);
+    var del = try h.call("DELETE", "/api/account", &z, "");
+    defer del.deinit();
+    try testing.expectEqual(@as(u16, 200), del.status);
+    try testing.expectEqual(@as(?i64, 0), try h.ctx.db.scalar("SELECT COUNT(*) FROM players WHERE callsign = 'Ghoul'", .{}));
 }

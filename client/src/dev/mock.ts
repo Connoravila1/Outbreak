@@ -544,7 +544,7 @@ function route(method: string, path: string, body: any, authed: boolean): unknow
       return mine();
     }
     case 'DELETE /api/account': {
-      guard();
+      if (!authed || !db.exists) throw new HttpError(401, 'unauthorized', 'Sign in again.'); // suspended players may still erase
       for (const i of db.ids) forgetIdentity(i);
       db = fresh(); save();
       return { ok: true };
